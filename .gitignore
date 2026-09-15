@@ -1,0 +1,24 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Dependencies and build output
+node_modules/
+out/
+dist/
+dist-electron/
+release/
+
+# Local app data (SQLite databases, logs)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.log
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
