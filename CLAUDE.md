@@ -3,7 +3,7 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 1 — built against the revised SPEC (invariants, toast actions, cancel semantics); all §7 Phase 1 sentences pass (2026-09-15). Phase 0's strict restart test still skipped by user choice.
+## Current phase: Phase 1 — built against the revised SPEC, plus Tier 0 router pulled forward from Phase 2 (2026-09-15). Phase 0's strict restart test still skipped by user choice.
 
 ## What works (verified 2026-09-15)
 - Electron 44 + React 19 + Vite 7 + Tailwind 4 + TypeScript, built with `electron-vite`.
@@ -63,9 +63,19 @@ Update it at the end of every session (spec §11).
   Electron's `actions` option is macOS-only, hence XML. `app.setAsDefaultProtocolClient('secretary', electron.exe, [appDir])` in dev.
   The URL arrives via `second-instance` argv (or own argv on a cold start) → `handleProtocolUrl` → `applyExternalTools` → same
   tool layer. Reschedule opens the window and prefills the input. Falls back to a plain toast if the rich one fails.
-- Gemini free tier is **5 requests/min per model** (not 15). Each message = 2 calls. Provider takes a model chain
-  (`GEMINI_MODEL="a,b,c"`, default 3.6→3.7→3.8-flash): at the start of a turn a throttled model is skipped; mid-turn it waits,
-  honouring Google's "retry in Ns" hint (cap 65 s), and 503 is retried like 429.
+- Gemini free tier is **5 requests/min per model** (not 15). **One message = one model call** in the common case: after a
+  write round the reply is composed in code from `AppliedChange.phrase` (set inside each tool in `tools.ts`); the model is
+  told not to write confirmations. A second call happens only for read-only tool rounds. `chat.done` log line reports
+  `tier, model calls, changes, ms` per message — use it to check.
+- Provider takes a model chain (`GEMINI_MODEL="a,b,c"`, default **gemini-3.5-flash-lite** → 3.6-flash → 3.8-flash): at the
+  start of a turn a throttled model is skipped; mid-turn it waits for Google's `retryDelay` (the 1/2/4/8 s ladder is only the
+  fallback when the hint is absent; cap 65 s). 503 is retried like 429.
+- **Tier 0 router** (`src/main/ai/router.ts`, no model call, `messages.tier = 0`): done / finished · cancel the reminder ·
+  cancel/scrap/drop <item> (not projects) · snooze [N min] / remind me again in N · move/make it <time|date> ·
+  "remind me to X <date>" · imperative-verb + date creates (no reminder). Uses chrono-node (`casual`, forwardDate); a bare
+  1–6 with no am/pm is read as afternoon; "next week"/"sometime" → `week` looseness. Targets resolve via the focus stack
+  ("it/that") or a unique title-word match; anything ambiguous returns null and goes to the model. Executes through the
+  same `runToolRound` (transaction + extractions).
 - Coming Up rail shows both alarms (🔔) and dated items without alarms (📅 "no reminder") for 7 days — "reflects exactly what exists".
 - Migration 2 adds the `constraints` table (tools for it come in Phase 3).
 
@@ -95,7 +105,7 @@ Update it at the end of every session (spec §11).
 - `npm run typecheck`
 
 ## Next
-- Phase 2: chrono-node fast path (tier 0 router), timezone-correct storage review, RRULE recurrence.
+- Phase 2 (revised): widen Tier 0 coverage using the `tier` column, timezone-correct storage review, RRULE recurrence.
 - Observed once: a Gemini round took ~80 s with no 429 logged. Watch `ai.response` timings; if it recurs, add a request timeout.
 - Not yet built from the tool list: add_link/remove_link, add_constraint/remove_constraint/check_conflicts (Phase 3), propose_plan (Phase 5).
 - Toast buttons were verified only by simulating the protocol URL; a real click on a Windows toast is still to be observed by the user.

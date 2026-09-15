@@ -212,6 +212,13 @@ export function executeTool(name: string, rawArgs: unknown, sourceMsgId: string 
         `${x.is_suggestion ? 'Suggested' : 'Created'} ${item.kind} "${item.title}"` +
         (item.due_at_utc ? ` · due ${dueText(item)}` : '') +
         (reminder ? ` · reminder ${formatClock(reminder.fire_at_utc)}${reminderNote}` : '')
+      const phrase = x.is_suggestion
+        ? `I've pencilled in "${item.title}" as a suggestion${item.due_at_utc ? ` for ${dueText(item)}` : ''} — say the word and I'll make it real.`
+        : reminder
+          ? `Noted — I'll remind you about "${item.title}" ${formatClock(reminder.fire_at_utc)}${reminderNote}.`
+          : item.due_at_utc
+            ? `Noted "${item.title}", due ${dueText(item)}${item.due_precision === 'day' ? ' (no time set)' : ''}.`
+            : `Noted "${item.title}".`
       return {
         result: {
           ok: true,
@@ -222,7 +229,7 @@ export function executeTool(name: string, rawArgs: unknown, sourceMsgId: string 
           reminder: reminder ? formatClock(reminder.fire_at_utc) + reminderNote : null,
           summary
         },
-        applied: { tool: name, summary, itemId: item.id, reminderId: reminder?.id }
+        applied: { tool: name, summary, phrase, itemId: item.id, reminderId: reminder?.id }
       }
     }
     case 'update_item': {
@@ -251,9 +258,13 @@ export function executeTool(name: string, rawArgs: unknown, sourceMsgId: string 
         `Updated "${item.title}" (${changed.join(', ') || 'nothing'})` +
         (patch.dueAtUtc !== undefined ? ` · now due ${item.due_at_utc ? dueText(item) : 'no date'}` : '') +
         (movedReminders ? ` · moved ${plural(movedReminders, 'reminder')} with it` : '')
+      const phrase =
+        patch.dueAtUtc !== undefined
+          ? `Updated — "${item.title}" is now ${item.due_at_utc ? `due ${dueText(item)}` : 'undated'}.${movedReminders ? ' The reminder moved with it.' : ''}`
+          : `Updated "${item.title}" (${changed.join(', ') || 'no change'}).`
       return {
         result: { ok: true, item_id: shortId(item.id), due: item.due_at_utc ? dueText(item) : null, due_precision: item.due_precision, moved_reminders: movedReminders, summary },
-        applied: { tool: name, summary, itemId: item.id }
+        applied: { tool: name, summary, phrase, itemId: item.id }
       }
     }
     case 'complete_item': {
@@ -263,7 +274,8 @@ export function executeTool(name: string, rawArgs: unknown, sourceMsgId: string 
       const item = repo.getItem(id)!
       pushFocus(item.id, item.title, 'completed')
       const summary = `Completed "${item.title}"` + (cancelledReminders ? ` · its ${plural(cancelledReminders, 'reminder')} stopped` : '')
-      return { result: { ok: true, summary }, applied: { tool: name, summary, itemId: id } }
+      const phrase = `Marked "${item.title}" done.${cancelledReminders ? ` Its ${plural(cancelledReminders, 'reminder')} won't fire.` : ''}`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase, itemId: id } }
     }
     case 'cancel_item': {
       const x = a as z.infer<typeof toolSchemas.cancel_item>
@@ -272,7 +284,8 @@ export function executeTool(name: string, rawArgs: unknown, sourceMsgId: string 
       const item = repo.getItem(id)!
       pushFocus(item.id, item.title, 'cancelled')
       const summary = `Cancelled "${item.title}"` + (cancelledReminders ? ` · its ${plural(cancelledReminders, 'reminder')} stopped` : '') + ' · nothing else touched'
-      return { result: { ok: true, summary }, applied: { tool: name, summary, itemId: id } }
+      const phrase = `Cancelled "${item.title}".${cancelledReminders ? ` Its ${plural(cancelledReminders, 'reminder')} won't fire.` : ''} Nothing else was touched.`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase, itemId: id } }
     }
     case 'create_reminder': {
       const x = a as z.infer<typeof toolSchemas.create_reminder>
@@ -289,7 +302,8 @@ export function executeTool(name: string, rawArgs: unknown, sourceMsgId: string 
       const item = repo.getItem(itemId)!
       pushFocus(item.id, item.title, 'reminder added')
       const summary = `Reminder for "${item.title}" ${formatClock(r.fire_at_utc)}${note}`
-      return { result: { ok: true, reminder_id: shortId(r.id), fires: formatClock(r.fire_at_utc) + note, summary }, applied: { tool: name, summary, itemId, reminderId: r.id } }
+      const phrase = `I'll remind you about "${item.title}" ${formatClock(r.fire_at_utc)}${note}.`
+      return { result: { ok: true, reminder_id: shortId(r.id), fires: formatClock(r.fire_at_utc) + note, summary }, applied: { tool: name, summary, phrase, itemId, reminderId: r.id } }
     }
     case 'update_reminder': {
       const x = a as z.infer<typeof toolSchemas.update_reminder>
@@ -297,7 +311,8 @@ export function executeTool(name: string, rawArgs: unknown, sourceMsgId: string 
       const r = repo.updateReminderTime(id, repo.localToUtc(x.fire_at_local))
       if (r.item_id) pushFocus(r.item_id, r.item_title ?? 'Reminder', 'reminder moved')
       const summary = `Moved reminder for "${r.item_title ?? 'Reminder'}" to ${formatClock(r.fire_at_utc)}`
-      return { result: { ok: true, summary }, applied: { tool: name, summary, itemId: r.item_id ?? undefined, reminderId: id } }
+      const phrase = `The reminder for "${r.item_title ?? 'that'}" now fires ${formatClock(r.fire_at_utc)}.`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase, itemId: r.item_id ?? undefined, reminderId: id } }
     }
     case 'cancel_reminder': {
       const x = a as z.infer<typeof toolSchemas.cancel_reminder>
@@ -306,7 +321,8 @@ export function executeTool(name: string, rawArgs: unknown, sourceMsgId: string 
       repo.cancelReminder(id)
       if (before.item_id) pushFocus(before.item_id, before.item_title ?? 'Reminder', 'reminder cancelled')
       const summary = `Cancelled the reminder for "${before.item_title ?? 'Reminder'}" · the item itself is unchanged`
-      return { result: { ok: true, item_still_open: true, summary }, applied: { tool: name, summary, itemId: before.item_id ?? undefined, reminderId: id } }
+      const phrase = `Reminder cancelled. "${before.item_title ?? 'That'}" itself is still on your list.`
+      return { result: { ok: true, item_still_open: true, summary }, applied: { tool: name, summary, phrase, itemId: before.item_id ?? undefined, reminderId: id } }
     }
     case 'snooze_reminder': {
       const x = a as z.infer<typeof toolSchemas.snooze_reminder>
@@ -314,14 +330,16 @@ export function executeTool(name: string, rawArgs: unknown, sourceMsgId: string 
       const r = repo.snoozeReminder(id, x.minutes)
       if (r.item_id) pushFocus(r.item_id, r.item_title ?? 'Reminder', 'reminder snoozed')
       const summary = `Snoozed reminder for "${r.item_title ?? 'Reminder'}" until ${formatClock(r.fire_at_utc)}`
-      return { result: { ok: true, summary }, applied: { tool: name, summary, itemId: r.item_id ?? undefined, reminderId: id } }
+      const phrase = `Snoozed — I'll nudge you about "${r.item_title ?? 'that'}" again ${formatClock(r.fire_at_utc)}.`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase, itemId: r.item_id ?? undefined, reminderId: id } }
     }
     case 'set_preference': {
       const x = a as z.infer<typeof toolSchemas.set_preference>
       if (x.key !== 'name' && !/^\d{1,2}:\d{2}$/.test(x.value)) throw new ToolValidationError(`${x.key} must be "HH:MM"`)
       repo.setPreference(x.key, x.value, 'stated')
       const summary = `Remembered ${x.key.replace(/_/g, ' ')} = ${x.value}`
-      return { result: { ok: true, summary }, applied: { tool: name, summary } }
+      const phrase = `Got it — your ${x.key.replace(/_/g, ' ')} is now ${x.value}.`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase } }
     }
     case 'get_item': {
       const x = a as z.infer<typeof toolSchemas.get_item>

@@ -106,9 +106,15 @@ export class GeminiProvider implements Provider {
           modelIdx++
           continue
         }
-        const wait = Math.min(MAX_WAIT_MS, Math.max(BACKOFF_MS[Math.min(attempt, BACKOFF_MS.length - 1)], suggestedWaitMs(err) ?? 0))
+        // Google's retryDelay is authoritative; the fixed 1/2/4/8 s ladder is only the fallback when it is absent.
+        const hinted = suggestedWaitMs(err)
+        const wait = Math.min(MAX_WAIT_MS, (hinted ?? BACKOFF_MS[Math.min(attempt, BACKOFF_MS.length - 1)]) + 250)
         attempt++
-        log('warn', 'ai.throttled', `${statusOf(err)} from ${model}; retrying in ${Math.round(wait / 1000)}s (attempt ${attempt})`)
+        log(
+          'warn',
+          'ai.throttled',
+          `${statusOf(err)} from ${model}; retrying in ${Math.round(wait / 1000)}s (${hinted ? 'server retryDelay' : 'fallback backoff'}, attempt ${attempt})`
+        )
         onThrottle?.(Math.round(wait / 1000))
         await new Promise((r) => setTimeout(r, wait))
       }

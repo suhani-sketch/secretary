@@ -72,8 +72,10 @@ export interface ChatMessage {
 /** Ground truth of what the tool executor committed for one user message. Shown under the reply. */
 export interface AppliedChange {
   tool: string
-  /** Short human sentence, e.g. `Created task "Call the bank" · reminder Thu 17 Sep 15:00` */
+  /** Terse ground-truth line shown under the reply, e.g. `Created task "Call the bank" · reminder Thu 17 Sep 15:00` */
   summary: string
+  /** Warm one-sentence confirmation composed in code from the committed result; used as the reply so no second model call is needed. */
+  phrase: string
   itemId?: string
   reminderId?: string
 }

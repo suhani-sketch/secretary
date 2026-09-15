@@ -104,7 +104,7 @@ function handleProtocolUrl(raw: string): void {
 function setupProvider(): void {
   loadDotenv({ path: join(app.getAppPath(), '.env'), quiet: true })
   // Comma-separated fallback chain; free-tier quotas are per model, so siblings absorb bursts.
-  aiModel = process.env['GEMINI_MODEL'] || 'gemini-3.6-flash,gemini-3.7-flash,gemini-3.8-flash'
+  aiModel = process.env['GEMINI_MODEL'] || 'gemini-3.5-flash-lite,gemini-3.6-flash,gemini-3.8-flash'
   const key = process.env['GEMINI_API_KEY']
   if (key && key.trim()) {
     provider = new GeminiProvider(

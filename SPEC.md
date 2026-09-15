@@ -47,7 +47,7 @@ These are not features and must never be dropped, deferred or simplified in any 
 
 **One thing to know before starting:** the app needs its own API key at runtime. A Claude Pro/Max subscription powers Claude Code while you build; it does not power the app once it runs.
 
-V1 uses **Google Gemini's free tier** — a key from Google AI Studio, no credit card, no Cloud project. Flash models only (Pro moved behind billing in April 2026), roughly 15 requests/minute and 1,500/day. For one user that is abundant.
+V1 uses **Google Gemini's free tier** — a key from Google AI Studio, no credit card, no Cloud project. Flash models only (Pro moved behind billing in April 2026). **Measured September 2026: 5 requests/minute per model on the Flash models** — the 15 RPM figure that circulated earlier no longer holds. Flash-Lite is the default because its quota is looser; the Flash models sit behind it as fallbacks, and quotas are per model so siblings absorb bursts. Daily quotas are in the low hundreds per model and are revised without notice; check ai.dev/rate-limit rather than trusting a number written here. For one user typing at human pace this is still enough, provided **one message costs one model call** and the deterministic tier carries the bulk of traffic.
 
 Two constraints that follow from this choice:
 
@@ -226,6 +226,10 @@ Not every message deserves a frontier model. Three tiers:
 **Tier 0 — deterministic, no model call, instant.**
 Handles: "done", "finished the CV", "cancel that", "snooze", "move that to 7", and any message where `chrono-node` finds a date and the verb is a simple create. Target: 50–60% of messages.
 
+**Default model (September 2026): `gemini-3.5-flash-lite`** for every model-backed tier, with `gemini-3.6-flash` and `gemini-3.8-flash` as fallbacks when it is exhausted. Promote tier 2 to full Flash only if answer quality on §9 steps 7–9 demands it.
+
+**One message, one call.** A successful write round must not cost a second model call to phrase the confirmation: the reply is composed in code from the committed results (which is also what guarantees hard rule 3). A second call is allowed only when the model asked a read-only tool a question and needs the answer to reply.
+
 **Tier 1 — small model (Gemini Flash-Lite).**
 Handles: classification, single-item extraction, simple edits, reference resolution.
 
@@ -241,7 +245,7 @@ The router decides tier before any call. Build tier 0 and tier 2 first; add tier
 
 If §9's acceptance test steps 7–9 produce weak answers, the fix is usually more computation in code rather than a better model.
 
-**Rate limits are normal, not bugs.** A 429 is expected behaviour at 15 RPM. Implement exponential backoff (1s, 2s, 4s, 8s) in the provider layer, and surface a calm "one moment" in the UI rather than an error. Never lose the user's message because a call was throttled — queue it.
+**Rate limits are normal, not bugs.** A 429 is expected behaviour at 5 RPM. The 429 body carries a `retryDelay`; honour it (fall back to 1s, 2s, 4s, 8s only when it is absent), treat 503 "high demand" the same way, and switch to a sibling model when the first is exhausted at the start of a turn. Surface a calm "one moment" in the UI rather than an error. Never lose the user's message because a call was throttled — queue it.
 
 This is also the latency fix. "Got it" should appear instantly for the common cases, not after three seconds.
 
@@ -365,14 +369,16 @@ Electron + React + SQLite skeleton. Tray. Migrations. A crude input box that wri
 *If this phase fails, nothing else matters. That's why it's first.*
 
 ### Phase 1 — Conversation with tools
-Orchestrator, provider abstraction, the tool layer with Zod validation, transactional execution, the `extractions` audit log. Tier 2 only — no routing yet. Create, complete, edit, cancel tasks and reminders by talking. Reference resolution via the focus stack. Destructive-operation semantics. Notification actions on the toast. Static companion illustration as a placeholder.
+Orchestrator, provider abstraction, the tool layer with Zod validation, transactional execution, the `extractions` audit log. Create, complete, edit, cancel tasks and reminders by talking. Reference resolution via the focus stack. Destructive-operation semantics. Notification actions on the toast. Static companion illustration as a placeholder.
+
+**Pulled forward from Phase 2 (September 2026, because of the 5 RPM quota):** the Tier 0 deterministic router — `chrono-node` date parsing for simple creates, and keyword handling for done / cancel / snooze / move — with no model call at all, executing through the same tool layer and logged with `tier = 0`.
 
 Split this into 1a and 1b if it fights back. 1a: create and read, with the invariants enforced. 1b: edit, cancel, complete, and reference resolution. Reference resolution is the hardest part of the phase and deserves its own pass.
 
 **Done when:** "remind me to call the bank Thursday at 3" creates a real row; "actually make it 4" edits *that same row* rather than making a second one; "cancel the reminder" leaves the task standing; "tomorrow" is stored as `day` precision with no invented clock time; and the app only says it's done after the commit.
 
-### Phase 2 — Fast path and dates
-`chrono-node` integration. Tier 0 router. Timezone-correct storage. Recurrence via RRULE.
+### Phase 2 — Dates, hardening the fast path
+`chrono-node` and the Tier 0 router landed in Phase 1. This phase widens Tier 0 coverage using the `messages.tier` column as evidence, reviews timezone-correct storage, and adds recurrence via RRULE.
 
 **Done when:** simple messages respond in under 300ms with no API call, "every Sunday" recurs correctly, and "in two hours" lands on the right timestamp.
 
