@@ -11,7 +11,6 @@ Written to be handed to Claude Code as the source of truth for the project.
 
 This V1 is being built for one person on one machine. That removes a large amount of the original brief. The following are **explicitly out of scope for V1** and should not be built, even partially:
 
-- Voice input and transcription
 - Onboarding / first-run flow
 - Monetization, feature gating, usage tracking, subscription state
 - Multiple personality modes
@@ -28,12 +27,23 @@ These are **in scope and must not be compromised**:
 - One conversational interface that handles create / edit / complete / cancel in natural language
 - Structured memory that distinguishes kinds of information
 - Deadline components and dependencies
+- Availability constraints and conflict detection
 - "What should I do now?" and "What am I forgetting?"
-- Brain dump
+- Brain dump, by text or voice note
 - Conversational replanning
 - A companion and room
 
 Cutting the first list is what makes the second list achievable quickly.
+
+### Invariants
+
+These are not features and must never be dropped, deferred or simplified in any phase. They exist to prevent the assistant becoming confidently wrong over time, which is the main way this kind of product dies.
+
+1. **`due_precision` is always set honestly.** "Tomorrow" is `day` precision. Do not invent a clock time and store it as `exact`. If a time is needed for scheduling, derive it at display time from preferences, and say so.
+2. **Inferred is never stored as stated.** `is_suggestion = 1` for anything the assistant proposed. A suggestion is never counted as an obligation until the user confirms it.
+3. **Every model proposal is logged to `extractions`**, applied or not.
+4. **Nothing is reported as done before the transaction commits.**
+5. **Task ≠ reminder ≠ deadline.** Cancelling one never silently destroys another.
 
 **One thing to know before starting:** the app needs its own API key at runtime. A Claude Pro/Max subscription powers Claude Code while you build; it does not power the app once it runs.
 
@@ -78,7 +88,7 @@ Two constraints that follow from this choice:
 │  Orchestrator ── Router (tier 0/1/2)    │
 │       │                                 │
 │       ├── Context Assembler             │
-│       ├── Provider (Anthropic)          │
+│       ├── Provider (Gemini)              │
 │       ├── Tool Executor (Zod → txn)     │
 │       │                                 │
 │  Scheduler ── Notifier ── Tray          │
@@ -130,6 +140,17 @@ CREATE TABLE links (
   type       TEXT NOT NULL,   -- blocks|part_of|relates_to
   created_at TEXT NOT NULL,
   UNIQUE(from_item, to_item, type)
+);
+
+CREATE TABLE constraints (
+  id           TEXT PRIMARY KEY,
+  kind         TEXT NOT NULL,   -- unavailable|prefer|avoid
+  label        TEXT NOT NULL,   -- "travelling", "class", "no mornings"
+  starts_at    TEXT,            -- UTC, null for recurring-only
+  ends_at      TEXT,
+  rrule        TEXT,            -- for standing constraints ("every Tue 2-5pm")
+  source       TEXT NOT NULL,   -- stated|inferred
+  created_at   TEXT NOT NULL
 );
 
 CREATE TABLE reminders (
@@ -190,6 +211,7 @@ Notes on specific columns:
 - `is_suggestion` and `confidence` directly implement the brief's requirement that inferences must never silently become obligations. Suggestions render differently and are never counted as commitments until confirmed.
 - `extractions` is an audit log of what the model proposed versus what was applied. This is the single most valuable table for debugging, and you will need it constantly.
 - `due_precision` matters. "Sometime next week" is not the same as Monday 17:00 and must not be stored as though it were.
+- `constraints` holds availability facts that are neither tasks nor preferences: "I'm travelling Friday", "class 2–5 on Tuesdays", "nothing before 11". Without this table, replanning will keep proposing times the user has already ruled out. `source` distinguishes what the user stated from what the assistant guessed.
 - Text IDs (UUIDs) rather than integers so cloud sync is possible later without renumbering.
 - Every timestamp is UTC ISO 8601. Local time is a display concern only.
 
@@ -231,12 +253,29 @@ Defined as JSON schema, validated with Zod, executed in a transaction:
 create_item, update_item, complete_item, cancel_item
 create_reminder, update_reminder, cancel_reminder, snooze_reminder
 add_link, remove_link
+add_constraint, remove_constraint, check_conflicts
 set_preference
 search_memory, get_today, get_upcoming, get_item, get_current_context
 propose_plan
 ```
 
 `propose_plan` returns a plan for the user to approve rather than applying it. Replanning must never happen silently.
+
+### Destructive-operation semantics
+
+The blast radius of a cancellation must match what the user actually said. Three levels:
+
+| User says | Affects | Confirmation |
+|---|---|---|
+| "cancel the reminder" | the reminder only | none — just do it |
+| "I'm not doing the case study" | that one item | none |
+| "forget about the application" | a project and its components | **ask first**, naming what would go |
+
+Never cascade a delete across linked items without confirmation. Prefer `status = 'cancelled'` over row deletion everywhere, so a mistaken cancel is recoverable and the assistant can honestly answer "what happened to X?".
+
+### Priority is inferred, never asked
+
+There is no priority selector anywhere in the UI. `importance` is derived from how the user talks — "I absolutely have to get this done tonight" is not "maybe I should read this sometime" — and from deadline proximity and downstream blocking. The user can override in conversation ("that's not actually important"), and an override is `stated` and sticks.
 
 ### Context assembly
 
@@ -270,6 +309,10 @@ This is the highest-risk subsystem and it gets built first.
 **Background survival.** The app runs in the tray and does not quit when the window is closed. `app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true })` for restart survival.
 
 **Windows toasts.** Electron's `Notification` API maps to Windows toast, but requires `app.setAppUserModelId()` to be set or toasts silently fail — this is a common and confusing first bug. In development, notifications may not appear until the app is properly identified.
+
+**Notification actions.** Toasts carry buttons — **Done**, **Snooze**, **Reschedule** — so the common responses need no window at all. Windows toast supports this natively; Electron exposes it via the `actions` field, and the click handler routes back through the same tool layer as typed input, never through a separate code path. Snooze offers a couple of sensible intervals rather than a picker.
+
+**Reminders are not tasks.** A reminder is an alarm attached to an item; the item is the obligation. Creating a task does not automatically create a reminder, and a due date without a reminder is a real and valid state. But if the user says "remind me", they get a row in `reminders`, not just a due date — and the Coming Up view must reflect exactly what exists.
 
 **State machine.** `pending → delivered → acknowledged | snoozed | cancelled`. Write the state change to the database before reporting success anywhere.
 
@@ -322,9 +365,11 @@ Electron + React + SQLite skeleton. Tray. Migrations. A crude input box that wri
 *If this phase fails, nothing else matters. That's why it's first.*
 
 ### Phase 1 — Conversation with tools
-Orchestrator, provider abstraction, the tool layer with Zod validation, transactional execution, the `extractions` audit log. Tier 2 only — no routing yet. Create, complete, edit, cancel tasks and reminders by talking. Static companion illustration as a placeholder.
+Orchestrator, provider abstraction, the tool layer with Zod validation, transactional execution, the `extractions` audit log. Tier 2 only — no routing yet. Create, complete, edit, cancel tasks and reminders by talking. Reference resolution via the focus stack. Destructive-operation semantics. Notification actions on the toast. Static companion illustration as a placeholder.
 
-**Done when:** "remind me to call the bank Thursday at 3" creates a real row, and "actually make it 4" edits that same row, and the app only says it's done after the commit.
+Split this into 1a and 1b if it fights back. 1a: create and read, with the invariants enforced. 1b: edit, cancel, complete, and reference resolution. Reference resolution is the hardest part of the phase and deserves its own pass.
+
+**Done when:** "remind me to call the bank Thursday at 3" creates a real row; "actually make it 4" edits *that same row* rather than making a second one; "cancel the reminder" leaves the task standing; "tomorrow" is stored as `day` precision with no invented clock time; and the app only says it's done after the commit.
 
 ### Phase 2 — Fast path and dates
 `chrono-node` integration. Tier 0 router. Timezone-correct storage. Recurrence via RRULE.
@@ -332,14 +377,18 @@ Orchestrator, provider abstraction, the tool layer with Zod validation, transact
 **Done when:** simple messages respond in under 300ms with no API call, "every Sunday" recurs correctly, and "in two hours" lands on the right timestamp.
 
 ### Phase 3 — Structure
-Kinds beyond task. Projects with components. `links` and dependency resolution. Waiting items. The memory view with editing.
+Kinds beyond task. Projects with components, inferred from conversation rather than created by hand. `links` and dependency resolution. Waiting items. Availability constraints and conflict detection. The memory view with editing.
 
-**Done when:** the first five steps of the acceptance test in §9 pass.
+**Done when:** the first five steps of the acceptance test in §9 pass, and "I'm busy tomorrow afternoon" followed by "put the case study tomorrow afternoon" produces a conflict warning rather than a silent booking.
 
 ### Phase 4 — The signature features
-Brain dump extraction. "What should I do now?" "What am I forgetting?" The explicit/possible distinction in output.
+Brain dump extraction. Voice notes. "What should I do now?" "What am I forgetting?" The explicit/possible distinction in output.
 
-**Done when:** a messy five-clause paragraph produces a sensible set of items and asks at most one clarifying question; and the two questions give useful answers rather than list dumps.
+**Voice belongs here, not in a phase of its own.** Gemini accepts audio directly, so no separate transcription service is needed: record in the renderer, send the audio to the same key with the same tool schema, get structured calls back. It is a record button plus an audio branch in the provider, not a subsystem. And it belongs with brain dump because that is what voice is *for* — a chaotic ninety-second ramble is the natural voice input, and a microphone that can only create one flat task is not worth having.
+
+Keep the audio local. Store the recording alongside the message if it's useful for debugging; do not build a transcription archive.
+
+**Done when:** a messy five-clause paragraph — typed or spoken — produces a sensible set of items and asks at most one clarifying question; and the two questions give useful answers rather than list dumps.
 
 ### Phase 5 — Follow-through and replanning
 `propose_plan`. Escalation logic. Quiet hours. Intensity settings. The overwhelm response.
@@ -398,11 +447,15 @@ At no point may the assistant claim something happened that did not.
 
 ## 10. Changes from the original brief
 
-**Cut from V1:** voice, onboarding, monetization architecture, personality modes, calendar view, distribution. Listed in §0.
+**Cut from V1:** onboarding, monetization architecture, personality modes, calendar view, distribution, attachments, email and calendar integration. Listed in §0.
+
+**Moved into V1:** voice notes (Phase 4). Gemini accepts audio directly, which collapses this from a subsystem into a record button — the reason it was originally cut no longer holds.
+
+**Merged in (second pass):** notification actions on the toast, availability constraints as a first-class table, destructive-operation semantics, conflict detection, and the explicit statement that priority is inferred rather than selected. These came from a later review and fill real gaps.
 
 **Elevated:** the memory inspection view moves from secondary to core, because memory drift is the main long-term failure mode and the user needs to be able to repair it.
 
-**Added:** the `extractions` audit table, the scheduler debug log, the focus stack for reference resolution, and `is_suggestion` / `confidence` on items.
+**Added:** the `extractions` audit table, the scheduler debug log, the focus stack for reference resolution, `is_suggestion` / `confidence` on items, and the invariants in §0.
 
 **Restructured:** the brief's 18 V1 priorities are re-sequenced so the riskiest infrastructure is proven in week one rather than discovered in month three.
 
@@ -414,7 +467,7 @@ At no point may the assistant claim something happened that did not.
 
 ## 11. Working with Claude Code on this
 
-- Keep this file as `SPEC.md` in the project root.
+- Keep this file as `SPEC.md` in the project root. **It is the only phase numbering that exists.** If another plan turns up with its own Phase 1, fold it into this file rather than running two schemes — a session that guesses which numbering you meant will build the wrong thing.
 - Keep a `CLAUDE.md` alongside it with: the current phase, what works, what's broken, and what's next. Update it at the end of each session. This is what survives between sessions.
 - Work one phase at a time. Say "build Phase 2 from SPEC.md" rather than "build the app".
 - Commit to git every time something works. That's your undo.

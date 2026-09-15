@@ -4,13 +4,13 @@ import { writeFileSync } from 'fs'
 import { config as loadDotenv } from 'dotenv'
 import { closeDatabase, dbPath, getDb, openDatabase } from './db'
 import { clearLog, listLog, log } from './log'
-import { showToast } from './notifier'
+import { PROTOCOL, showToast } from './notifier'
 import * as repo from './repo'
 import { TICK_MS, startScheduler, startupSweep, stopScheduler, tick } from './scheduler'
 import { createTray, refreshTrayMenu } from './tray'
 import { GeminiProvider } from './ai/gemini'
 import type { Provider } from './ai/provider'
-import { enqueueChat } from './ai/orchestrator'
+import { applyExternalTools, enqueueChat } from './ai/orchestrator'
 import { IPC, type AppInfo, type ChatStatus, type CreateItemInput } from '../shared/types'
 
 // ---- Identity: required for Windows toasts, otherwise they vanish silently (spec §5) ----
@@ -25,21 +25,92 @@ let quitting = false
 let provider: Provider | null = null
 let aiModel = ''
 
-// ---- Single instance: a second launch (e.g. `npm start` while the tray copy runs) just focuses the first ----
+// ---- Single instance: a second launch (e.g. `npm start` while the tray copy runs) just focuses the first.
+// Toast buttons launch `secretary://…` URLs; Windows starts a second instance with the URL in argv,
+// which lands here and is routed to the running copy. ----
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.on('second-instance', () => showWindow())
+  app.on('second-instance', (_e, argv) => {
+    const url = argv.find((a) => a.startsWith(`${PROTOCOL}://`))
+    if (url) handleProtocolUrl(url)
+    else showWindow()
+  })
   app.whenReady().then(onReady)
+}
+
+/** Register secretary:// so toast buttons can reach us. In dev this points at electron.exe + project dir. */
+function registerProtocol(): void {
+  const ok = app.isPackaged
+    ? app.setAsDefaultProtocolClient(PROTOCOL)
+    : app.setAsDefaultProtocolClient(PROTOCOL, process.execPath, [app.getAppPath()])
+  log(ok ? 'info' : 'warn', 'protocol.registered', `${PROTOCOL}:// → ${ok ? 'ok' : 'FAILED'}`)
+}
+
+/**
+ * secretary://reminder/<reminderId>/(open|done|snooze/<min>|reschedule)
+ * Every write goes through the same validated tool layer as typed input.
+ */
+function handleProtocolUrl(raw: string): void {
+  log('info', 'protocol.received', raw)
+  let u: URL
+  try {
+    u = new URL(raw)
+  } catch {
+    return
+  }
+  const parts = u.pathname.split('/').filter(Boolean) // host is "reminder"; pathname "/<id>/<action>[/<arg>]"
+  const reminderId = parts[0]
+  const action = parts[1] ?? 'open'
+  const arg = parts[2]
+  if (u.host !== 'reminder' || !reminderId) {
+    showWindow()
+    return
+  }
+  const rem = repo.getReminder(reminderId)
+  if (!rem) {
+    log('warn', 'protocol.unknown_reminder', reminderId)
+    showWindow()
+    return
+  }
+  const ext = (calls: { name: string; args: Record<string, unknown> }[]): void => {
+    const applied = applyExternalTools('toast', calls)
+    log(applied.length ? 'info' : 'warn', 'toast.action', `${action}: ${applied.map((a) => a.summary).join(' | ') || 'nothing applied'}`, reminderId)
+    notifyRendererChanged()
+  }
+  switch (action) {
+    case 'done':
+      repo.acknowledgeReminder(reminderId)
+      if (rem.item_id) ext([{ name: 'complete_item', args: { id: rem.item_id } }])
+      break
+    case 'snooze': {
+      const minutes = Math.max(1, Math.min(60 * 24, Number(arg) || 15))
+      ext([{ name: 'snooze_reminder', args: { id: reminderId, minutes } }])
+      break
+    }
+    case 'reschedule':
+      repo.acknowledgeReminder(reminderId)
+      showWindow()
+      // Let the renderer finish loading before prefilling; the user completes the sentence.
+      setTimeout(() => send(IPC.chatPrefill, `Move "${rem.item_title ?? 'that'}" to `), 400)
+      break
+    default:
+      repo.acknowledgeReminder(reminderId)
+      showWindow()
+  }
 }
 
 // ---- AI provider (spec §4). The key lives in .env next to package.json and never leaves the main process. ----
 function setupProvider(): void {
   loadDotenv({ path: join(app.getAppPath(), '.env'), quiet: true })
-  aiModel = process.env['GEMINI_MODEL'] || 'gemini-3.6-flash'
+  // Comma-separated fallback chain; free-tier quotas are per model, so siblings absorb bursts.
+  aiModel = process.env['GEMINI_MODEL'] || 'gemini-3.6-flash,gemini-3.7-flash,gemini-3.8-flash'
   const key = process.env['GEMINI_API_KEY']
   if (key && key.trim()) {
-    provider = new GeminiProvider(key.trim(), aiModel)
+    provider = new GeminiProvider(
+      key.trim(),
+      aiModel.split(',').map((s) => s.trim()).filter(Boolean)
+    )
     log('info', 'ai.provider', `gemini / ${aiModel} (key present)`)
   } else {
     provider = null
@@ -156,16 +227,21 @@ function onReady(): void {
   openDatabase()
   log('info', 'app.start', `v${app.getVersion()} electron ${process.versions.electron} hidden=${startedHidden} db=${dbPath()}`)
   applyStoredOpenAtLogin()
+  registerProtocol()
   setupProvider()
   createTray(trayHandlers)
   registerIpc()
 
+  // If a toast button launched us cold (app was not running), the URL is in our own argv.
+  const coldUrl = process.argv.find((a) => a.startsWith(`${PROTOCOL}://`))
+
   mainWindow = createWindow()
-  if (!startedHidden) mainWindow.once('ready-to-show', () => mainWindow?.show())
+  if (!startedHidden && !coldUrl) mainWindow.once('ready-to-show', () => mainWindow?.show())
 
   // Highest-risk subsystem first: sweep what we missed, then start ticking.
   startupSweep()
   startScheduler(notifyRendererChanged)
+  if (coldUrl) handleProtocolUrl(coldUrl)
 
   // Developer hook: SECRETARY_CHAT="first message||second message" runs a scripted conversation
   // through the real orchestrator, prints the results, then quits. Used for the §7 Phase 1 test.
@@ -251,7 +327,13 @@ function registerIpc(): void {
     return actual
   })
   ipcMain.handle(IPC.sendTestNotification, () => {
-    showToast({ title: 'Secretary test', body: 'If you can read this, Windows toasts work.' })
+    // Uses the newest reminder so the buttons have something real to act on, if one exists.
+    const r = repo.listReminders()[0]
+    showToast({
+      title: 'Secretary test',
+      body: r ? `Buttons act on "${r.item_title ?? 'Reminder'}".` : 'If you can read this, Windows toasts work.',
+      actions: r ? { reminderId: r.id, itemId: r.item_id } : undefined
+    })
   })
 
   // Conversation (Phase 1)

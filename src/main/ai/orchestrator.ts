@@ -13,12 +13,27 @@ const SYSTEM_PROMPT = `You are a personal secretary living inside a small deskto
 How you work:
 - The user talks in plain language. You record, change, complete and cancel their items and reminders by calling tools. You never write to storage any other way.
 - Only claim something was recorded, moved, completed or cancelled if the tool result for it says ok. If a tool fails, say plainly what did not happen.
-- Prefer acting over asking. If a time or target is genuinely ambiguous (e.g. "move that" with two plausible items), ask one short question instead of guessing.
-- "it", "that", "the earlier one" usually mean the most recently touched item listed in the context. When the user gives a new time for something just created ("actually make it 4"), update that item (and its reminder moves with it) rather than creating a new one.
-- Times: the context tells you the current local date and time. Resolve relative phrases ("Thursday at 3", "tomorrow afternoon", "in two hours") into local wall-clock times "YYYY-MM-DDTHH:MM". A bare "3" for an appointment means 15:00 unless context says otherwise. "Thursday" means the next Thursday from today (today if it is Thursday and the time is still ahead). If only a date is given, set due_precision "day" and use 09:00.
-- Reminders: when the user says "remind me", set remind_at_local (same as the due time unless they ask for earlier). Otherwise do not create reminders unprompted.
-- Inferences you make that the user did not state should be offered as a question, not recorded as facts.
-- Replies: one or two short sentences, in the user's own words where possible, no bullet lists unless listing several items. State what you did with the concrete time, e.g. "Done — I'll remind you Thursday at 15:00." Never mention tools, ids or JSON.`
+- Prefer acting over asking. If the target is genuinely ambiguous (e.g. "move that" with two plausible items), ask one short question instead of guessing.
+
+Reference resolution:
+- "it", "that", "the earlier one" usually mean the most recently touched item listed in the context. When the user gives a new time for something just created ("actually make it 4"), update THAT item with update_item — never create a second one. Its reminder moves with it automatically.
+
+Times — be honest about precision:
+- The context tells you today's date and time. Resolve relative phrases yourself.
+- If the user stated a clock time ("Thursday at 3", "tomorrow at 9", "in two hours"), use the *_at_local field ("YYYY-MM-DDTHH:MM"). A bare number for an appointment means the afternoon/business hour (3 → 15:00) unless context says otherwise.
+- If the user gave only a day ("tomorrow", "Friday", "tom", "next week"), use the *_date_local field ("YYYY-MM-DD"). NEVER invent a clock time. "Next week" → the Monday with due_looseness "week". "Sometime"/"at some point" → due_looseness "vague".
+- "Thursday" means the next Thursday from today (today if it is Thursday and the time is still ahead).
+
+Reminders are alarms, tasks are obligations:
+- Create a reminder only when the user asks for one ("remind me", "ping me", "alarm"). A task with a due date and no reminder is normal.
+- If they ask to be reminded on a day without a clock time, use remind_date_local; the app picks their default reminder time and tells them. If they give a time, use remind_at_local.
+- "Cancel the reminder" → cancel_reminder only; the item stays. "I'm not doing X" → cancel_item for that one item only. If the user asks to forget/drop something that sounds like a project with several parts, ask first and name what would go.
+
+Importance is inferred, never asked: read it from their wording and deadline pressure. If they override ("that's not actually important"), update importance.
+
+Suggestions: anything you propose that the user did not state gets is_suggestion=true, and you phrase it as an offer, not a fact.
+
+Replies: one or two short sentences, no bullet lists unless listing several items. State what you did with the concrete day/time exactly as the tool result reports it — if the result says a reminder fires "at 09:00 (default …)", tell them that so they can change it. Never mention tools, ids or JSON.`
 
 export interface OrchestratorDeps {
   provider: Provider | null
@@ -59,13 +74,13 @@ async function handleChat(deps: OrchestratorDeps, rawText: string): Promise<Chat
     const tools = toolDefinitions()
 
     for (let round = 0; round < MAX_ROUNDS; round++) {
-      const res = await deps.provider.complete({ system: SYSTEM_PROMPT, messages, tools }, (s) =>
+      const res = await deps.provider.complete({ system: SYSTEM_PROMPT, messages, tools, turnId: userMessage.id }, (s) =>
         deps.onStatus({ kind: 'throttled', retryInSeconds: s })
       )
       log(
         'info',
         'ai.response',
-        `round ${round + 1}: ${res.toolCalls.length} tool call(s)${res.text ? ', text' : ''}; tokens in=${res.usage?.input ?? '?'} out=${res.usage?.output ?? '?'}`
+        `round ${round + 1} (${res.model ?? '?'}): ${res.toolCalls.length} tool call(s)${res.text ? ', text' : ''}; tokens in=${res.usage?.input ?? '?'} out=${res.usage?.output ?? '?'}`
       )
 
       if (res.toolCalls.length === 0) {
@@ -115,8 +130,9 @@ async function handleChat(deps: OrchestratorDeps, rawText: string): Promise<Chat
  * Execute one round of tool calls. All write calls in the round share one transaction:
  * if any fails to validate or execute, none of them are applied, and the model is told why.
  * Read calls run outside the transaction and can never change data.
+ * Every round is logged to `extractions` (spec invariant 3), applied or not.
  */
-function runToolRound(calls: ToolCall[], messageId: string, applied: AppliedChange[]): ToolResult[] {
+function runToolRound(calls: ToolCall[], messageId: string | null, applied: AppliedChange[]): ToolResult[] {
   const writes = calls.filter((c) => isWriteTool(c.name))
   const reads = calls.filter((c) => !isWriteTool(c.name))
   const results: ToolResult[] = []
@@ -145,6 +161,8 @@ function runToolRound(calls: ToolCall[], messageId: string, applied: AppliedChan
         results.push({ callId: c.id, name: c.name, result: { ok: false, error: `Not applied. ${msg}` } })
       }
     }
+  } else {
+    repo.insertExtraction(messageId, proposed, true, null)
   }
 
   for (const c of reads) {
@@ -155,6 +173,28 @@ function runToolRound(calls: ToolCall[], messageId: string, applied: AppliedChan
     }
   }
   return results
+}
+
+/**
+ * Actions that arrive from outside the conversation (toast buttons) go through the very same
+ * validated, transactional tool path — never a separate code path (spec §5 "Notification actions").
+ */
+export function applyExternalTools(origin: string, calls: { name: string; args: Record<string, unknown> }[]): AppliedChange[] {
+  const applied: AppliedChange[] = []
+  const sys = repo.insertMessage('system', `[${origin}] ${calls.map((c) => c.name).join(', ')}`, 0)
+  runToolRound(
+    calls.map((c, i) => ({ id: `local_ext_${i}`, name: c.name, args: c.args })),
+    sys.id,
+    applied
+  )
+  // Rewrite the placeholder into something a person can read in the conversation.
+  repo.updateMessageContent(
+    sys.id,
+    applied.length
+      ? `From the notification: ${applied.map((a) => a.summary).join('; ')}`
+      : `From the notification: ${calls.map((c) => c.name.replace(/_/g, ' ')).join(', ')} — nothing was changed`
+  )
+  return applied
 }
 
 /** Providers often throw JSON blobs; pull out the human message if there is one, then trim. */

@@ -10,17 +10,9 @@ import type {
   SchedulerLogEntry
 } from '../../shared/types'
 import { Companion } from './Companion'
+import { formatClock, formatDue } from '../../shared/format'
 
-const fmtLocal = (utcIso: string | null): string =>
-  utcIso
-    ? new Date(utcIso).toLocaleString(undefined, {
-        weekday: 'short',
-        day: 'numeric',
-        month: 'short',
-        hour: '2-digit',
-        minute: '2-digit'
-      })
-    : '—'
+const fmtLocal = (utcIso: string | null): string => (utcIso ? formatClock(utcIso) : '—')
 
 const fmtLogTime = (utcIso: string): string =>
   new Date(utcIso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
@@ -45,6 +37,7 @@ export default function App(): React.JSX.Element {
   const [showDebug, setShowDebug] = useState(false)
   const [flash, setFlash] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -70,10 +63,15 @@ export default function App(): React.JSX.Element {
     void window.api.chatHistory(60).then((h) => setMessages(h))
     const offChanged = window.api.onChanged(() => void refresh())
     const offStatus = window.api.onChatStatus(setStatus)
+    const offPrefill = window.api.onChatPrefill((text) => {
+      setDraft(text)
+      inputRef.current?.focus()
+    })
     const t = setInterval(() => void refresh(), 10000)
     return () => {
       offChanged()
       offStatus()
+      offPrefill()
       clearInterval(t)
     }
   }, [refresh])
@@ -126,6 +124,32 @@ export default function App(): React.JSX.Element {
 
   const openItems = items.filter((i) => i.status === 'open')
   const pending = reminders.filter((r) => r.state === 'pending' || r.state === 'snoozed')
+
+  // Coming Up reflects exactly what exists (spec §5): alarms AND dated items, told apart, next 7 days.
+  const horizon = Date.now() + 7 * 24 * 3600 * 1000
+  type Upcoming = { key: string; at: number; label: string; when: string; kind: 'alarm' | 'due'; suggestion: boolean }
+  const upcoming: Upcoming[] = [
+    ...pending
+      .filter((r) => new Date(r.fire_at_utc).getTime() <= horizon)
+      .map((r) => ({
+        key: 'r' + r.id,
+        at: new Date(r.fire_at_utc).getTime(),
+        label: r.item_title ?? 'Reminder',
+        when: formatClock(r.fire_at_utc),
+        kind: 'alarm' as const,
+        suggestion: false
+      })),
+    ...openItems
+      .filter((i) => i.due_at_utc && new Date(i.due_at_utc).getTime() <= horizon)
+      .map((i) => ({
+        key: 'i' + i.id,
+        at: new Date(i.due_at_utc!).getTime(),
+        label: i.title,
+        when: formatDue(i.due_at_utc, i.due_precision),
+        kind: 'due' as const,
+        suggestion: !!i.is_suggestion
+      }))
+  ].sort((a, b) => a.at - b.at)
   const companionState =
     status.kind === 'thinking' ? 'thinking' : status.kind === 'tools' ? 'working' : status.kind === 'throttled' ? 'waiting' : 'idle'
 
@@ -176,6 +200,7 @@ export default function App(): React.JSX.Element {
 
         <div className="mt-3 rounded-2xl bg-white shadow-sm flex items-end gap-2 p-2">
           <textarea
+            ref={inputRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={onKey}
@@ -199,27 +224,40 @@ export default function App(): React.JSX.Element {
         {!showDebug ? (
           <>
             <section className="rounded-2xl bg-white/60 p-4 flex flex-col gap-2 min-h-0">
-              <h2 className="text-xs font-medium uppercase tracking-wide text-stone-500">Coming up</h2>
-              {pending.length === 0 && <p className="text-sm text-stone-400">No reminders set.</p>}
+              <h2 className="text-xs font-medium uppercase tracking-wide text-stone-500">Coming up · 7 days</h2>
+              {upcoming.length === 0 && <p className="text-sm text-stone-400">Nothing dated, no alarms set.</p>}
               <ul className="flex flex-col gap-1.5 overflow-y-auto">
-                {pending.slice(0, 8).map((r) => (
-                  <li key={r.id} className="text-sm">
-                    <div className="truncate">{r.item_title ?? 'Reminder'}</div>
-                    <div className="text-xs text-stone-500">{fmtLocal(r.fire_at_utc)}</div>
+                {upcoming.slice(0, 10).map((u) => (
+                  <li key={u.key} className="text-sm flex items-start gap-2">
+                    <span className="mt-0.5 text-xs" title={u.kind === 'alarm' ? 'Reminder will fire' : 'Due date, no reminder'}>
+                      {u.kind === 'alarm' ? '🔔' : '📅'}
+                    </span>
+                    <div className="min-w-0">
+                      <div className={`truncate ${u.suggestion ? 'italic text-stone-500' : ''}`}>
+                        {u.label}
+                        {u.suggestion && <span className="ml-1 text-[10px] not-italic text-stone-400">suggested</span>}
+                      </div>
+                      <div className="text-xs text-stone-500">
+                        {u.when}
+                        {u.kind === 'due' && <span className="text-stone-400"> · no reminder</span>}
+                      </div>
+                    </div>
                   </li>
                 ))}
               </ul>
             </section>
             <section className="rounded-2xl bg-white/60 p-4 flex flex-col gap-2 min-h-0 flex-1">
-              <h2 className="text-xs font-medium uppercase tracking-wide text-stone-500">Open ({openItems.length})</h2>
+              <h2 className="text-xs font-medium uppercase tracking-wide text-stone-500">
+                Open ({openItems.filter((i) => !i.is_suggestion).length})
+              </h2>
               {openItems.length === 0 && <p className="text-sm text-stone-400">Nothing open.</p>}
               <ul className="flex flex-col gap-1.5 overflow-y-auto">
                 {openItems.slice(0, 20).map((it) => (
                   <li key={it.id} className="text-sm flex items-start gap-2">
-                    <span className="text-[10px] mt-1 rounded px-1 bg-stone-200 text-stone-600">{it.kind}</span>
+                    <span className="text-[10px] mt-1 rounded px-1 bg-stone-200 text-stone-600">{it.is_suggestion ? 'suggested' : it.kind}</span>
                     <div className="min-w-0">
-                      <div className="truncate">{it.title}</div>
-                      {it.due_at_utc && <div className="text-xs text-stone-500">due {fmtLocal(it.due_at_utc)}</div>}
+                      <div className={`truncate ${it.is_suggestion ? 'italic text-stone-500' : ''}`}>{it.title}</div>
+                      {it.due_at_utc && <div className="text-xs text-stone-500">due {formatDue(it.due_at_utc, it.due_precision)}</div>}
                     </div>
                   </li>
                 ))}
@@ -235,6 +273,9 @@ export default function App(): React.JSX.Element {
 }
 
 function Bubble({ m }: { m: UiMessage }): React.JSX.Element {
+  if (m.role === 'system') {
+    return <div className="self-center text-xs text-stone-500 bg-white/60 rounded-full px-3 py-1 max-w-[85%] truncate">{m.content}</div>
+  }
   const user = m.role === 'user'
   return (
     <div className={`flex flex-col gap-1 max-w-[85%] ${user ? 'self-end items-end' : 'self-start items-start'}`}>

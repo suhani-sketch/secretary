@@ -100,6 +100,22 @@ const MIGRATIONS: { version: number; sql: string }[] = [
         reminder_id TEXT
       );
     `
+  },
+  {
+    // Spec §3 (second pass): availability constraints — neither tasks nor preferences.
+    version: 2,
+    sql: `
+      CREATE TABLE constraints (
+        id           TEXT PRIMARY KEY,
+        kind         TEXT NOT NULL,
+        label        TEXT NOT NULL,
+        starts_at    TEXT,
+        ends_at      TEXT,
+        rrule        TEXT,
+        source       TEXT NOT NULL,
+        created_at   TEXT NOT NULL
+      );
+    `
   }
 ]
 

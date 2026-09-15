@@ -136,6 +136,8 @@ export interface SecretaryApi {
   chatHistory(limit?: number): Promise<ChatMessage[]>
   listExtractions(limit?: number): Promise<ExtractionEntry[]>
   onChatStatus(cb: (status: ChatStatus) => void): () => void
+  /** Main asks the renderer to put text in the input box (e.g. "Reschedule" from a toast button). */
+  onChatPrefill(cb: (text: string) => void): () => void
 }
 
 export const IPC = {
@@ -154,5 +156,6 @@ export const IPC = {
   sendChat: 'chat:send',
   chatHistory: 'chat:history',
   listExtractions: 'chat:extractions',
-  chatStatus: 'chat:status'
+  chatStatus: 'chat:status',
+  chatPrefill: 'chat:prefill'
 } as const

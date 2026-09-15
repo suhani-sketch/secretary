@@ -27,6 +27,11 @@ const api: SecretaryApi = {
     const handler = (_e: unknown, s: ChatStatus): void => cb(s)
     ipcRenderer.on(IPC.chatStatus, handler)
     return () => ipcRenderer.removeListener(IPC.chatStatus, handler)
+  },
+  onChatPrefill: (cb) => {
+    const handler = (_e: unknown, text: string): void => cb(text)
+    ipcRenderer.on(IPC.chatPrefill, handler)
+    return () => ipcRenderer.removeListener(IPC.chatPrefill, handler)
   }
 }
 

@@ -3,7 +3,7 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 1 — built; §7 Phase 1 test passes (2026-09-15). Phase 0's strict restart test still skipped by user choice.
+## Current phase: Phase 1 — built against the revised SPEC (invariants, toast actions, cancel semantics); all §7 Phase 1 sentences pass (2026-09-15). Phase 0's strict restart test still skipped by user choice.
 
 ## What works (verified 2026-09-15)
 - Electron 44 + React 19 + Vite 7 + Tailwind 4 + TypeScript, built with `electron-vite`.
@@ -44,8 +44,30 @@ Update it at the end of every session (spec §11).
 - Renderer: three zones (room+companion placeholder SVG · conversation · today rail). "debug" toggle swaps the rail for the
   scheduler log, extractions log, reminders and test buttons.
 - Dev hook: `SECRETARY_CHAT="msg one||msg two"` runs a scripted conversation through the real orchestrator and quits.
-- Verified: "remind me to call the bank Thursday at 3" → task + reminder Thu 17 Sep 15:00; "actually make it 4" → same row
-  updated, reminder moved to 16:00; reply text produced only after commit.
+- Verified (revised §7 list): "remind me to call the bank Thursday at 3" → task + reminder Thu 17 Sep 15:00; "actually make it 4"
+  → same row, reminder moved to 16:00; "cancel the reminder for the bank" → reminder cancelled, task still open; "gotta finish the
+  article tomorrow" → `day` precision, due_at_utc = local midnight, no clock time; "remind me to water the plants tomorrow" → day
+  item + reminder at default 09:00 with the summary saying it's a default. Reply text only after commit.
+
+## Spec second pass (invariants) — how each is enforced
+1. Honest precision: tools take `*_at_local` (clock stated → exact) OR `*_date_local` (day only → `day`/`week`/`vague`,
+   stored as local midnight). `shared/format.ts#formatDue` never prints a clock for non-exact items. The system prompt forbids
+   inventing times. Day-only reminders fire at preference `default_reminder_time` (default 09:00) and the summary says so.
+2. `is_suggestion` + `confidence` on create_item; `confirm_suggestion` on update_item; rail shows "suggested" in italics and
+   excludes suggestions from the Open count.
+3. Every tool round (write or read-only) → one `extractions` row. Toast actions log under a `system` message tagged [toast].
+4. Reply text is generated only after tool results (post-commit); text alongside tool calls is discarded.
+5. cancel_reminder never touches the item; cancel_item/complete_item stop only that item's own alarms and report the count;
+   status change, never deletion. Cascade across links (Phase 3) must ask first — prompt says so.
+- Toast buttons (Done / Snooze 15 / Snooze 1 h / Reschedule): Windows `toastXml` with protocol activation `secretary://reminder/<id>/<action>`.
+  Electron's `actions` option is macOS-only, hence XML. `app.setAsDefaultProtocolClient('secretary', electron.exe, [appDir])` in dev.
+  The URL arrives via `second-instance` argv (or own argv on a cold start) → `handleProtocolUrl` → `applyExternalTools` → same
+  tool layer. Reschedule opens the window and prefills the input. Falls back to a plain toast if the rich one fails.
+- Gemini free tier is **5 requests/min per model** (not 15). Each message = 2 calls. Provider takes a model chain
+  (`GEMINI_MODEL="a,b,c"`, default 3.6→3.7→3.8-flash): at the start of a turn a throttled model is skipped; mid-turn it waits,
+  honouring Google's "retry in Ns" hint (cap 65 s), and 503 is retried like 429.
+- Coming Up rail shows both alarms (🔔) and dated items without alarms (📅 "no reminder") for 7 days — "reflects exactly what exists".
+- Migration 2 adds the `constraints` table (tools for it come in Phase 3).
 
 ## Known quirks
 - npm 11.19 blocks package install scripts by default ("allowScripts"). After `npm install`, if
@@ -75,4 +97,5 @@ Update it at the end of every session (spec §11).
 ## Next
 - Phase 2: chrono-node fast path (tier 0 router), timezone-correct storage review, RRULE recurrence.
 - Observed once: a Gemini round took ~80 s with no 429 logged. Watch `ai.response` timings; if it recurs, add a request timeout.
-- Not yet built from the tool list: add_link/remove_link (Phase 3), set_preference, propose_plan (Phase 5).
+- Not yet built from the tool list: add_link/remove_link, add_constraint/remove_constraint/check_conflicts (Phase 3), propose_plan (Phase 5).
+- Toast buttons were verified only by simulating the protocol URL; a real click on a Windows toast is still to be observed by the user.

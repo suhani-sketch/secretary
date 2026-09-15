@@ -40,13 +40,16 @@ function deliver(r: Reminder, opts: { missed: boolean; now: DateTime }): void {
   }
   const title = r.item_title ?? 'Reminder'
   const scheduled = localTime(r.fire_at_utc)
+  const actions = { reminderId: r.id, itemId: r.item_id }
   if (opts.missed) {
     const late = describeLateness(r.fire_at_utc, opts.now)
     log('warn', 'deliver.missed', `"${title}" was due ${scheduled}, delivered ${late} late (app was not running)`, r.id)
     showToast({
       title: `Missed reminder (${late} late)`,
-      body: `${title}\nWas due ${scheduled}.`,
+      body: `${title} — was due ${scheduled}.`,
       reminderId: r.id,
+      actions,
+      persistent: true,
       onClose: () => acknowledgeReminder(r.id)
     })
   } else {
@@ -55,6 +58,8 @@ function deliver(r: Reminder, opts: { missed: boolean; now: DateTime }): void {
       title,
       body: `Reminder — ${scheduled}`,
       reminderId: r.id,
+      actions,
+      persistent: true,
       onClose: () => acknowledgeReminder(r.id)
     })
   }

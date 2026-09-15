@@ -34,12 +34,16 @@ export interface CompletionRequest {
   system: string
   messages: ProviderMessage[]
   tools: ToolDefinition[]
+  /** Groups the rounds of one user message so a provider can keep them on one model. */
+  turnId?: string
 }
 
 export interface CompletionResponse {
   text: string | null
   toolCalls: ToolCall[]
   usage?: { input?: number; output?: number }
+  /** Which concrete model answered (for the log). */
+  model?: string
 }
 
 export interface Provider {

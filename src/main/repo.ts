@@ -21,6 +21,53 @@ export function localToUtc(local: string): string {
   return dt.toUTC().toISO()!
 }
 
+/**
+ * Honest due handling (spec invariant 1). A date-only value is stored as the start of that local day
+ * with `day` precision (or looser if asked). A date-time is `exact`. No clock time is ever invented.
+ */
+export function resolveDue(
+  dateOnly: string | undefined | null,
+  dateTime: string | undefined | null,
+  loose?: 'week' | 'vague' | null
+): { dueAtUtc: string | null; precision: DuePrecision | null } {
+  if (dateTime) return { dueAtUtc: localToUtc(dateTime), precision: 'exact' }
+  if (dateOnly) {
+    const dt = DateTime.fromISO(dateOnly, { zone: DateTime.local().zoneName }).startOf('day')
+    if (!dt.isValid) throw new Error(`Could not understand the date "${dateOnly}"`)
+    return { dueAtUtc: dt.toUTC().toISO()!, precision: loose ?? 'day' }
+  }
+  return { dueAtUtc: null, precision: null }
+}
+
+/** "HH:MM" preference with a default; used when a reminder is asked for on a day with no stated time. */
+export function getPreference(key: string, fallback: string): { value: string; stated: boolean } {
+  const row = getDb().prepare('SELECT value, source FROM preferences WHERE key = ?').get(key) as
+    | { value: string; source: string }
+    | undefined
+  return row ? { value: row.value, stated: row.source === 'stated' } : { value: fallback, stated: false }
+}
+
+export function setPreference(key: string, value: string, source: 'stated' | 'inferred'): void {
+  getDb()
+    .prepare(`INSERT INTO preferences (key, value, source, created_at) VALUES (?, ?, ?, ?)
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value, source = excluded.source`)
+    .run(key, value, source, nowIso())
+}
+
+/** Combine a local date ("2026-09-16") with an "HH:MM" clock into a UTC instant. */
+export function dateAtClockToUtc(dateOnly: string, clock: string): string {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(clock.trim())
+  if (!m) throw new Error(`Bad clock time "${clock}"`)
+  const dt = DateTime.fromISO(dateOnly, { zone: DateTime.local().zoneName }).set({
+    hour: Number(m[1]),
+    minute: Number(m[2]),
+    second: 0,
+    millisecond: 0
+  })
+  if (!dt.isValid) throw new Error(`Could not understand the date "${dateOnly}"`)
+  return dt.toUTC().toISO()!
+}
+
 // ---------- Items ----------
 
 export function listItems(): Item[] {
@@ -102,6 +149,8 @@ export interface ItemPatch {
   waitingOn?: string | null
   kind?: ItemKind
   status?: ItemStatus
+  /** false = the user confirmed a suggestion; it becomes a real obligation. */
+  isSuggestion?: boolean
 }
 
 /**
@@ -123,11 +172,16 @@ export function updateItem(id: string, p: ItemPatch): { item: Item; movedReminde
   if (p.dueAtUtc !== undefined) {
     set('due_at_utc', p.dueAtUtc)
     set('due_tz', p.dueAtUtc ? DateTime.local().zoneName : null)
-    set('due_precision', p.dueAtUtc ? (p.duePrecision ?? before.due_precision ?? 'exact') : null)
+    // Precision must accompany a new due value; never silently inherit "exact" onto a date-only value.
+    set('due_precision', p.dueAtUtc ? (p.duePrecision ?? 'exact') : null)
   } else if (p.duePrecision !== undefined) set('due_precision', p.duePrecision)
   if (p.importance !== undefined) set('importance', p.importance)
   if (p.waitingOn !== undefined) set('waiting_on', p.waitingOn)
   if (p.kind !== undefined) set('kind', p.kind)
+  if (p.isSuggestion !== undefined) {
+    set('is_suggestion', p.isSuggestion ? 1 : 0)
+    if (!p.isSuggestion) set('confidence', null)
+  }
   if (p.status !== undefined) {
     set('status', p.status)
     set('completed_at', p.status === 'done' ? nowIso() : null)
@@ -164,25 +218,45 @@ export function createItemWithReminder(
   return tx()
 }
 
-export function completeItem(id: string): void {
+/**
+ * Completing an item also retires its own still-pending alarms (they are attached to it, not independent),
+ * and reports how many so the user is told (spec invariant 5: nothing destroyed silently). Never touches other items.
+ */
+export function completeItem(id: string): { cancelledReminders: number } {
   const db = getDb()
   const ts = nowIso()
   const tx = db.transaction(() => {
     db.prepare(`UPDATE items SET status = 'done', completed_at = ?, updated_at = ? WHERE id = ?`).run(ts, ts, id)
-    // Completing an item cancels its still-pending reminders.
-    db.prepare(`UPDATE reminders SET state = 'cancelled' WHERE item_id = ? AND state IN ('pending','snoozed')`).run(id)
+    const n = db
+      .prepare(`UPDATE reminders SET state = 'cancelled' WHERE item_id = ? AND state IN ('pending','snoozed')`)
+      .run(id).changes
+    return { cancelledReminders: n }
   })
-  tx()
+  return tx()
 }
 
-export function cancelItem(id: string): void {
+/** Cancels exactly this one item (status, never deletion) plus its own pending alarms. Linked items are untouched. */
+export function cancelItem(id: string): { cancelledReminders: number } {
   const db = getDb()
   const ts = nowIso()
   const tx = db.transaction(() => {
     db.prepare(`UPDATE items SET status = 'cancelled', updated_at = ? WHERE id = ?`).run(ts, id)
-    db.prepare(`UPDATE reminders SET state = 'cancelled' WHERE item_id = ? AND state IN ('pending','snoozed')`).run(id)
+    const n = db
+      .prepare(`UPDATE reminders SET state = 'cancelled' WHERE item_id = ? AND state IN ('pending','snoozed')`)
+      .run(id).changes
+    return { cancelledReminders: n }
   })
-  tx()
+  return tx()
+}
+
+/** Upcoming alarms (for the Coming Up rail). */
+export function upcomingReminders(untilUtc: string, limit = 20): Reminder[] {
+  return getDb()
+    .prepare(
+      `SELECT r.*, i.title AS item_title FROM reminders r LEFT JOIN items i ON i.id = r.item_id
+       WHERE r.state IN ('pending','snoozed') AND r.fire_at_utc <= ? ORDER BY r.fire_at_utc ASC LIMIT ?`
+    )
+    .all(untilUtc, limit) as Reminder[]
 }
 
 // ---------- Context queries (spec §4 "Context assembly") ----------
@@ -353,8 +427,12 @@ export function insertMessage(role: MessageRole, content: string, tier: number |
   return { id, role, content, tier, created_at: ts }
 }
 
+export function updateMessageContent(id: string, content: string): void {
+  getDb().prepare('UPDATE messages SET content = ? WHERE id = ?').run(content, id)
+}
+
 export function recentMessages(limit = 10): ChatMessage[] {
-  const rows = getDb().prepare(`SELECT * FROM messages ORDER BY created_at DESC LIMIT ?`).all(limit) as ChatMessage[]
+  const rows = getDb().prepare(`SELECT * FROM messages ORDER BY created_at DESC, rowid DESC LIMIT ?`).all(limit) as ChatMessage[]
   return rows.reverse()
 }
 
