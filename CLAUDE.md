@@ -3,7 +3,7 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 0 — built and mostly verified; the full §7 restart test was deliberately skipped
+## Current phase: Phase 1 — built; §7 Phase 1 test passes (2026-09-15). Phase 0's strict restart test still skipped by user choice.
 
 ## What works (verified 2026-09-15)
 - Electron 44 + React 19 + Vite 7 + Tailwind 4 + TypeScript, built with `electron-vite`.
@@ -24,6 +24,28 @@ Update it at the end of every session (spec §11).
 - Renderer: crude input (title + datetime-local) writing to `items` (+ `reminders`), quick-test buttons
   (+1 min, +5 min, 10 min in the past, test toast), reminders/items lists, app info, scheduler log (last 50).
 - IPC is typed via `src/shared/types.ts`; the renderer only sees `window.api` from the preload.
+
+## Phase 1 (conversation) — what exists
+- `src/main/ai/provider.ts` — provider interface (`complete(system, messages, tools)` → text + toolCalls). Swap vendors here.
+- `src/main/ai/gemini.ts` — `@google/genai` implementation. Function calling via `parametersJsonSchema`; 429 backoff 1/2/4/8 s
+  with an `onThrottle` callback for the UI. **Gemini 3.x requires echoing `thoughtSignature` on replayed functionCall parts**
+  (400 otherwise) — carried on `ToolCall.signature`. Locally invented call ids (`local_…`) are never sent back.
+- Model: `GEMINI_MODEL` env or default `gemini-3.6-flash`. `gemini-2.5-flash` is rejected for new keys ("no longer available").
+  Available Flash models on this key (2026-09-15): 3.5/3.6/3.7/3.8-flash, 3.5-flash-lite, flash-latest. Tier 1 later: `gemini-3.5-flash-lite`.
+- `src/main/ai/tools.ts` — Zod schemas → JSON schema via `z.toJSONSchema`. Tools: create/update/complete/cancel_item,
+  create/update/cancel/snooze_reminder, get_item, search_memory, get_today, get_upcoming. Times are exchanged as local
+  wall-clock "YYYY-MM-DDTHH:MM" and converted to UTC in code. Items/reminders are referenced by 8-char id prefixes.
+  `update_item` with a new due time moves pending reminders that sat on the old due time.
+- `src/main/ai/context.ts` — context assembly (§4 lists) + in-memory focus stack (last 5 touched items).
+- `src/main/ai/orchestrator.ts` — one message at a time (queue), tier 2 only, up to 4 tool rounds. All write tools in a round
+  run in ONE transaction; failure rolls back and the model is told. Text arriving alongside tool calls is discarded; the reply
+  is only what the model says after seeing tool results. `extractions` row per write round. `AppliedChange[]` (ground truth)
+  is returned to the UI and shown as ✓ lines under the reply.
+- Renderer: three zones (room+companion placeholder SVG · conversation · today rail). "debug" toggle swaps the rail for the
+  scheduler log, extractions log, reminders and test buttons.
+- Dev hook: `SECRETARY_CHAT="msg one||msg two"` runs a scripted conversation through the real orchestrator and quits.
+- Verified: "remind me to call the bank Thursday at 3" → task + reminder Thu 17 Sep 15:00; "actually make it 4" → same row
+  updated, reminder moved to 16:00; reply text produced only after commit.
 
 ## Known quirks
 - npm 11.19 blocks package install scripts by default ("allowScripts"). After `npm install`, if
@@ -51,6 +73,6 @@ Update it at the end of every session (spec §11).
 - `npm run typecheck`
 
 ## Next
-- Phase 1 (do not start until §7 Phase 0 test passes): orchestrator, Gemini provider behind an interface,
-  Zod-validated tools, transactional execution, `extractions` audit log. API key comes from `.env`
-  (`GEMINI_API_KEY`), which is git-ignored.
+- Phase 2: chrono-node fast path (tier 0 router), timezone-correct storage review, RRULE recurrence.
+- Observed once: a Gemini round took ~80 s with no 429 logged. Watch `ai.response` timings; if it recurs, add a request timeout.
+- Not yet built from the tool list: add_link/remove_link (Phase 3), set_preference, propose_plan (Phase 5).

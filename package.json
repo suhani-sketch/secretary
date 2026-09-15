@@ -29,9 +29,12 @@
     "vite": "^7.3.6"
   },
   "dependencies": {
+    "@google/genai": "^2.22.0",
     "better-sqlite3": "^13.0.3",
+    "dotenv": "^17.4.2",
     "luxon": "^3.7.2",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "zod": "^4.6.5"
   }
 }

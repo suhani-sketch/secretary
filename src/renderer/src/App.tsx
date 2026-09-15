@@ -1,5 +1,15 @@
-import { useCallback, useEffect, useState } from 'react'
-import type { AppInfo, Item, Reminder, SchedulerLogEntry } from '../../shared/types'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type {
+  AppInfo,
+  AppliedChange,
+  ChatMessage,
+  ChatStatus,
+  ExtractionEntry,
+  Item,
+  Reminder,
+  SchedulerLogEntry
+} from '../../shared/types'
+import { Companion } from './Companion'
 
 const fmtLocal = (utcIso: string | null): string =>
   utcIso
@@ -15,287 +25,319 @@ const fmtLocal = (utcIso: string | null): string =>
 const fmtLogTime = (utcIso: string): string =>
   new Date(utcIso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 
-const stateColor: Record<string, string> = {
-  pending: 'bg-amber-100 text-amber-900',
-  delivered: 'bg-emerald-100 text-emerald-900',
-  acknowledged: 'bg-stone-200 text-stone-700',
-  snoozed: 'bg-sky-100 text-sky-900',
-  cancelled: 'bg-stone-100 text-stone-500 line-through'
-}
-
 const levelColor: Record<string, string> = {
   info: 'text-stone-600',
   warn: 'text-amber-700 font-medium',
   error: 'text-red-700 font-semibold'
 }
 
+type UiMessage = ChatMessage & { applied?: AppliedChange[]; error?: string | null; pending?: boolean }
+
 export default function App(): React.JSX.Element {
   const [items, setItems] = useState<Item[]>([])
   const [reminders, setReminders] = useState<Reminder[]>([])
   const [logs, setLogs] = useState<SchedulerLogEntry[]>([])
+  const [extractions, setExtractions] = useState<ExtractionEntry[]>([])
   const [info, setInfo] = useState<AppInfo | null>(null)
-  const [title, setTitle] = useState('')
-  const [remindAt, setRemindAt] = useState('')
+  const [messages, setMessages] = useState<UiMessage[]>([])
+  const [draft, setDraft] = useState('')
+  const [status, setStatus] = useState<ChatStatus>({ kind: 'idle' })
+  const [showDebug, setShowDebug] = useState(false)
   const [flash, setFlash] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
 
   const refresh = useCallback(async () => {
     try {
-      const [i, r, l, a] = await Promise.all([
+      const [i, r, l, a, x] = await Promise.all([
         window.api.listItems(),
         window.api.listReminders(),
         window.api.listLog(50),
-        window.api.getAppInfo()
+        window.api.getAppInfo(),
+        window.api.listExtractions(20)
       ])
       setItems(i)
       setReminders(r)
       setLogs(l)
       setInfo(a)
+      setExtractions(x)
     } catch (e) {
-      setError((e as Error).message)
+      setFlash((e as Error).message)
     }
   }, [])
 
   useEffect(() => {
     void refresh()
-    const off = window.api.onChanged(() => void refresh())
-    const t = setInterval(() => void refresh(), 5000)
+    void window.api.chatHistory(60).then((h) => setMessages(h))
+    const offChanged = window.api.onChanged(() => void refresh())
+    const offStatus = window.api.onChatStatus(setStatus)
+    const t = setInterval(() => void refresh(), 10000)
     return () => {
-      off()
+      offChanged()
+      offStatus()
       clearInterval(t)
     }
   }, [refresh])
 
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+  }, [messages, status])
+
   const say = (msg: string): void => {
     setFlash(msg)
-    setError(null)
     setTimeout(() => setFlash(null), 5000)
   }
 
-  const run = async (fn: () => Promise<string>): Promise<void> => {
+  const send = async (): Promise<void> => {
+    const text = draft.trim()
+    if (!text || status.kind !== 'idle') return
+    setDraft('')
+    const tempId = `tmp-${Date.now()}`
+    setMessages((m) => [...m, { id: tempId, role: 'user', content: text, tier: null, created_at: new Date().toISOString(), pending: true }])
     try {
-      say(await fn())
-      await refresh()
+      const res = await window.api.sendChat(text)
+      setMessages((m) => [
+        ...m.filter((x) => x.id !== tempId),
+        res.userMessage,
+        { ...res.assistantMessage, applied: res.applied, error: res.error }
+      ])
     } catch (e) {
-      setError((e as Error).message)
+      setMessages((m) => [
+        ...m.filter((x) => x.id !== tempId),
+        { id: tempId, role: 'user', content: text, tier: null, created_at: new Date().toISOString() },
+        {
+          id: `err-${Date.now()}`,
+          role: 'assistant',
+          content: `Something went wrong on my side: ${(e as Error).message}`,
+          tier: null,
+          created_at: new Date().toISOString(),
+          error: (e as Error).message
+        }
+      ])
+    }
+    void refresh()
+  }
+
+  const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      void send()
     }
   }
 
-  const submit = (e: React.FormEvent): void => {
-    e.preventDefault()
-    void run(async () => {
-      const res = await window.api.createItem({ title, remindAtLocal: remindAt || null })
-      setTitle('')
-      setRemindAt('')
-      return res.reminder
-        ? `Saved "${res.item.title}" with a reminder for ${fmtLocal(res.reminder.fire_at_utc)}`
-        : `Saved "${res.item.title}" (no reminder)`
-    })
-  }
-
-  const pending = reminders.filter((r) => r.state === 'pending')
+  const openItems = items.filter((i) => i.status === 'open')
+  const pending = reminders.filter((r) => r.state === 'pending' || r.state === 'snoozed')
+  const companionState =
+    status.kind === 'thinking' ? 'thinking' : status.kind === 'tools' ? 'working' : status.kind === 'throttled' ? 'waiting' : 'idle'
 
   return (
-    <div className="h-full grid grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] gap-6 p-6 overflow-hidden">
-      {/* LEFT: input + data */}
-      <div className="flex flex-col gap-5 overflow-y-auto pr-1">
-        <header className="flex items-baseline justify-between">
+    <div className="h-full grid grid-cols-[260px_minmax(0,1fr)_280px] gap-5 p-5 overflow-hidden">
+      {/* ROOM + COMPANION */}
+      <aside className="rounded-3xl bg-[#F1E9DF] shadow-inner flex flex-col items-center justify-end p-5 overflow-hidden relative">
+        <div className="absolute top-5 left-5 right-5 text-xs text-stone-500">
+          {new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}
+        </div>
+        <Companion state={companionState} />
+        <p className="mt-4 text-xs text-stone-500 text-center min-h-[1.5em]">
+          {status.kind === 'thinking' && 'thinking…'}
+          {status.kind === 'tools' && 'writing it down…'}
+          {status.kind === 'throttled' && `one moment — busy, retrying in ${status.retryInSeconds}s`}
+          {status.kind === 'idle' && ' '}
+        </p>
+      </aside>
+
+      {/* CONVERSATION */}
+      <main className="flex flex-col min-h-0">
+        <header className="flex items-baseline justify-between mb-3">
           <h1 className="text-2xl font-semibold tracking-tight">Secretary</h1>
-          <span className="text-xs text-stone-500">
-            Phase 0 skeleton · scheduler ticks every {info ? info.schedulerIntervalMs / 1000 : '?'}s
-          </span>
+          <button onClick={() => setShowDebug((v) => !v)} className="text-xs text-stone-500 hover:text-stone-800">
+            {showDebug ? 'hide debug' : 'debug'}
+          </button>
         </header>
 
-        <form onSubmit={submit} className="rounded-2xl bg-white/70 shadow-sm p-4 flex flex-col gap-3">
-          <label className="text-sm text-stone-600">What should I remember?</label>
-          <input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="e.g. Call the bank"
-            className="rounded-xl bg-white px-3 py-2 outline-none focus:ring-2 focus:ring-[#B5836D]/40"
-          />
-          <div className="flex flex-wrap items-center gap-3">
-            <label className="text-sm text-stone-600">Remind me at</label>
-            <input
-              type="datetime-local"
-              value={remindAt}
-              onChange={(e) => setRemindAt(e.target.value)}
-              className="rounded-xl bg-white px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-[#B5836D]/40"
-            />
-            <button
-              type="submit"
-              disabled={!title.trim()}
-              className="ml-auto rounded-xl bg-[#3A2E28] text-[#FAF6F0] px-4 py-2 text-sm disabled:opacity-40"
-            >
-              Save
-            </button>
+        {info && !info.ai.hasKey && (
+          <div className="mb-3 rounded-xl bg-amber-50 text-amber-900 text-sm px-4 py-2">
+            No API key found. Put <code>GEMINI_API_KEY=…</code> in the <code>.env</code> file next to <code>package.json</code>, then quit and reopen the app.
           </div>
-          <div className="flex flex-wrap gap-2 pt-1">
-            <span className="text-xs text-stone-500 self-center">Quick tests:</span>
-            <Btn
-              onClick={() =>
-                run(async () => {
-                  const r = await window.api.createTestReminder(1)
-                  return `Test reminder set for ${fmtLocal(r.fire_at_utc)} (fires within 30s of that)`
-                })
-              }
-            >
-              +1 min
-            </Btn>
-            <Btn
-              onClick={() =>
-                run(async () => {
-                  const r = await window.api.createTestReminder(5)
-                  return `Test reminder set for ${fmtLocal(r.fire_at_utc)}`
-                })
-              }
-            >
-              +5 min
-            </Btn>
-            <Btn
-              onClick={() =>
-                run(async () => {
-                  await window.api.createTestReminder(-10)
-                  return 'Past-dated reminder created. It should be delivered as missed right away.'
-                })
-              }
-            >
-              10 min in the past
-            </Btn>
-            <Btn
-              onClick={() =>
-                run(async () => {
-                  await window.api.sendTestNotification()
-                  return 'Test toast requested. Check the log for notify.shown.'
-                })
-              }
-            >
-              Test toast
-            </Btn>
-          </div>
-          {flash && <p className="text-sm text-emerald-800">{flash}</p>}
-          {error && <p className="text-sm text-red-700">Error: {error}</p>}
-        </form>
+        )}
 
-        <section>
-          <h2 className="text-sm font-medium text-stone-600 mb-2">Reminders ({pending.length} pending)</h2>
-          <ul className="flex flex-col gap-1.5">
-            {reminders.length === 0 && <li className="text-sm text-stone-400">None yet.</li>}
-            {reminders.map((r) => (
-              <li key={r.id} className="flex items-center gap-3 rounded-xl bg-white/60 px-3 py-2 text-sm">
-                <span className={`rounded-full px-2 py-0.5 text-xs ${stateColor[r.state] ?? ''}`}>{r.state}</span>
-                <span className="truncate flex-1">{r.item_title ?? 'Reminder'}</span>
-                <span className="text-stone-500 whitespace-nowrap">{fmtLocal(r.fire_at_utc)}</span>
-                {r.delivered_at && (
-                  <span className="text-xs text-stone-400 whitespace-nowrap">delivered {fmtLocal(r.delivered_at)}</span>
-                )}
-                {(r.state === 'pending' || r.state === 'delivered') && (
-                  <button
-                    onClick={() =>
-                      run(async () => {
-                        await window.api.cancelReminder(r.id)
-                        return 'Reminder cancelled'
-                      })
-                    }
-                    className="text-xs text-stone-500 hover:text-red-700"
-                  >
-                    cancel
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
-        </section>
-
-        <section>
-          <h2 className="text-sm font-medium text-stone-600 mb-2">Items</h2>
-          <ul className="flex flex-col gap-1.5">
-            {items.length === 0 && <li className="text-sm text-stone-400">Nothing saved yet.</li>}
-            {items.map((it) => (
-              <li key={it.id} className="flex items-center gap-3 rounded-xl bg-white/60 px-3 py-2 text-sm">
-                <span className={`truncate flex-1 ${it.status === 'done' ? 'line-through text-stone-400' : ''}`}>
-                  {it.title}
-                </span>
-                <span className="text-xs text-stone-400">{it.kind}</span>
-                {it.status === 'open' && (
-                  <button
-                    onClick={() =>
-                      run(async () => {
-                        await window.api.completeItem(it.id)
-                        return `Done: "${it.title}"`
-                      })
-                    }
-                    className="text-xs text-stone-500 hover:text-emerald-700"
-                  >
-                    done
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
-        </section>
-      </div>
-
-      {/* RIGHT: debug log + app info */}
-      <div className="flex flex-col gap-4 overflow-hidden">
-        <section className="rounded-2xl bg-white/70 shadow-sm p-4 text-xs flex flex-col gap-1.5">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium text-stone-600">App</h2>
-            {info && (
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={info.openAtLogin}
-                  onChange={(e) =>
-                    run(async () => {
-                      const actual = await window.api.setOpenAtLogin(e.target.checked)
-                      return actual ? 'Secretary will start with Windows' : 'Secretary will NOT start with Windows'
-                    })
-                  }
-                />
-                Start with Windows
-              </label>
-            )}
-          </div>
-          {info && (
-            <>
-              <Row k="Database" v={info.dbPath} />
-              <Row k="Time zone" v={info.timezone} />
-              <Row k="Electron" v={info.electron} />
-              <Row k="Started hidden" v={String(info.startedHidden)} />
-              <Row k="Startup command" v={`"${info.execPath}" "${info.appPath}" --hidden`} />
-            </>
+        <div ref={scrollRef} className="flex-1 overflow-y-auto rounded-3xl bg-white/50 p-5 flex flex-col gap-3">
+          {messages.length === 0 && (
+            <p className="text-sm text-stone-400 m-auto text-center max-w-sm">
+              Tell me what's on your mind. "Remind me to call the bank Thursday at 3", "the CV is done", "actually make it 4".
+            </p>
           )}
-        </section>
+          {messages.map((m) => (
+            <Bubble key={m.id} m={m} />
+          ))}
+          {status.kind !== 'idle' && (
+            <div className="self-start rounded-2xl bg-[#F1E9DF] px-4 py-2 text-sm text-stone-500 animate-pulse">…</div>
+          )}
+        </div>
 
-        <section className="rounded-2xl bg-white/70 shadow-sm p-4 flex flex-col min-h-0 flex-1">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="text-sm font-medium text-stone-600">Scheduler log (last 50)</h2>
-            <button
-              onClick={() =>
-                run(async () => {
-                  await window.api.clearLog()
-                  return 'Log cleared'
-                })
-              }
-              className="text-xs text-stone-500 hover:text-red-700"
-            >
-              clear
-            </button>
-          </div>
-          <ol className="overflow-y-auto font-mono text-[11px] leading-relaxed flex flex-col gap-0.5">
-            {logs.length === 0 && <li className="text-stone-400">Empty.</li>}
-            {logs.map((l) => (
-              <li key={l.id} className={levelColor[l.level] ?? ''}>
-                <span className="text-stone-400">{fmtLogTime(l.at_utc)}</span>{' '}
-                <span className="font-semibold">{l.event}</span>
-                {l.detail && <span> — {l.detail}</span>}
-              </li>
-            ))}
-          </ol>
-        </section>
-      </div>
+        <div className="mt-3 rounded-2xl bg-white shadow-sm flex items-end gap-2 p-2">
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={onKey}
+            rows={Math.min(6, Math.max(1, draft.split('\n').length))}
+            placeholder="type or dump here — Enter to send, Shift+Enter for a new line"
+            className="flex-1 resize-none bg-transparent px-3 py-2 outline-none text-[15px] leading-relaxed"
+          />
+          <button
+            onClick={() => void send()}
+            disabled={!draft.trim() || status.kind !== 'idle'}
+            className="rounded-xl bg-[#3A2E28] text-[#FAF6F0] px-4 py-2 text-sm disabled:opacity-30"
+          >
+            Send
+          </button>
+        </div>
+        {flash && <p className="mt-2 text-xs text-stone-500">{flash}</p>}
+      </main>
+
+      {/* TODAY RAIL (or DEBUG) */}
+      <aside className="flex flex-col gap-4 min-h-0 overflow-hidden">
+        {!showDebug ? (
+          <>
+            <section className="rounded-2xl bg-white/60 p-4 flex flex-col gap-2 min-h-0">
+              <h2 className="text-xs font-medium uppercase tracking-wide text-stone-500">Coming up</h2>
+              {pending.length === 0 && <p className="text-sm text-stone-400">No reminders set.</p>}
+              <ul className="flex flex-col gap-1.5 overflow-y-auto">
+                {pending.slice(0, 8).map((r) => (
+                  <li key={r.id} className="text-sm">
+                    <div className="truncate">{r.item_title ?? 'Reminder'}</div>
+                    <div className="text-xs text-stone-500">{fmtLocal(r.fire_at_utc)}</div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+            <section className="rounded-2xl bg-white/60 p-4 flex flex-col gap-2 min-h-0 flex-1">
+              <h2 className="text-xs font-medium uppercase tracking-wide text-stone-500">Open ({openItems.length})</h2>
+              {openItems.length === 0 && <p className="text-sm text-stone-400">Nothing open.</p>}
+              <ul className="flex flex-col gap-1.5 overflow-y-auto">
+                {openItems.slice(0, 20).map((it) => (
+                  <li key={it.id} className="text-sm flex items-start gap-2">
+                    <span className="text-[10px] mt-1 rounded px-1 bg-stone-200 text-stone-600">{it.kind}</span>
+                    <div className="min-w-0">
+                      <div className="truncate">{it.title}</div>
+                      {it.due_at_utc && <div className="text-xs text-stone-500">due {fmtLocal(it.due_at_utc)}</div>}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          </>
+        ) : (
+          <DebugPanel info={info} logs={logs} extractions={extractions} reminders={reminders} say={say} refresh={refresh} />
+        )}
+      </aside>
     </div>
+  )
+}
+
+function Bubble({ m }: { m: UiMessage }): React.JSX.Element {
+  const user = m.role === 'user'
+  return (
+    <div className={`flex flex-col gap-1 max-w-[85%] ${user ? 'self-end items-end' : 'self-start items-start'}`}>
+      <div
+        className={`rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap ${
+          user ? 'bg-[#3A2E28] text-[#FAF6F0]' : 'bg-[#F1E9DF] text-[#3A2E28]'
+        } ${m.pending ? 'opacity-60' : ''}`}
+      >
+        {m.content}
+      </div>
+      {m.applied && m.applied.length > 0 && (
+        <ul className="flex flex-col gap-0.5">
+          {m.applied.map((a, i) => (
+            <li key={i} className="text-xs text-emerald-800 flex items-center gap-1">
+              <span>✓</span>
+              <span>{a.summary}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {m.error && <div className="text-xs text-red-700">{m.error}</div>}
+    </div>
+  )
+}
+
+function DebugPanel(props: {
+  info: AppInfo | null
+  logs: SchedulerLogEntry[]
+  extractions: ExtractionEntry[]
+  reminders: Reminder[]
+  say: (s: string) => void
+  refresh: () => Promise<void>
+}): React.JSX.Element {
+  const { info, logs, extractions, reminders, say, refresh } = props
+  const run = async (fn: () => Promise<string>): Promise<void> => {
+    try {
+      say(await fn())
+    } catch (e) {
+      say('Error: ' + (e as Error).message)
+    }
+    await refresh()
+  }
+  return (
+    <>
+      <section className="rounded-2xl bg-white/70 p-3 text-[11px] flex flex-col gap-1">
+        {info && (
+          <>
+            <Row k="AI" v={info.ai.hasKey ? `${info.ai.provider} / ${info.ai.model}` : 'no key'} />
+            <Row k="DB" v={info.dbPath} />
+            <Row k="Zone" v={info.timezone} />
+            <label className="flex items-center gap-2 cursor-pointer mt-1">
+              <input
+                type="checkbox"
+                checked={info.openAtLogin}
+                onChange={(e) =>
+                  run(async () => ((await window.api.setOpenAtLogin(e.target.checked)) ? 'Starts with Windows' : 'Will not start with Windows'))
+                }
+              />
+              Start with Windows
+            </label>
+          </>
+        )}
+        <div className="flex flex-wrap gap-1 pt-1">
+          <Btn onClick={() => run(async () => { const r = await window.api.createTestReminder(1); return `Test reminder at ${fmtLocal(r.fire_at_utc)}` })}>+1 min</Btn>
+          <Btn onClick={() => run(async () => { await window.api.createTestReminder(-10); return 'Past reminder created; should be delivered as missed now' })}>10 min ago</Btn>
+          <Btn onClick={() => run(async () => { await window.api.sendTestNotification(); return 'Toast requested' })}>Test toast</Btn>
+          <Btn onClick={() => run(async () => { await window.api.clearLog(); return 'Log cleared' })}>Clear log</Btn>
+        </div>
+      </section>
+      <section className="rounded-2xl bg-white/70 p-3 flex flex-col min-h-0 flex-1">
+        <h2 className="text-xs font-medium text-stone-600 mb-1">Scheduler log</h2>
+        <ol className="overflow-y-auto font-mono text-[10px] leading-relaxed flex flex-col gap-0.5 flex-1">
+          {logs.map((l) => (
+            <li key={l.id} className={levelColor[l.level] ?? ''}>
+              <span className="text-stone-400">{fmtLogTime(l.at_utc)}</span> <span className="font-semibold">{l.event}</span>
+              {l.detail && <span> — {l.detail}</span>}
+            </li>
+          ))}
+        </ol>
+      </section>
+      <section className="rounded-2xl bg-white/70 p-3 flex flex-col min-h-0 max-h-[30%]">
+        <h2 className="text-xs font-medium text-stone-600 mb-1">Extractions (model proposed → applied?)</h2>
+        <ol className="overflow-y-auto font-mono text-[10px] leading-relaxed flex flex-col gap-1">
+          {extractions.length === 0 && <li className="text-stone-400">None yet.</li>}
+          {extractions.map((x) => (
+            <li key={x.id} className={x.applied ? 'text-stone-600' : 'text-red-700'}>
+              <span className="text-stone-400">{fmtLogTime(x.created_at)}</span> {x.applied ? '✓' : '✗'} {x.tools_json.slice(0, 300)}
+              {x.error && <div>error: {x.error}</div>}
+            </li>
+          ))}
+        </ol>
+      </section>
+      <section className="rounded-2xl bg-white/70 p-3 text-[11px] max-h-[20%] overflow-y-auto">
+        <h2 className="text-xs font-medium text-stone-600 mb-1">All reminders</h2>
+        {reminders.slice(0, 15).map((r) => (
+          <div key={r.id} className="flex gap-2">
+            <span className="w-20 shrink-0 text-stone-500">{r.state}</span>
+            <span className="truncate flex-1">{r.item_title ?? 'Reminder'}</span>
+            <span className="text-stone-500 whitespace-nowrap">{fmtLocal(r.fire_at_utc)}</span>
+          </div>
+        ))}
+      </section>
+    </>
   )
 }
 
@@ -304,7 +346,7 @@ function Btn({ onClick, children }: { onClick: () => void; children: React.React
     <button
       type="button"
       onClick={onClick}
-      className="rounded-lg bg-[#B5836D]/15 hover:bg-[#B5836D]/30 px-2.5 py-1 text-xs text-[#3A2E28]"
+      className="rounded-lg bg-[#B5836D]/15 hover:bg-[#B5836D]/30 px-2 py-0.5 text-[11px] text-[#3A2E28]"
     >
       {children}
     </button>
@@ -314,7 +356,7 @@ function Btn({ onClick, children }: { onClick: () => void; children: React.React
 function Row({ k, v }: { k: string; v: string }): React.JSX.Element {
   return (
     <div className="flex gap-2">
-      <span className="text-stone-500 w-28 shrink-0">{k}</span>
+      <span className="text-stone-500 w-10 shrink-0">{k}</span>
       <span className="break-all select-all">{v}</span>
     </div>
   )

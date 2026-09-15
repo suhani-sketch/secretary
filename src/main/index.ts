@@ -1,13 +1,17 @@
 import { BrowserWindow, app, ipcMain, powerMonitor, shell } from 'electron'
 import { join } from 'path'
 import { writeFileSync } from 'fs'
+import { config as loadDotenv } from 'dotenv'
 import { closeDatabase, dbPath, getDb, openDatabase } from './db'
 import { clearLog, listLog, log } from './log'
 import { showToast } from './notifier'
 import * as repo from './repo'
 import { TICK_MS, startScheduler, startupSweep, stopScheduler, tick } from './scheduler'
 import { createTray, refreshTrayMenu } from './tray'
-import { IPC, type AppInfo, type CreateItemInput } from '../shared/types'
+import { GeminiProvider } from './ai/gemini'
+import type { Provider } from './ai/provider'
+import { enqueueChat } from './ai/orchestrator'
+import { IPC, type AppInfo, type ChatStatus, type CreateItemInput } from '../shared/types'
 
 // ---- Identity: required for Windows toasts, otherwise they vanish silently (spec §5) ----
 const APP_USER_MODEL_ID = 'com.suhani.secretary'
@@ -18,6 +22,8 @@ const startedHidden = process.argv.includes('--hidden')
 
 let mainWindow: BrowserWindow | null = null
 let quitting = false
+let provider: Provider | null = null
+let aiModel = ''
 
 // ---- Single instance: a second launch (e.g. `npm start` while the tray copy runs) just focuses the first ----
 if (!app.requestSingleInstanceLock()) {
@@ -25,6 +31,20 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on('second-instance', () => showWindow())
   app.whenReady().then(onReady)
+}
+
+// ---- AI provider (spec §4). The key lives in .env next to package.json and never leaves the main process. ----
+function setupProvider(): void {
+  loadDotenv({ path: join(app.getAppPath(), '.env'), quiet: true })
+  aiModel = process.env['GEMINI_MODEL'] || 'gemini-3.6-flash'
+  const key = process.env['GEMINI_API_KEY']
+  if (key && key.trim()) {
+    provider = new GeminiProvider(key.trim(), aiModel)
+    log('info', 'ai.provider', `gemini / ${aiModel} (key present)`)
+  } else {
+    provider = null
+    log('warn', 'ai.provider', 'GEMINI_API_KEY missing from .env — chat will explain instead of working')
+  }
 }
 
 // ---- Start with Windows ----
@@ -54,10 +74,10 @@ function applyStoredOpenAtLogin(): void {
 // ---- Window ----
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
-    width: 1100,
-    height: 760,
-    minWidth: 800,
-    minHeight: 560,
+    width: 1200,
+    height: 780,
+    minWidth: 900,
+    minHeight: 600,
     show: false,
     backgroundColor: '#FAF6F0',
     title: 'Secretary',
@@ -85,7 +105,7 @@ function createWindow(): BrowserWindow {
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'))
   }
-  // Developer hook: SECRETARY_SCREENSHOT=<file.png> saves a picture of the window ~2s after load, then quits.
+  // Developer hook: SECRETARY_SCREENSHOT=<file.png> saves a picture of the window ~2.5s after load, then quits.
   const shot = process.env['SECRETARY_SCREENSHOT']
   if (shot) {
     win.webContents.once('did-finish-load', () => {
@@ -112,9 +132,11 @@ function showWindow(): void {
   mainWindow.focus()
 }
 
-function notifyRendererChanged(): void {
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC.changed)
+function send(channel: string, payload?: unknown): void {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload)
 }
+const notifyRendererChanged = (): void => send(IPC.changed)
+const sendChatStatus = (s: ChatStatus): void => send(IPC.chatStatus, s)
 
 const trayHandlers = {
   showWindow,
@@ -134,6 +156,7 @@ function onReady(): void {
   openDatabase()
   log('info', 'app.start', `v${app.getVersion()} electron ${process.versions.electron} hidden=${startedHidden} db=${dbPath()}`)
   applyStoredOpenAtLogin()
+  setupProvider()
   createTray(trayHandlers)
   registerIpc()
 
@@ -143,6 +166,23 @@ function onReady(): void {
   // Highest-risk subsystem first: sweep what we missed, then start ticking.
   startupSweep()
   startScheduler(notifyRendererChanged)
+
+  // Developer hook: SECRETARY_CHAT="first message||second message" runs a scripted conversation
+  // through the real orchestrator, prints the results, then quits. Used for the §7 Phase 1 test.
+  const script = process.env['SECRETARY_CHAT']
+  if (script) {
+    void (async () => {
+      for (const line of script.split('||')) {
+        console.log(`\n>>> USER: ${line}`)
+        const res = await enqueueChat({ provider, onStatus: () => undefined, onChanged: () => undefined }, line)
+        console.log(`<<< ASSISTANT: ${res.assistantMessage.content}`)
+        for (const a of res.applied) console.log(`    ✓ ${a.summary}`)
+        if (res.error) console.log(`    ✗ error: ${res.error}`)
+      }
+      quitting = true
+      app.quit()
+    })()
+  }
 
   // Laptop lid / sleep: run a tick immediately on wake instead of waiting for the interval.
   powerMonitor.on('resume', () => {
@@ -202,7 +242,8 @@ function registerIpc(): void {
     startedHidden,
     openAtLogin: getOpenAtLogin(),
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    schedulerIntervalMs: TICK_MS
+    schedulerIntervalMs: TICK_MS,
+    ai: { provider: provider?.name ?? 'none', model: aiModel, hasKey: provider !== null }
   }))
   ipcMain.handle(IPC.setOpenAtLogin, (_e, enabled: boolean) => {
     const actual = setOpenAtLogin(enabled)
@@ -212,4 +253,12 @@ function registerIpc(): void {
   ipcMain.handle(IPC.sendTestNotification, () => {
     showToast({ title: 'Secretary test', body: 'If you can read this, Windows toasts work.' })
   })
+
+  // Conversation (Phase 1)
+  ipcMain.handle(IPC.sendChat, (_e, text: string) => {
+    if (typeof text !== 'string' || !text.trim()) throw new Error('Empty message')
+    return enqueueChat({ provider, onStatus: sendChatStatus, onChanged: notifyRendererChanged }, text.slice(0, 8000))
+  })
+  ipcMain.handle(IPC.chatHistory, (_e, limit?: number) => repo.recentMessages(limit ?? 60))
+  ipcMain.handle(IPC.listExtractions, (_e, limit?: number) => repo.listExtractions(limit ?? 30))
 }

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { IPC, type SecretaryApi } from '../shared/types'
+import { IPC, type ChatStatus, type SecretaryApi } from '../shared/types'
 
 // The renderer gets exactly this object and nothing else. No database, no keys, no Node.
 const api: SecretaryApi = {
@@ -18,6 +18,15 @@ const api: SecretaryApi = {
     const handler = (): void => cb()
     ipcRenderer.on(IPC.changed, handler)
     return () => ipcRenderer.removeListener(IPC.changed, handler)
+  },
+
+  sendChat: (text) => ipcRenderer.invoke(IPC.sendChat, text),
+  chatHistory: (limit) => ipcRenderer.invoke(IPC.chatHistory, limit),
+  listExtractions: (limit) => ipcRenderer.invoke(IPC.listExtractions, limit),
+  onChatStatus: (cb) => {
+    const handler = (_e: unknown, s: ChatStatus): void => cb(s)
+    ipcRenderer.on(IPC.chatStatus, handler)
+    return () => ipcRenderer.removeListener(IPC.chatStatus, handler)
   }
 }
 

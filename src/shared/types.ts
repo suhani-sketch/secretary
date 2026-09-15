@@ -4,6 +4,7 @@
 export type ItemKind = 'task' | 'deadline' | 'project' | 'waiting' | 'note' | 'commitment' | 'idea'
 export type ItemStatus = 'open' | 'done' | 'cancelled' | 'archived'
 export type ReminderState = 'pending' | 'delivered' | 'acknowledged' | 'snoozed' | 'cancelled'
+export type DuePrecision = 'exact' | 'day' | 'week' | 'vague'
 
 export interface Item {
   id: string
@@ -13,7 +14,7 @@ export interface Item {
   status: ItemStatus
   due_at_utc: string | null
   due_tz: string | null
-  due_precision: string | null
+  due_precision: DuePrecision | null
   effort_minutes: number | null
   importance: number
   is_suggestion: number
@@ -56,6 +57,50 @@ export interface CreateItemInput {
   remindAtLocal: string | null
 }
 
+// ---------- Conversation (Phase 1) ----------
+
+export type MessageRole = 'user' | 'assistant' | 'system'
+
+export interface ChatMessage {
+  id: string
+  role: MessageRole
+  content: string
+  tier: number | null
+  created_at: string
+}
+
+/** Ground truth of what the tool executor committed for one user message. Shown under the reply. */
+export interface AppliedChange {
+  tool: string
+  /** Short human sentence, e.g. `Created task "Call the bank" · reminder Thu 17 Sep 15:00` */
+  summary: string
+  itemId?: string
+  reminderId?: string
+}
+
+export interface ChatResponse {
+  userMessage: ChatMessage
+  assistantMessage: ChatMessage
+  applied: AppliedChange[]
+  /** Set when the model or a tool failed; the DB is unchanged for that failure. */
+  error: string | null
+}
+
+export type ChatStatus =
+  | { kind: 'idle' }
+  | { kind: 'thinking' }
+  | { kind: 'tools'; count: number }
+  | { kind: 'throttled'; retryInSeconds: number }
+
+export interface ExtractionEntry {
+  id: string
+  message_id: string | null
+  tools_json: string
+  applied: number
+  error: string | null
+  created_at: string
+}
+
 export interface AppInfo {
   version: string
   electron: string
@@ -66,6 +111,8 @@ export interface AppInfo {
   openAtLogin: boolean
   timezone: string
   schedulerIntervalMs: number
+  /** Which AI provider/model is configured, and whether a key was found (never the key itself). */
+  ai: { provider: string; model: string; hasKey: boolean }
 }
 
 /** The API exposed to the renderer via contextBridge as window.api */
@@ -83,6 +130,12 @@ export interface SecretaryApi {
   sendTestNotification(): Promise<void>
   /** Subscribe to change events pushed from main; returns an unsubscribe function. */
   onChanged(cb: () => void): () => void
+
+  // Conversation
+  sendChat(text: string): Promise<ChatResponse>
+  chatHistory(limit?: number): Promise<ChatMessage[]>
+  listExtractions(limit?: number): Promise<ExtractionEntry[]>
+  onChatStatus(cb: (status: ChatStatus) => void): () => void
 }
 
 export const IPC = {
@@ -97,5 +150,9 @@ export const IPC = {
   getAppInfo: 'app:info',
   setOpenAtLogin: 'app:setOpenAtLogin',
   sendTestNotification: 'app:testNotification',
-  changed: 'app:changed'
+  changed: 'app:changed',
+  sendChat: 'chat:send',
+  chatHistory: 'chat:history',
+  listExtractions: 'chat:extractions',
+  chatStatus: 'chat:status'
 } as const
