@@ -3,7 +3,7 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 0 — built, awaiting the §7 restart test on the real machine
+## Current phase: Phase 0 — built and mostly verified; the full §7 restart test was deliberately skipped
 
 ## What works (verified 2026-09-15)
 - Electron 44 + React 19 + Vite 7 + Tailwind 4 + TypeScript, built with `electron-vite`.
@@ -32,11 +32,20 @@ Update it at the end of every session (spec §11).
 - Dev hook: `SECRETARY_SCREENSHOT=<path.png>` saves a window screenshot ~2.5 s after load and quits.
 - Toasts appear attributed to "electron.app.Secretary"-style identity while unpackaged; that's expected in dev.
 
-## What's broken / untested
-- §7 Phase 0 completion test (real Windows restart with the app closed) has not yet been run by the user.
+## Verified on the user's machine (2026-09-15)
+- Missed-reminder path: reminder due 12 min earlier, app closed, launched → delivered as "Missed reminder (12 min late)", toast shown.
+- Live tick: reminder 40 s ahead fired on the next 30 s tick, toast shown, closed → acknowledged.
+- User test: clicked "+5 min", closed the window (hidden to tray), toast fired 5 min later from the tray copy.
+- Start-with-Windows entry exists in HKCU Run as `com.suhani.secretary`.
+
+## What's untested
+- The strict §7 test (Quit the app, restart Windows, don't open it, reminder still fires) — user chose not to
+  restart. Everything it depends on is in place (Run entry, --hidden start, sweep), but it has not been observed.
+  Re-offer it before Phase 1 is declared finished, or whenever convenient.
 - Laptop lid close / hibernate not yet tested by actually doing it (spec §8).
 
 ## Commands
+- User opens the app by double-clicking `Start Secretary.cmd` (their terminal panel has no `npx` on PATH).
 - `npm run build` then `npx electron .` — build and run. `npm start` does both.
 - `npx electron . --hidden` — run in tray only (what Windows startup does).
 - `npm run typecheck`
