@@ -164,8 +164,10 @@ export default function App(): React.JSX.Element {
         open: () => setEditing({ kind: 'reminder', reminder: r }),
         item: r.target_type === 'item' ? itemById.get(r.target_id) : undefined
       })),
+    // A dated item with a live alarm is already represented by its 🔔 row; only alarm-less dates get a 📅 row.
     ...openItems
       .filter((i) => i.due_at_utc && new Date(i.due_at_utc).getTime() <= horizon)
+      .filter((i) => !pending.some((r) => r.target_type === 'item' && r.target_id === i.id))
       .map((i) => ({
         key: 'i' + i.id,
         at: new Date(i.due_at_utc!).getTime(),
