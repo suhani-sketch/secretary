@@ -1,0 +1,16 @@
+@import "tailwindcss";
+
+:root {
+  --cream: #FAF6F0;
+  --cocoa: #3A2E28;
+  --accent: #B5836D;
+}
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--cream);
+  color: var(--cocoa);
+  font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}

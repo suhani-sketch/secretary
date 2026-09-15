@@ -22,3 +22,6 @@ release/
 Thumbs.db
 .vscode/
 .idea/
+
+# TypeScript incremental cache
+*.tsbuildinfo

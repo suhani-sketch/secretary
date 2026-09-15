@@ -1,0 +1,37 @@
+{
+  "name": "secretary",
+  "productName": "Secretary",
+  "version": "0.0.1",
+  "description": "Conversational personal secretary with a cozy companion (V1, single user, local-only)",
+  "main": "./out/main/index.js",
+  "private": true,
+  "author": "Suhani",
+  "license": "UNLICENSED",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "npm run build && electron .",
+    "start:hidden": "electron . --hidden",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/luxon": "^3.7.5",
+    "@types/node": "^26.5.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^44.3.0",
+    "electron-vite": "^5.0.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite": "^7.3.6"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "luxon": "^3.7.2",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  }
+}
