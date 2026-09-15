@@ -1,58 +1,73 @@
 # Secretary App — Architecture & Build Plan
 
 Working spec for a conversational personal secretary with a cozy companion, Windows desktop.
-Written to be handed to Claude Code as the source of truth for the project.
+**This file is the single source of truth.** If another plan turns up with its own phase numbers, fold it into this file rather than running two schemes.
 
-**Status:** V1, single user (the author), local-only, not distributed.
+**Status:** V1, single user (the author), local-only, not distributed. Phase 0 complete. Phase 1 in progress.
 
 ---
 
-## 0. Scope decisions
+## 0. Scope, invariants, and the standard
 
-This V1 is being built for one person on one machine. That removes a large amount of the original brief. The following are **explicitly out of scope for V1** and should not be built, even partially:
+### The product
+
+A conversational secretary that remembers what is happening in the user's life. Not a task manager with a chat box. The user talks; the assistant understands, retrieves, reasons, acts, persists, and confirms what actually happened.
+
+The user should never have to think "what category is this", "should this be a project", "what priority". They talk. The system figures it out.
+
+### Out of scope for V1
 
 - Onboarding / first-run flow
 - Monetization, feature gating, usage tracking, subscription state
 - Multiple personality modes
-- Calendar view, projects dashboard, statistics
 - Installer, code signing, auto-update, distribution
 - User accounts, authentication, cloud sync
-- Email or calendar integration
-- Attachments, document understanding
+- Email integration, external calendar sync (Google/Outlook)
+- Attachments and document understanding
+- People as full entities (schema leaves room; no UI)
+- Export/backup UI (schema is portable; no UI)
 
-These are **in scope and must not be compromised**:
+### In scope and not to be compromised
 
-- Reliable local persistence
-- Reminders that fire when the app is closed and after a Windows restart
-- One conversational interface that handles create / edit / complete / cancel in natural language
-- Structured memory that distinguishes kinds of information
-- Deadline components and dependencies
+- Reliable local persistence and restart recovery
+- Reminders that fire with the app closed and after a Windows restart
+- One conversational interface: create, edit, complete, cancel, replan
+- Projects/Things, checklists, notes, activity history, waiting items, dependencies
+- A full internal calendar, two-way with the assistant
 - Availability constraints and conflict detection
 - "What should I do now?" and "What am I forgetting?"
 - Brain dump, by text or voice note
-- Conversational replanning
+- Manual editing of everything (§7)
 - A companion and room
-
-Cutting the first list is what makes the second list achievable quickly.
 
 ### Invariants
 
-These are not features and must never be dropped, deferred or simplified in any phase. They exist to prevent the assistant becoming confidently wrong over time, which is the main way this kind of product dies.
+Not features. These hold in every phase and are never deferred or simplified.
 
-1. **`due_precision` is always set honestly.** "Tomorrow" is `day` precision. Do not invent a clock time and store it as `exact`. If a time is needed for scheduling, derive it at display time from preferences, and say so.
-2. **Inferred is never stored as stated.** `is_suggestion = 1` for anything the assistant proposed. A suggestion is never counted as an obligation until the user confirms it.
+1. **`due_precision` is always honest.** "Tomorrow" is `day` precision. Never invent a clock time and store it as `exact`.
+2. **Inferred is never stored as stated.** `is_suggestion = 1` for anything the assistant proposed. A suggestion is not an obligation until confirmed.
 3. **Every model proposal is logged to `extractions`**, applied or not.
-4. **Nothing is reported as done before the transaction commits.**
-5. **Task ≠ reminder ≠ deadline.** Cancelling one never silently destroys another.
+4. **Nothing is reported as done before the transaction commits.** "I couldn't save that — nothing changed" is always better than a false success.
+5. **Task ≠ reminder ≠ deadline ≠ calendar event.** Cancelling one never silently destroys another.
+6. **No dead-end information.** Anything displayed can be inspected and edited directly. See §7.
+7. **One data model.** Manual edits and AI edits write to the same rows. Never two parallel systems.
+8. **Actionability threshold.** "I need to get my life together" does not become a task called *Get life together*. See §5.
+9. **Nothing is duplicated.** One "IIM application" Thing, referenced everywhere, not re-created on each mention.
 
-**One thing to know before starting:** the app needs its own API key at runtime. A Claude Pro/Max subscription powers Claude Code while you build; it does not power the app once it runs.
+### The standard
 
-V1 uses **Google Gemini's free tier** — a key from Google AI Studio, no credit card, no Cloud project. Flash models only (Pro moved behind billing in April 2026). **Measured September 2026: 5 requests/minute per model on the Flash models** — the 15 RPM figure that circulated earlier no longer holds. Flash-Lite is the default because its quota is looser; the Flash models sit behind it as fallbacks, and quotas are per model so siblings absorb bursts. Daily quotas are in the low hundreds per model and are revised without notice; check ai.dev/rate-limit rather than trusting a number written here. For one user typing at human pace this is still enough, provided **one message costs one model call** and the deterministic tier carries the bulk of traffic.
+Not "does it create tasks". The standard is: *does this feel like a competent secretary who understands what is happening in my life?* The user should be able to dump complexity in and get clarity back.
 
-Two constraints that follow from this choice:
+### Runtime AI key
 
-- Google may use free-tier inputs and outputs to improve their models. This app holds highly personal information, which is in direct tension with §27 of the original brief. The provider abstraction exists so this decision can be reversed cheaply once the app holds real data — a paid key on any provider costs a couple of dollars a month at single-user volume.
-- Never enable billing on the Gemini project. Doing so removes the free tier entirely on that project and makes every call billable from the first token.
+The app needs its own API key. A Claude subscription powers Claude Code while you build; it does not power the app once it runs.
+
+V1 uses **Google Gemini's free tier** — a key from Google AI Studio, no credit card, no Cloud project.
+
+- **The per-minute limit is tight: 5 requests/minute on `gemini-3.8-flash`.** Flash-Lite is more generous. This is a functional constraint, not a nuisance — see §4.
+- Honour the `retryDelay` value Google returns in the 429 body rather than guessing a backoff curve.
+- Google may use free-tier inputs to improve their models. This app holds highly personal data. The provider abstraction exists so this is reversible; a paid key at single-user volume costs a couple of dollars a month.
+- Never enable billing on the Gemini project — doing so removes the free tier entirely on that project.
 
 ---
 
@@ -60,16 +75,15 @@ Two constraints that follow from this choice:
 
 | Layer | Choice | Why |
 |---|---|---|
-| Shell | Electron | Best-documented Windows tray, background process and toast notification path. The two hardest requirements live here. |
-| UI | React + TypeScript + Vite | Already familiar. TypeScript matters more than usual here because the AI will be generating most of the code and types catch its mistakes. |
-| Styling | Tailwind CSS | Fast iteration on a look that needs a lot of iteration. |
-| Database | SQLite via `better-sqlite3` | Synchronous API, no async complexity, transactional. Runs in the main process only. |
-| Date parsing | `chrono-node` | Deterministic natural-language date parsing. This is the cheap fast path — no model call needed for "tomorrow at 5". |
+| Shell | Electron | Best-documented Windows tray, background process and toast path. |
+| UI | React + TypeScript + Vite | TypeScript matters more than usual — the AI generates most of the code and types catch its mistakes. |
+| Styling | Tailwind CSS | Fast iteration. |
+| Database | SQLite via `better-sqlite3` | Synchronous, transactional, main process only. |
+| Date parsing | `chrono-node` | Deterministic NL date parsing. Zero API cost. |
 | Date handling | Luxon | Timezone-correct arithmetic. |
-| AI | `@google/genai` behind a provider interface | Free tier for V1. The interface is what matters — swapping providers must be a config change, never a rewrite. |
-| Validation | Zod | Every AI tool call is validated against a schema before it touches the database. Non-negotiable. |
-
-**Why not Tauri:** smaller binaries and a nicer security model, but it adds a Rust toolchain to a project where the builder isn't a developer. Spend the difficulty budget on the assistant, not the build system.
+| Recurrence | `rrule` | RFC 5545, shared by reminders and calendar events. |
+| AI | `@google/genai` behind a provider interface | Swapping providers must be config, never a rewrite. |
+| Validation | Zod | Every tool call validated before it touches the database. |
 
 ---
 
@@ -78,7 +92,8 @@ Two constraints that follow from this choice:
 ```
 ┌─────────────────────────────────────────┐
 │  RENDERER (React)                       │
-│  Conversation · Room · Today rail       │
+│  Conversation · Calendar · Today ·      │
+│  Things · Companion                     │
 │  No database access. No API keys.       │
 └──────────────┬──────────────────────────┘
                │ IPC (typed channels only)
@@ -86,15 +101,14 @@ Two constraints that follow from this choice:
 │  MAIN PROCESS                           │
 │                                         │
 │  Orchestrator ── Router (tier 0/1/2)    │
-│       │                                 │
 │       ├── Context Assembler             │
-│       ├── Provider (Gemini)              │
+│       ├── Provider (Gemini)             │
 │       ├── Tool Executor (Zod → txn)     │
-│       │                                 │
+│       └── Activity Recorder             │
+│                                         │
 │  Scheduler ── Notifier ── Tray          │
-│       │                                 │
+│                                         │
 │  Repository layer                       │
-│       │                                 │
 │  SQLite                                 │
 └─────────────────────────────────────────┘
 ```
@@ -102,31 +116,35 @@ Two constraints that follow from this choice:
 Hard rules:
 
 1. The renderer never touches SQLite and never sees the API key.
-2. The model never writes SQL. It calls tools; tools are validated; validated calls run inside a transaction.
-3. The assistant does not tell the user something happened until the transaction has committed.
-4. If the model fails, errors, or returns garbage, the database is unchanged and the user gets an honest message.
+2. The model never writes SQL. It calls tools; tools are validated; validated calls run in a transaction.
+3. **Manual UI edits go through the same tool layer as AI edits.** Same validation, same transactions, same activity records. This is the mechanism that enforces invariant 7 — not discipline, architecture.
+4. AI failure, database failure, scheduler failure and notification failure are distinct and reported distinctly. An AI failure never corrupts local state.
+5. With the AI unavailable, the app still works: view and edit everything, receive reminders, complete tasks, use the calendar.
 
 ---
 
 ## 3. Database schema
 
-The central design decision: **do not create ten separate tables for the ten entity kinds in the brief.** They share 80% of their fields and constantly convert into each other (a note becomes a task; a task becomes a waiting item). One `items` table with a `kind` discriminator is far easier to query, migrate and reason about.
+One `items` table with a `kind` discriminator rather than ten near-identical tables. Kinds convert into each other constantly (a note becomes a task; a task becomes a waiting item) and share most fields.
 
 ```sql
 CREATE TABLE items (
   id              TEXT PRIMARY KEY,
-  kind            TEXT NOT NULL,      -- task|deadline|project|waiting|note|commitment|idea
+  kind            TEXT NOT NULL,   -- task|deadline|project|waiting|note|commitment|idea|checklist_item
   title           TEXT NOT NULL,
   details         TEXT,
-  status          TEXT NOT NULL DEFAULT 'open',  -- open|done|cancelled|archived
-  due_at_utc      TEXT,               -- ISO 8601 UTC
-  due_tz          TEXT,               -- IANA zone captured at creation
-  due_precision   TEXT,               -- exact|day|week|vague
+  status          TEXT NOT NULL DEFAULT 'open',
+                  -- open|in_progress|done|cancelled|blocked|waiting|archived
+  due_at_utc      TEXT,
+  due_tz          TEXT,
+  due_precision   TEXT,            -- exact|day|week|vague
+  hardness        TEXT,            -- hard|soft   (deadline vs target — see §5)
   effort_minutes  INTEGER,
-  importance      INTEGER DEFAULT 2,  -- 1 low .. 4 critical
-  is_suggestion   INTEGER DEFAULT 0,  -- assistant proposed it, user has not confirmed
-  confidence      REAL,               -- extraction confidence 0..1
-  waiting_on      TEXT,               -- person/thing, for kind='waiting'
+  importance      INTEGER DEFAULT 2,
+  sort_order      INTEGER,         -- checklist ordering
+  is_suggestion   INTEGER DEFAULT 0,
+  confidence      REAL,
+  waiting_on      TEXT,
   source_msg_id   TEXT,
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL,
@@ -142,44 +160,87 @@ CREATE TABLE links (
   UNIQUE(from_item, to_item, type)
 );
 
-CREATE TABLE constraints (
-  id           TEXT PRIMARY KEY,
-  kind         TEXT NOT NULL,   -- unavailable|prefer|avoid
-  label        TEXT NOT NULL,   -- "travelling", "class", "no mornings"
-  starts_at    TEXT,            -- UTC, null for recurring-only
-  ends_at      TEXT,
-  rrule        TEXT,            -- for standing constraints ("every Tue 2-5pm")
-  source       TEXT NOT NULL,   -- stated|inferred
-  created_at   TEXT NOT NULL
+CREATE TABLE events (                      -- calendar
+  id            TEXT PRIMARY KEY,
+  title         TEXT NOT NULL,
+  starts_at_utc TEXT NOT NULL,
+  ends_at_utc   TEXT,
+  all_day       INTEGER DEFAULT 0,
+  tz            TEXT NOT NULL,
+  rrule         TEXT,
+  exdates       TEXT,          -- JSON array of excluded occurrence dates
+  project_id    TEXT REFERENCES items(id),
+  kind          TEXT,          -- commitment|work_block
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
 );
 
 CREATE TABLE reminders (
   id              TEXT PRIMARY KEY,
-  item_id         TEXT REFERENCES items(id) ON DELETE CASCADE,
+  target_type     TEXT NOT NULL,   -- item|event
+  target_id       TEXT NOT NULL,
   fire_at_utc     TEXT NOT NULL,
-  rrule           TEXT,            -- RFC 5545 for recurrence
-  condition_json  TEXT,            -- conditional: {"unless_resolved": "<item_id>"}
-  state           TEXT NOT NULL,   -- pending|delivered|acknowledged|snoozed|cancelled
+  rrule           TEXT,
+  offset_minutes  INTEGER,         -- "30 min before" / "3 days before the deadline"
+  condition_json  TEXT,            -- {"unless_resolved": "<item_id>"}
+  state           TEXT NOT NULL,   -- pending|delivered|acknowledged|snoozed|cancelled|paused
   delivered_at    TEXT,
   surfaced_count  INTEGER DEFAULT 0,
   created_at      TEXT NOT NULL
 );
 
+CREATE TABLE notes (                       -- attachable to anything
+  id          TEXT PRIMARY KEY,
+  target_type TEXT NOT NULL,   -- item|event|reminder|date
+  target_id   TEXT NOT NULL,   -- for target_type='date', an ISO date
+  body        TEXT NOT NULL,
+  source      TEXT NOT NULL,   -- user|assistant
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+
+CREATE TABLE activities (                  -- history and the basis for undo
+  id           TEXT PRIMARY KEY,
+  target_type  TEXT NOT NULL,
+  target_id    TEXT NOT NULL,
+  project_id   TEXT REFERENCES items(id),  -- denormalised for fast project timelines
+  verb         TEXT NOT NULL,   -- created|updated|completed|cancelled|rescheduled|
+                                -- note_added|status_changed|reminder_fired|
+                                -- reminder_missed|dismissed|snoozed|deleted
+  actor        TEXT NOT NULL,   -- user|assistant|system
+  summary      TEXT NOT NULL,   -- "Reminder moved Tue 9am → Wed 5pm"
+  before_json  TEXT,            -- prior state, for undo
+  after_json   TEXT,
+  reversible   INTEGER DEFAULT 1,
+  created_at   TEXT NOT NULL
+);
+
+CREATE TABLE constraints (
+  id         TEXT PRIMARY KEY,
+  kind       TEXT NOT NULL,   -- unavailable|prefer|avoid
+  label      TEXT NOT NULL,
+  starts_at  TEXT,
+  ends_at    TEXT,
+  rrule      TEXT,
+  source     TEXT NOT NULL,   -- stated|inferred
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE messages (
   id         TEXT PRIMARY KEY,
-  role       TEXT NOT NULL,    -- user|assistant|system
+  role       TEXT NOT NULL,
   content    TEXT NOT NULL,
-  tier       INTEGER,          -- which routing tier handled it
+  tier       INTEGER,
   created_at TEXT NOT NULL
 );
 
 CREATE TABLE extractions (
-  id          TEXT PRIMARY KEY,
-  message_id  TEXT REFERENCES messages(id),
-  tools_json  TEXT NOT NULL,   -- what the model proposed
-  applied     INTEGER NOT NULL,
-  error       TEXT,
-  created_at  TEXT NOT NULL
+  id         TEXT PRIMARY KEY,
+  message_id TEXT REFERENCES messages(id),
+  tools_json TEXT NOT NULL,
+  applied    INTEGER NOT NULL,
+  error      TEXT,
+  created_at TEXT NOT NULL
 );
 
 CREATE TABLE preferences (
@@ -206,276 +267,298 @@ CREATE TABLE schema_migrations (
 );
 ```
 
-Notes on specific columns:
+Notes:
 
-- `is_suggestion` and `confidence` directly implement the brief's requirement that inferences must never silently become obligations. Suggestions render differently and are never counted as commitments until confirmed.
-- `extractions` is an audit log of what the model proposed versus what was applied. This is the single most valuable table for debugging, and you will need it constantly.
-- `due_precision` matters. "Sometime next week" is not the same as Monday 17:00 and must not be stored as though it were.
-- `constraints` holds availability facts that are neither tasks nor preferences: "I'm travelling Friday", "class 2–5 on Tuesdays", "nothing before 11". Without this table, replanning will keep proposing times the user has already ruled out. `source` distinguishes what the user stated from what the assistant guessed.
-- Text IDs (UUIDs) rather than integers so cloud sync is possible later without renumbering.
-- Every timestamp is UTC ISO 8601. Local time is a display concern only.
+- **A Project/Thing is `items` with `kind='project'`.** Tasks, checklist items, deadlines and notes attach via `links` (`part_of`) or `project_id`. One TISS mailing, referenced everywhere.
+- **Checklist items are items** (`kind='checklist_item'`, `part_of` a project, ordered by `sort_order`). They do not become standalone tasks unless the user promotes them.
+- **`activities` is the memory of what happened**, and carries `before_json` so undo is a real operation rather than a guess. Never overwrite history.
+- **Reminders and notes are polymorphic** (`target_type`/`target_id`) because both attach to items *and* calendar events.
+- `hardness` separates "I absolutely must submit Monday at 5" from "I'd like to finish this weekend". Do not treat every mentioned date as binding.
+- Prefer `status='cancelled'` over row deletion everywhere. Mistakes stay recoverable and the assistant can answer "what happened to X?".
+- Text IDs (UUIDs) so cloud sync is possible later. All timestamps UTC ISO 8601; local time is a display concern.
 
 ---
 
 ## 4. AI architecture
 
-### Routing
+### Routing — and why it is now a hard requirement
 
-Not every message deserves a frontier model. Three tiers:
+The free tier allows **5 requests/minute**. A design where every user message costs an API call is unusable. Routing is not an optimisation; without it the app does not work.
 
-**Tier 0 — deterministic, no model call, instant.**
-Handles: "done", "finished the CV", "cancel that", "snooze", "move that to 7", and any message where `chrono-node` finds a date and the verb is a simple create. Target: 50–60% of messages.
+**Tier 0 — deterministic, no model call, instant.** `chrono-node` for dates, keyword matching for done / cancel / snooze / complete, all manual UI edits, all reads (Today, Coming Up, calendar, project views), all dependency and blocker computation. Target: the clear majority of interactions.
 
-**Default model (September 2026): `gemini-3.5-flash-lite`** for every model-backed tier, with `gemini-3.6-flash` and `gemini-3.8-flash` as fallbacks when it is exhausted. Promote tier 2 to full Flash only if answer quality on §9 steps 7–9 demands it.
+**Tier 1 — Flash-Lite.** Classification, single-item extraction, simple edits, reference resolution.
 
-**One message, one call.** A successful write round must not cost a second model call to phrase the confirmation: the reply is composed in code from the committed results (which is also what guarantees hard rule 3). A second call is allowed only when the model asked a read-only tool a question and needs the answer to reply.
+**Tier 2 — Flash.** Brain dumps, replanning, the two signature questions, cross-project reasoning.
 
-**Tier 1 — small model (Gemini Flash-Lite).**
-Handles: classification, single-item extraction, simple edits, reference resolution.
+**One user message must cost at most one API call.** If classification and extraction are separate calls, merge them. Count calls per message and assert it in a test.
 
-**Tier 2 — strongest available (Gemini Flash).**
-Handles: brain dumps, replanning, "what should I do now", "what am I forgetting", anything involving dependency reasoning.
+**Compute, don't reason.** Dependency resolution, blocker identification, conflict detection, free-slot finding and "what's overdue" are computed in code from `links`, `events` and `constraints`. The model phrases the answer; it does not derive it. This is both the rate-limit fix and the accuracy fix — Flash-class models are good at extraction and mediocre at multi-step graph reasoning.
 
-The router decides tier before any call. Build tier 0 and tier 2 first; add tier 1 once you can see from the `messages.tier` column where the volume actually sits.
-
-**Consequence of the free tier:** with Pro unavailable, tier 2 is a Flash-class model. Flash is strong at extraction and weaker at multi-step reasoning over a dependency graph than a frontier model. Two mitigations, both of which are good practice regardless:
-
-- Push work into tier 0 wherever a deterministic answer exists. Dependency resolution, blocker identification and "what's overdue" should be **computed in code from the `links` table**, not reasoned about by the model. The model's job is to phrase the answer, not to derive it.
-- Keep tool schemas small and flat. Reliability on structured output drops sharply with schema complexity. Prefer several narrow tools over one tool with many optional fields.
-
-If §9's acceptance test steps 7–9 produce weak answers, the fix is usually more computation in code rather than a better model.
-
-**Rate limits are normal, not bugs.** A 429 is expected behaviour at 5 RPM. The 429 body carries a `retryDelay`; honour it (fall back to 1s, 2s, 4s, 8s only when it is absent), treat 503 "high demand" the same way, and switch to a sibling model when the first is exhausted at the start of a turn. Surface a calm "one moment" in the UI rather than an error. Never lose the user's message because a call was throttled — queue it.
-
-This is also the latency fix. "Got it" should appear instantly for the common cases, not after three seconds.
+**Rate limits are normal.** Honour `retryDelay` from the 429 body. Queue the message, never lose it. The UI stays calm; the debug panel says exactly which failure it was.
 
 ### Tools
 
-Defined as JSON schema, validated with Zod, executed in a transaction:
+Validated with Zod, executed in a transaction, recorded in `activities`:
 
 ```
-create_item, update_item, complete_item, cancel_item
-create_reminder, update_reminder, cancel_reminder, snooze_reminder
+create_item, update_item, complete_item, cancel_item, delete_item
+create_project, update_project, archive_project
+add_checklist_item, complete_checklist_item, remove_checklist_item, reorder_checklist
+create_reminder, update_reminder, cancel_reminder, snooze_reminder, pause_reminder
+create_event, update_event, delete_event
+add_note, update_note, delete_note
 add_link, remove_link
-add_constraint, remove_constraint, check_conflicts
+add_constraint, remove_constraint
 set_preference
-search_memory, get_today, get_upcoming, get_item, get_current_context
+record_activity
+search_memory, search_activity, get_today, get_upcoming, get_project, get_calendar,
+  get_free_slots, check_conflicts, get_current_context
 propose_plan
+undo_last
 ```
 
-`propose_plan` returns a plan for the user to approve rather than applying it. Replanning must never happen silently.
+`propose_plan` returns a plan for approval; replanning never happens silently.
 
-### Destructive-operation semantics
+### Action confidence — enforced in the tool layer, not the prompt
 
-The blast radius of a cancellation must match what the user actually said. Three levels:
-
-| User says | Affects | Confirmation |
+| Level | Example | Behaviour |
 |---|---|---|
-| "cancel the reminder" | the reminder only | none — just do it |
-| "I'm not doing the case study" | that one item | none |
-| "forget about the application" | a project and its components | **ask first**, naming what would go |
+| Confident | "remind me tomorrow at 5" | execute |
+| Ambiguous | "move the application" with two applications open | ask which |
+| Consequential | "forget about the application" (project + components) | confirm, naming what would go |
 
-Never cascade a delete across linked items without confirmation. Prefer `status = 'cancelled'` over row deletion everywhere, so a mistaken cancel is recoverable and the assistant can honestly answer "what happened to X?".
+Blast radius must match what the user said. "Cancel the reminder" touches the reminder only. Never cascade across linked items without confirmation.
+
+### Actionability threshold
+
+The assistant must distinguish:
+
+- "I need to email the professor" → obligation
+- "I emailed the professor" → completed action + activity record, **not** a task called *emailed professor*
+- "I emailed the professor but haven't heard back" → completed action + waiting item
+- "I should probably email the professor" → idea, not a hard task
+- "I'm exhausted today" → temporary context, stored nowhere permanent
+- "I need to get my life together" → nothing
+
+When the user says something about an existing Thing, **update that Thing**. Do not create a new task each time it is mentioned.
 
 ### Priority is inferred, never asked
 
-There is no priority selector anywhere in the UI. `importance` is derived from how the user talks — "I absolutely have to get this done tonight" is not "maybe I should read this sometime" — and from deadline proximity and downstream blocking. The user can override in conversation ("that's not actually important"), and an override is `stated` and sticks.
+No priority selector anywhere. `importance` derives from language, deadline proximity, and what the item blocks. The user overrides conversationally ("that's not actually important") and the override sticks as `stated`.
 
 ### Context assembly
 
-Never send the whole database. Each request gets:
-
-- Last 10 messages
-- Items modified in the last 7 days
-- Items due in the next 14 days
-- All open `waiting` items
-- All preferences
-- Keyword-matched items when the message contains a specific noun
-
-Cap it. If the context exceeds budget, drop oldest-modified items first.
+Never send the whole database. Each request gets: last 10 messages; the focus stack; items modified in the last 7 days; items due in the next 14 days; today's and tomorrow's events; open waiting items; active constraints; preferences; and keyword-matched items when the message names something specific. Cap it; drop oldest-modified first.
 
 ### Reference resolution
 
-"that", "it", "the earlier one" is the hardest natural-language problem here. Maintain a short focus stack in memory — the last 3–5 items touched, with what was done to them — and pass it explicitly in context. Do not expect the model to infer it from conversation history alone.
+"that", "it", "the TISS thing", "the earlier reminder" is the hardest problem here. Maintain a focus stack — the last 3–5 items touched and what was done to them — and pass it explicitly. Resolve against the focus stack first, then entity names, then recency. If multiple candidates are plausible **and the action is consequential, ask.** Never make a destructive change on low-confidence resolution.
 
 ---
 
 ## 5. Reminder and notification architecture
 
-This is the highest-risk subsystem and it gets built first.
+**SQLite is the source of truth.** The scheduler is a loop over the table with no state of its own.
 
-**SQLite is the source of truth.** The scheduler is a loop over the table, holding no state of its own.
+**Tick, don't sleep.** A 30-second interval querying `fire_at_utc <= now AND state = 'pending'`. Long `setTimeout` calls do not survive sleep or hibernation.
 
-**Tick, don't sleep.** Use a 30-second interval that queries for `fire_at_utc <= now AND state = 'pending'`. Do not use long `setTimeout` calls — they do not survive laptop sleep or hibernation reliably, which is precisely the failure mode that makes reminder apps untrustworthy.
+**Startup sweep.** On every launch, deliver pending reminders whose time has passed, marked as missed with how late. "You missed your 9 AM reminder to work on the article. Want to do it now or move it?" The underlying item stays intact.
 
-**Startup sweep.** On every launch, query for pending reminders whose fire time has passed. Deliver them marked as missed, with how late they are. This satisfies the restart-recovery requirement.
+**Background survival.** Tray-resident, does not quit on window close. `app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true })`.
 
-**Background survival.** The app runs in the tray and does not quit when the window is closed. `app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true })` for restart survival.
+**Windows toasts** require `app.setAppUserModelId()` or they silently fail.
 
-**Windows toasts.** Electron's `Notification` API maps to Windows toast, but requires `app.setAppUserModelId()` to be set or toasts silently fail — this is a common and confusing first bug. In development, notifications may not appear until the app is properly identified.
+**Notification actions.** Toasts carry **Done**, **Snooze**, **Reschedule** so common responses need no window. Actions route back through the same tool layer as typed input.
 
-**Notification actions.** Toasts carry buttons — **Done**, **Snooze**, **Reschedule** — so the common responses need no window at all. Windows toast supports this natively; Electron exposes it via the `actions` field, and the click handler routes back through the same tool layer as typed input, never through a separate code path. Snooze offers a couple of sensible intervals rather than a picker.
+**Reminders are not tasks.** A due date without a reminder is a valid state — but decide deliberately whether creating a dated item should offer or auto-create a reminder. Silence on a known deadline is not secretarial. Whatever is decided, the UI must show exactly what exists.
 
-**Reminders are not tasks.** A reminder is an alarm attached to an item; the item is the obligation. Creating a task does not automatically create a reminder, and a due date without a reminder is a real and valid state. But if the user says "remind me", they get a row in `reminders`, not just a due date — and the Coming Up view must reflect exactly what exists.
+**Completing an item cancels its now-irrelevant reminders.** Deleting a reminder never touches the item.
 
-**State machine.** `pending → delivered → acknowledged | snoozed | cancelled`. Write the state change to the database before reporting success anywhere.
+**Follow-through.** Dismissal acknowledges the *reminder*, never the *obligation*. If the item is still open and important, follow-up logic may resurface it — intensity from `surfaced_count`, deadline proximity, importance, preferences and quiet hours. Escalation caps out.
 
-**Follow-through.** Dismissing a notification acknowledges the *reminder*, never the underlying *item*. If the item is still open and important, the follow-up logic may resurface it — with intensity derived from `surfaced_count`, deadline proximity and importance. Escalation caps out; it never becomes nagging.
+**Notification history** lives in `activities`: created, fired, dismissed, snoozed, rescheduled, missed, delivery failed.
 
-**Visible log.** Build a small debug panel that shows the scheduler's last 50 actions. You cannot debug a silent failure, and reminders fail silently by nature. Build this in Phase 0, not later.
+**Visible log.** A debug panel showing the scheduler's last 50 actions and the last 20 AI calls with their outcome. You cannot debug a silent failure.
 
 ---
 
-## 6. UI structure
+## 6. Calendar
 
-Single window. Three zones:
+A real internal calendar, as a secondary view. Conversation stays the home screen.
+
+**Views:** month, week, day, agenda. Date navigation and a Today button.
+
+**Events:** all-day and timed, recurring via RRULE with per-occurrence exceptions, notes, reminders, optional project association.
+
+**Direct manipulation:** click to open, drag to move, resize to change duration, edit and delete. Every manual change writes through the same tool layer and lands in `activities` — the assistant must immediately know the event moved.
+
+**Two-way, genuinely.** "Meeting with Professor X Thursday at 3" creates an event. "Move it to 4" updates it. Dragging it to 5 updates the same row. "What am I doing Thursday?" reads from it.
+
+**Obligations shown alongside events, and visually distinct.** A deadline is not a meeting; a work block is not a commitment. Same underlying records as everywhere else — never duplicate copies.
+
+**Conflict detection** and **free-slot finding** are deterministic functions over `events` plus `constraints`, exposed as tools. "Put the case study at 3 tomorrow" when a meeting exists at 3 returns a conflict and an alternative.
+
+---
+
+## 7. UI structure and manual editing
+
+Primary window, conversation-first:
 
 ```
 ┌────────────────┬──────────────────────────┬──────────┐
-│                │                          │          │
 │   ROOM +       │      CONVERSATION        │  TODAY   │
-│   COMPANION    │      (primary)           │  (thin)  │
-│                │                          │          │
+│   COMPANION    │      (primary)           │  (rail)  │
 │                │  ┌────────────────────┐  │          │
 │                │  │ type or dump here  │  │          │
 └────────────────┴──┴────────────────────┴──┴──────────┘
 ```
 
-- **Conversation is primary** and gets the most space. Input accepts a single line or a paragraph-long dump with no mode switch.
-- **Today rail** is glanceable only — a handful of items, not a task manager. It exists so the user can see that the assistant actually recorded things.
-- **Room** is ambient and mostly still.
-- **Memory view** (a modal, reachable from the rail) lists what the assistant believes, grouped by kind, with inline edit and delete. The brief lists this as secondary; it should be treated as core, for reasons in §8.
+Secondary views, reachable but not the home screen: **Calendar**, **Today**, **Things**, **Settings**. Later: Memory, Search.
 
-Visual direction: warm cream `#FAF6F0` backgrounds, cocoa `#3A2E28` text, one muted accent, generous whitespace, rounded forms, soft shadows, subtle paper grain. No borders where whitespace will do.
+**Today** answers "what actually matters today" — a few events, the live obligations, blockers, waiting items needing follow-up, and one suggested next action. Not a dashboard.
 
-### Companion
+### Manual editing is mandatory
 
-A state machine over layered SVG, not video or sprite sheets:
-`idle · thinking · working · reading · waiting · happy · concerned · sleepy · celebrating`
+The app is conversational-*first*, not conversational-*only*. The user must never be forced to talk to the AI to perform basic operations, and **nothing displayed may be a dead end.**
 
-Transitions are slow and subtle. The companion animates on state change and otherwise mostly breathes. Anything more is distracting in a window the user leaves open all day.
+Every reminder, task, project, checklist item, note and calendar event supports: open, edit every field, reschedule, complete, cancel, delete, and — where relevant — pause, resume, reorder, and change association. Recurrence is editable and the scheduler must pick up the new values immediately.
+
+Inline quick actions where they save a click (✓ Done, ↻ Snooze, ⋯ More), a restrained contextual menu otherwise. Confirmation on destructive actions, matching the confidence tiers in §4.
+
+**Manual changes record activities** exactly as AI changes do — "Reminder moved Tue 9am → Wed 5pm" — which is what makes undo and "what changed?" possible.
+
+Visual direction stays as-is for now: warm cream `#FAF6F0`, cocoa `#3A2E28`, one muted accent, generous whitespace. **The aesthetic pass is deliberately late.** Do not spend time on illustration, animation or typography systems during the functional phases.
 
 ---
 
-## 7. Build phases
+## 8. Build phases
 
-Each phase has a hard completion test. Do not begin the next phase until the current test passes on a real machine.
+Each phase has a hard completion test. Do not begin the next until the current one passes on a real machine. Ship each phase's manual controls *with* that phase — invariant 6 is not a later cleanup.
 
-### Phase 0 — The risky part, first
-Electron + React + SQLite skeleton. Tray. Migrations. A crude input box that writes to `items`. The scheduler, the notifier, the startup sweep, and the debug log panel.
+### Phase 0 — Infrastructure ✅ complete
+Electron + React + SQLite. Tray. Migrations. Scheduler, notifier, startup sweep, debug panel. Reminders fire with the window closed; missed ones are recovered.
+*Outstanding: the strict reboot test has not been observed.*
 
-**Done when:** you create a reminder for five minutes from now, quit the app entirely, restart Windows, don't open the app — and the notification still fires. Then set one for a time in the past while the app is closed, open the app, and confirm it's reported as missed.
+### Phase 1 — Conversation, tools, and the spine
+Orchestrator, provider abstraction, Zod-validated tool layer, transactional execution, `extractions` log, `activities` recorder, focus stack, confidence tiers, actionability threshold. Create / edit / complete / cancel tasks and reminders conversationally **and manually**. Notification actions. Undo.
 
-*If this phase fails, nothing else matters. That's why it's first.*
+Split freely — 1a create and read with invariants enforced, 1b edit/cancel/complete and reference resolution, 1c manual editing surfaces. Reference resolution is the hardest part and deserves its own pass.
 
-### Phase 1 — Conversation with tools
-Orchestrator, provider abstraction, the tool layer with Zod validation, transactional execution, the `extractions` audit log. Create, complete, edit, cancel tasks and reminders by talking. Reference resolution via the focus stack. Destructive-operation semantics. Notification actions on the toast. Static companion illustration as a placeholder.
+**Done when:** "remind me to call the bank Thursday at 3" then "actually make it 4" edits *one row*; "cancel the reminder" leaves the task; "tomorrow" stores as `day` precision; every visible item opens and edits; "undo that" reverses the last change; and one user message costs at most one API call.
 
-**Pulled forward from Phase 2 (September 2026, because of the 5 RPM quota):** the Tier 0 deterministic router — `chrono-node` date parsing for simple creates, and keyword handling for done / cancel / snooze / move — with no model call at all, executing through the same tool layer and logged with `tier = 0`.
+### Phase 2 — Fast path, dates, recurrence
+Tier 0 router. `chrono-node`. Timezone-correct storage. RRULE for reminders. Flash-Lite as default model.
 
-Split this into 1a and 1b if it fights back. 1a: create and read, with the invariants enforced. 1b: edit, cancel, complete, and reference resolution. Reference resolution is the hardest part of the phase and deserves its own pass.
+**Done when:** simple messages respond instantly with no API call; "every Sunday" recurs and survives restart; "in two hours" lands correctly; and normal testing no longer trips the rate limit.
 
-**Done when:** "remind me to call the bank Thursday at 3" creates a real row; "actually make it 4" edits *that same row* rather than making a second one; "cancel the reminder" leaves the task standing; "tomorrow" is stored as `day` precision with no invented clock time; and the app only says it's done after the commit.
+### Phase 3 — The life model
+Projects/Things, inferred from conversation rather than created by hand. Checklists. Notes on anything. Activity history surfaced. Waiting items. Dependencies. Constraints. Natural-language project updates ("I worked on the TISS mailing today", "I sent it", "they haven't replied").
 
-### Phase 2 — Dates, hardening the fast path
-`chrono-node` and the Tier 0 router landed in Phase 1. This phase widens Tier 0 coverage using the `messages.tier` column as evidence, reviews timezone-correct storage, and adds recurrence via RRULE.
+**Done when:** the TISS acceptance test in §10 passes end to end, across an app restart.
 
-**Done when:** simple messages respond in under 300ms with no API call, "every Sunday" recurs correctly, and "in two hours" lands on the right timestamp.
+### Phase 4 — Calendar
+Month / week / day / agenda. Events, recurrence, exceptions. Drag, resize, edit, delete. Two-way with the assistant. Obligations displayed alongside events. Conflict detection and free-slot finding.
 
-### Phase 3 — Structure
-Kinds beyond task. Projects with components, inferred from conversation rather than created by hand. `links` and dependency resolution. Waiting items. Availability constraints and conflict detection. The memory view with editing.
+**Done when:** the calendar acceptance test in §10 passes, including manual drag updating what the assistant knows.
 
-**Done when:** the first five steps of the acceptance test in §9 pass, and "I'm busy tomorrow afternoon" followed by "put the case study tomorrow afternoon" produces a conflict warning rather than a silent booking.
+### Phase 5 — Intelligence
+Brain dump. Voice notes. Deadline intelligence and component bottlenecks. "What should I do right now?" "What am I forgetting?" Time estimates. Smart scheduling.
 
-### Phase 4 — The signature features
-Brain dump extraction. Voice notes. "What should I do now?" "What am I forgetting?" The explicit/possible distinction in output.
+*Voice belongs here because Gemini accepts audio directly — record in the renderer, send to the same key with the same tool schema. It is a record button plus an audio branch, not a subsystem. And a chaotic ramble is exactly what voice is for; a microphone that only creates one flat task is not worth having.*
 
-**Voice belongs here, not in a phase of its own.** Gemini accepts audio directly, so no separate transcription service is needed: record in the renderer, send the audio to the same key with the same tool schema, get structured calls back. It is a record button plus an audio branch in the provider, not a subsystem. And it belongs with brain dump because that is what voice is *for* — a chaotic ninety-second ramble is the natural voice input, and a microphone that can only create one flat task is not worth having.
+**Done when:** a messy multi-clause dump — typed or spoken — produces sensible structure with at most one clarifying question, and the two signature questions give real answers rather than list dumps.
 
-Keep the audio local. Store the recording alongside the message if it's useful for debugging; do not build a transcription archive.
+### Phase 6 — Proactivity
+Daily briefing. Deadline preparation. Missed-task and waiting-item follow-up. Adaptive intensity, quiet hours. Conversational replanning.
 
-**Done when:** a messy five-clause paragraph — typed or spoken — produces a sensible set of items and asks at most one clarifying question; and the two questions give useful answers rather than list dumps.
+**Done when:** the application acceptance test in §10 passes end to end.
 
-### Phase 5 — Follow-through and replanning
-`propose_plan`. Escalation logic. Quiet hours. Intensity settings. The overwhelm response.
-
-**Done when:** the full acceptance test passes end to end.
-
-### Phase 6 — The room and the companion
-Real illustration. State machine. Time-of-day lighting. Daily briefing.
+### Phase 7 — Aesthetic pass
+Companion redesign and state machine. Room and time-of-day lighting. Typography, visual hierarchy, calendar and project aesthetics, notification personality.
 
 **Done when:** you want to leave it open on your desktop.
 
-### Phase 7 — Living with it
-Use it daily for two weeks and fix what actually annoys you. Resist adding features during this phase.
-
-The companion is late deliberately — it's the emotional payoff but it's also purely additive, and it's the thing most likely to absorb unlimited time. The placeholder in Phase 1 keeps the project from feeling soulless in the meantime.
+### Phase 8 — Living with it
+Use it daily for two weeks. Fix what actually annoys you. Add nothing.
 
 ---
 
-## 8. Risks
+## 9. Risks
 
-**Native module rebuild.** `better-sqlite3` must be compiled against Electron's Node version. This will be your first real blocker. `electron-rebuild` fixes it; expect to lose an hour.
+**Scope.** This is the largest risk by a distance. The spec has grown substantially in three revisions while Phase 1 is half-built. Phases 3 through 6 are each multi-week. The calendar alone is three to four weeks and now sits ahead of the intelligence features. Freeze scope until Phase 1 passes.
 
-**Silent notification failure.** Missing `AppUserModelId`, Windows focus assist, or notification permissions all cause toasts to vanish without error. The debug log in Phase 0 is the defence.
+**Rate limits.** 5 RPM makes the tier-0 path load-bearing rather than optional. Watch the `tier` column.
 
-**Sleep and hibernation.** Tested by actually closing the laptop lid, not by assuming.
+**Memory drift.** Over months the model accumulates duplicates, stale dependencies and items it never closed, and becomes confidently wrong about your life. Defences: the editable views, activity history, a pass flagging items untouched for 30 days, and asking rather than guessing at low confidence.
 
-**Memory drift.** The real long-term killer. Over months the model accumulates duplicate items, stale dependencies and tasks it never marked complete, and becomes confidently wrong about your life. Mitigations: the editable memory view, a periodic pass that flags items untouched for 30 days, and an assistant that asks rather than guessing when confidence is low. Treat this as a first-class feature, not cleanup.
+**Duplicate entities.** "TISS mailing" mentioned in three conversations must resolve to one project. Match on name similarity before creating, and ask when unsure.
 
-**Reference resolution.** "Move that" will misfire sometimes. When the focus stack is ambiguous, ask — one short clarifying question beats a wrong edit.
+**Reference resolution.** Will misfire. Ask when ambiguous and consequential.
 
-**Free-tier tradeoffs.** Cost is near zero on Gemini's free tier, so the real risks shift: free-tier inputs may be used for training, daily quotas can be revised without notice, and Flash-class reasoning is the ceiling. Watch the `tier` column to see where volume actually sits, and treat the provider swap as a decision to revisit once the app holds real data rather than a permanent choice.
+**Native module rebuild.** `better-sqlite3` against Electron's Node — `electron-rebuild`.
 
-**Scope creep.** The original brief is a three-year product. This plan is a six-to-ten week one. Every "while we're here" addition pushes the date out.
+**Silent notification failure.** Missing `AppUserModelId`, focus assist, permissions. The debug panel is the defence.
+
+**Recurrence correctness.** RRULE with exceptions across DST is a classic source of off-by-one-hour bugs. Test across a DST boundary explicitly.
 
 ---
 
-## 9. Acceptance test
+## 10. Acceptance tests
 
-Run this in full at the end of Phase 5 and after every significant change thereafter.
+Each must pass **across an app restart**, and at no point may the assistant claim something happened that did not.
 
-1. "I need to submit my application Monday at 5." → deadline created
-2. "It needs my CV, transcript and case study." → three components linked to it
-3. "CV is done." → that component completes, not the whole thing
-4. "I emailed my professor about the transcript." → waiting item created
-5. "I don't want to do the case study tonight." → no guilt, a reasonable alternative offered
+### A. Reminders and manual editing (Phase 1)
+1. Create a reminder through conversation.
+2. Open it manually; change time, date, recurrence; save.
+3. Verify the scheduler uses the new values.
+4. Delete only the reminder — the task survives.
+5. Recreate it, then complete the task — the reminder is cancelled as irrelevant.
+6. "Undo that" reverses the last change.
+7. Restart. Everything persists.
+
+### B. TISS mailing (Phase 3)
+1. "TISS mailing is something I need to deal with." → one Thing created
+2. "Today I drafted the first email." → activity recorded, no task called *drafted first email*
+3. "I haven't sent it yet." → sending remains outstanding
+4. "Add a list for the things I need to do." → checklist on that Thing
+5. "Add send first email, follow up, and attach the document." → three items
+6. "I sent the first email." → item complete, activity recorded
+7. "They said they'll get back to me Friday." → waiting item
+8. "If they haven't replied by Friday afternoon, remind me." → conditional follow-up
+9. "What have I done for TISS mailing?" → the history
+10. "What is left?" → outstanding items and waiting states
+
+### C. Calendar (Phase 4)
+1. "I have a meeting with Professor X Thursday at 3." → event
+2. "Move it to 4." → same event updated
+3. Drag it manually to 5. → same row; assistant now knows it is at 5
+4. "When can I work on the case study?" → a real free slot
+5. "Schedule it." → work block created, not overlapping anything
+
+### D. The application (Phase 6)
+1. "I need to submit my IIM application Monday at 5." → project + hard deadline
+2. "It needs my CV, transcript and case study." → three components
+3. "CV is done." → that component only
+4. "I emailed my professor about the transcript." → completed action + waiting item
+5. "I don't want to do the case study tonight." → no guilt, an alternative offered
 6. "Move it to tomorrow afternoon." → replanned
 7. "What should I do right now?" → one concrete recommendation with reasoning
-8. "What am I forgetting?" → unresolved components surfaced, explicit separated from possible
-9. "Actually move the application to Tuesday." → deadline updates, dependent planning adjusts
-10. "Cancel the reminder." → reminder cancelled, obligation retained
-11. Close app. Restart Windows. Reminders still fire. Missed ones recovered.
+8. "What am I forgetting?" → unresolved components, explicit separated from possible
+9. "Actually move the application to Tuesday." → deadline moves, planning adjusts
+10. "Cancel the reminder." → reminder only
 
-At no point may the assistant claim something happened that did not.
-
----
-
-## 10. Changes from the original brief
-
-**Cut from V1:** onboarding, monetization architecture, personality modes, calendar view, distribution, attachments, email and calendar integration. Listed in §0.
-
-**Moved into V1:** voice notes (Phase 4). Gemini accepts audio directly, which collapses this from a subsystem into a record button — the reason it was originally cut no longer holds.
-
-**Merged in (second pass):** notification actions on the toast, availability constraints as a first-class table, destructive-operation semantics, conflict detection, and the explicit statement that priority is inferred rather than selected. These came from a later review and fill real gaps.
-
-**Elevated:** the memory inspection view moves from secondary to core, because memory drift is the main long-term failure mode and the user needs to be able to repair it.
-
-**Added:** the `extractions` audit table, the scheduler debug log, the focus stack for reference resolution, `is_suggestion` / `confidence` on items, and the invariants in §0.
-
-**Restructured:** the brief's 18 V1 priorities are re-sequenced so the riskiest infrastructure is proven in week one rather than discovered in month three.
-
-**Provider:** Gemini free tier for V1, behind an abstraction. Chosen for zero cost during the phase where most calls are test noise. Revisit once the app holds real personal data — see §0.
-
-**Deferred:** monetization architecture. Building feature gating before knowing which features people would pay for is guessing in code. The provider abstraction and the clean separation between orchestrator and database are what actually keep those options open, and both are in this plan.
+### E. Infrastructure (standing)
+Close the app. Restart Windows. Reminders still fire. Missed ones recovered. Nothing lost.
 
 ---
 
 ## 11. Working with Claude Code on this
 
-- Keep this file as `SPEC.md` in the project root. **It is the only phase numbering that exists.** If another plan turns up with its own Phase 1, fold it into this file rather than running two schemes — a session that guesses which numbering you meant will build the wrong thing.
-- Keep a `CLAUDE.md` alongside it with: the current phase, what works, what's broken, and what's next. Update it at the end of each session. This is what survives between sessions.
-- Work one phase at a time. Say "build Phase 2 from SPEC.md" rather than "build the app".
-- Commit to git every time something works. That's your undo.
-- Report bugs as: what I did / what I expected / what happened. Paste the actual error text.
-- When a fix breaks something else twice in a row, the slice is too big. Back up and split it.
+- This file is the only phase numbering that exists. Fold new plans in; never run two schemes.
+- Keep `CLAUDE.md` beside it: current phase, what works, what's broken, what's next. Update every session.
+- One phase at a time. "Build Phase 3 from SPEC.md", never "build the app".
+- Commit whenever something works. That is the undo.
+- Bugs as: what I did / what I expected / what happened, with the actual error text.
+- If a fix breaks something else twice, the slice is too big. Split it.
+- After each subsystem: run it, test it, test persistence, test the failure path, check nothing regressed. Compiling is not working.

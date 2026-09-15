@@ -12,6 +12,7 @@ import { GeminiProvider } from './ai/gemini'
 import type { Provider } from './ai/provider'
 import { applyExternalTools, enqueueChat } from './ai/orchestrator'
 import { IPC, type AppInfo, type ChatStatus, type CreateItemInput } from '../shared/types'
+import { listAiCalls } from './log'
 
 // ---- Identity: required for Windows toasts, otherwise they vanish silently (spec §5) ----
 const APP_USER_MODEL_ID = 'com.suhani.secretary'
@@ -74,14 +75,14 @@ function handleProtocolUrl(raw: string): void {
     return
   }
   const ext = (calls: { name: string; args: Record<string, unknown> }[]): void => {
-    const applied = applyExternalTools('toast', calls)
-    log(applied.length ? 'info' : 'warn', 'toast.action', `${action}: ${applied.map((a) => a.summary).join(' | ') || 'nothing applied'}`, reminderId)
+    const res = applyExternalTools('toast', 'user', calls)
+    log(res.applied.length ? 'info' : 'warn', 'toast.action', `${action}: ${res.applied.map((a) => a.summary).join(' | ') || res.error || 'nothing applied'}`, reminderId)
     notifyRendererChanged()
   }
   switch (action) {
     case 'done':
       repo.acknowledgeReminder(reminderId)
-      if (rem.item_id) ext([{ name: 'complete_item', args: { id: rem.item_id } }])
+      if (rem.target_type === 'item') ext([{ name: 'complete_item', args: { id: rem.target_id } }])
       break
     case 'snooze': {
       const minutes = Math.max(1, Math.min(60 * 24, Number(arg) || 15))
@@ -248,12 +249,35 @@ function onReady(): void {
   const script = process.env['SECRETARY_CHAT']
   if (script) {
     void (async () => {
+      // Lines starting with "!" are manual edits: !tool_name {"json":"args"} — run as the UI would, through the
+      // same tool layer. $ITEM / $REMINDER are replaced with the ids from the most recent applied change.
+      let lastItem = ''
+      let lastReminder = ''
+      const remember = (applied: { itemId?: string; reminderId?: string }[]): void => {
+        for (const a of applied) {
+          if (a.itemId) lastItem = a.itemId
+          if (a.reminderId) lastReminder = a.reminderId
+        }
+      }
       for (const line of script.split('||')) {
+        if (line.startsWith('!')) {
+          const m = /^!(\w+)\s*(\{.*\})?$/.exec(line.trim())
+          if (!m) continue
+          const args = JSON.parse((m[2] ?? '{}').replace(/\$ITEM/g, lastItem).replace(/\$REMINDER/g, lastReminder)) as Record<string, unknown>
+          console.log(`\n>>> MANUAL: ${m[1]} ${JSON.stringify(args)}`)
+          const res = applyExternalTools('manual', 'user', [{ name: m[1], args }])
+          for (const a of res.applied) console.log(`    ✓ ${a.summary}`)
+          if (res.confirm) console.log(`    ? confirm: ${res.confirm.question}`)
+          if (res.error) console.log(`    ✗ error: ${res.error}`)
+          remember(res.applied)
+          continue
+        }
         console.log(`\n>>> USER: ${line}`)
         const res = await enqueueChat({ provider, onStatus: () => undefined, onChanged: () => undefined }, line)
         console.log(`<<< ASSISTANT: ${res.assistantMessage.content}`)
         for (const a of res.applied) console.log(`    ✓ ${a.summary}`)
         if (res.error) console.log(`    ✗ error: ${res.error}`)
+        remember(res.applied)
       }
       quitting = true
       app.quit()
@@ -332,9 +356,19 @@ function registerIpc(): void {
     showToast({
       title: 'Secretary test',
       body: r ? `Buttons act on "${r.item_title ?? 'Reminder'}".` : 'If you can read this, Windows toasts work.',
-      actions: r ? { reminderId: r.id, itemId: r.item_id } : undefined
+      actions: r ? { reminderId: r.id, itemId: r.target_type === 'item' ? r.target_id : null } : undefined
     })
   })
+
+  // Manual editing (spec hard rule 3): the UI runs the same tools as the model, as the user.
+  ipcMain.handle(IPC.runTool, (_e, name: string, args: Record<string, unknown>) => {
+    if (typeof name !== 'string') throw new Error('Bad tool name')
+    const res = applyExternalTools('manual', 'user', [{ name, args: args ?? {} }])
+    notifyRendererChanged()
+    return res
+  })
+  ipcMain.handle(IPC.listActivities, (_e, limit?: number) => repo.listActivities(limit ?? 50))
+  ipcMain.handle(IPC.listAiCalls, (_e, limit?: number) => listAiCalls(limit ?? 20))
 
   // Conversation (Phase 1)
   ipcMain.handle(IPC.sendChat, (_e, text: string) => {

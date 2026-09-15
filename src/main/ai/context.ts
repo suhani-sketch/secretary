@@ -24,6 +24,20 @@ export function getFocus(): FocusEntry[] {
   return [...focus]
 }
 
+/** A standing offer the assistant just made ("Want a reminder?") that a plain "yes" answers. */
+export interface Offer {
+  kind: 'reminder'
+  itemId: string
+}
+let offer: Offer | null = null
+export const setOffer = (o: Offer): void => {
+  offer = o
+}
+export const getOffer = (): Offer | null => offer
+export const clearOffer = (): void => {
+  offer = null
+}
+
 function describeItem(it: Item, reminders: Reminder[]): string {
   const bits = [`[${shortId(it.id)}] ${it.kind} "${it.title}"`]
   if (it.status !== 'open') bits.push(`status=${it.status}`)
@@ -32,7 +46,8 @@ function describeItem(it: Item, reminders: Reminder[]): string {
   if (it.waiting_on) bits.push(`waiting on ${it.waiting_on}`)
   if (it.is_suggestion) bits.push('SUGGESTION — not confirmed by the user')
   if (it.details) bits.push(`— ${it.details.slice(0, 120)}`)
-  const rs = reminders.filter((r) => r.item_id === it.id)
+  if (it.hardness) bits.push(it.hardness === 'hard' ? 'hard deadline' : 'soft target')
+  const rs = reminders.filter((r) => r.target_type === 'item' && r.target_id === it.id)
   for (const r of rs) bits.push(`reminder [${shortId(r.id)}] ${r.state} ${formatClock(r.fire_at_utc)}`)
   if (rs.length === 0) bits.push('no reminder')
   return '- ' + bits.join(' · ')
@@ -67,6 +82,9 @@ export function assembleContext(userText: string): string {
   const all = [...focused, ...overdue, ...dueSoon, ...waiting, ...keyword, ...recent]
   const reminders = repo.pendingRemindersForItems(all.map((i) => i.id))
   const prefs = repo.listPreferences()
+  const constraints = repo.activeConstraints()
+  const events = repo.eventsBetween(now.startOf('day').toUTC().toISO()!, now.plus({ days: 1 }).endOf('day').toUTC().toISO()!)
+  const offer = getOffer()
 
   const section = (title: string, items: Item[]): string =>
     items.length ? `${title}:\n${items.map((i) => describeItem(i, reminders)).join('\n')}` : `${title}: none`
@@ -86,6 +104,14 @@ export function assembleContext(userText: string): string {
     section('Open waiting-on items', waiting),
     section('Items matching words in the message', keyword),
     section('Other items modified in the last 7 days', recent),
+    ``,
+    events.length
+      ? `Calendar today and tomorrow:\n${events.map((e) => `- "${e.title}" ${e.all_day ? 'all day' : formatClock(e.starts_at_utc)}`).join('\n')}`
+      : `Calendar today and tomorrow: nothing.`,
+    constraints.length
+      ? `Availability constraints:\n${constraints.map((c) => `- ${c.kind}: ${c.label}${c.rrule ? ` (${c.rrule})` : ''} [${c.source}]`).join('\n')}`
+      : `Availability constraints: none recorded.`,
+    offer ? `Standing offer: you just asked whether to add a reminder for [${shortId(offer.itemId)}]; a plain "yes" means create it.` : '',
     ``,
     prefs.length
       ? `User preferences:\n${prefs.map((p) => `- ${p.key} = ${p.value} (${p.source})`).join('\n')}`

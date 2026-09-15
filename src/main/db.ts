@@ -116,6 +116,79 @@ const MIGRATIONS: { version: number; sql: string }[] = [
         created_at   TEXT NOT NULL
       );
     `
+  },
+  {
+    // Spec rewrite (third pass): items gain hardness/sort_order; reminders become polymorphic
+    // (target_type/target_id, offset_minutes); new events, notes and activities tables.
+    version: 3,
+    sql: `
+      ALTER TABLE items ADD COLUMN hardness TEXT;
+      ALTER TABLE items ADD COLUMN sort_order INTEGER;
+
+      CREATE TABLE events (
+        id            TEXT PRIMARY KEY,
+        title         TEXT NOT NULL,
+        starts_at_utc TEXT NOT NULL,
+        ends_at_utc   TEXT,
+        all_day       INTEGER DEFAULT 0,
+        tz            TEXT NOT NULL,
+        rrule         TEXT,
+        exdates       TEXT,
+        project_id    TEXT REFERENCES items(id),
+        kind          TEXT,
+        created_at    TEXT NOT NULL,
+        updated_at    TEXT NOT NULL
+      );
+
+      -- Rebuild reminders with the polymorphic target. Existing rows all pointed at items.
+      CREATE TABLE reminders_v3 (
+        id              TEXT PRIMARY KEY,
+        target_type     TEXT NOT NULL,
+        target_id       TEXT NOT NULL,
+        fire_at_utc     TEXT NOT NULL,
+        rrule           TEXT,
+        offset_minutes  INTEGER,
+        condition_json  TEXT,
+        state           TEXT NOT NULL,
+        delivered_at    TEXT,
+        surfaced_count  INTEGER DEFAULT 0,
+        created_at      TEXT NOT NULL
+      );
+      INSERT INTO reminders_v3 (id, target_type, target_id, fire_at_utc, rrule, offset_minutes, condition_json, state, delivered_at, surfaced_count, created_at)
+        SELECT id, 'item', item_id, fire_at_utc, rrule, NULL, condition_json, state, delivered_at, surfaced_count, created_at
+        FROM reminders WHERE item_id IS NOT NULL;
+      DROP INDEX IF EXISTS idx_reminders_pending;
+      DROP TABLE reminders;
+      ALTER TABLE reminders_v3 RENAME TO reminders;
+      CREATE INDEX idx_reminders_pending ON reminders(state, fire_at_utc);
+      CREATE INDEX idx_reminders_target ON reminders(target_type, target_id);
+
+      CREATE TABLE notes (
+        id          TEXT PRIMARY KEY,
+        target_type TEXT NOT NULL,
+        target_id   TEXT NOT NULL,
+        body        TEXT NOT NULL,
+        source      TEXT NOT NULL,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      );
+
+      CREATE TABLE activities (
+        id           TEXT PRIMARY KEY,
+        target_type  TEXT NOT NULL,
+        target_id    TEXT NOT NULL,
+        project_id   TEXT REFERENCES items(id),
+        verb         TEXT NOT NULL,
+        actor        TEXT NOT NULL,
+        summary      TEXT NOT NULL,
+        before_json  TEXT,
+        after_json   TEXT,
+        reversible   INTEGER DEFAULT 1,
+        created_at   TEXT NOT NULL
+      );
+      CREATE INDEX idx_activities_target ON activities(target_type, target_id);
+      CREATE INDEX idx_activities_created ON activities(created_at);
+    `
   }
 ]
 

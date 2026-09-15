@@ -26,6 +26,13 @@ export function listLog(limit = 50): SchedulerLogEntry[] {
     .all(limit) as SchedulerLogEntry[]
 }
 
+/** The last N AI calls and their outcomes, for the debug panel (spec §5 "Visible log"). */
+export function listAiCalls(limit = 20): SchedulerLogEntry[] {
+  return getDb()
+    .prepare(`SELECT * FROM scheduler_log WHERE event LIKE 'ai.%' OR event = 'chat.done' OR event = 'router.tier0' ORDER BY id DESC LIMIT ?`)
+    .all(limit) as SchedulerLogEntry[]
+}
+
 export function clearLog(): void {
   getDb().prepare('DELETE FROM scheduler_log').run()
 }

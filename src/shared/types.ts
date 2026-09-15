@@ -1,10 +1,13 @@
 // Shared contracts between main process, preload and renderer.
 // The renderer only ever sees these shapes — never the database or the API key.
 
-export type ItemKind = 'task' | 'deadline' | 'project' | 'waiting' | 'note' | 'commitment' | 'idea'
-export type ItemStatus = 'open' | 'done' | 'cancelled' | 'archived'
-export type ReminderState = 'pending' | 'delivered' | 'acknowledged' | 'snoozed' | 'cancelled'
+export type ItemKind = 'task' | 'deadline' | 'project' | 'waiting' | 'note' | 'commitment' | 'idea' | 'checklist_item'
+export type ItemStatus = 'open' | 'in_progress' | 'done' | 'cancelled' | 'blocked' | 'waiting' | 'archived'
+export type ReminderState = 'pending' | 'delivered' | 'acknowledged' | 'snoozed' | 'cancelled' | 'paused'
 export type DuePrecision = 'exact' | 'day' | 'week' | 'vague'
+export type Hardness = 'hard' | 'soft'
+export type TargetType = 'item' | 'event' | 'reminder' | 'date' | 'action'
+export type Actor = 'user' | 'assistant' | 'system'
 
 export interface Item {
   id: string
@@ -15,8 +18,10 @@ export interface Item {
   due_at_utc: string | null
   due_tz: string | null
   due_precision: DuePrecision | null
+  hardness: Hardness | null
   effort_minutes: number | null
   importance: number
+  sort_order: number | null
   is_suggestion: number
   confidence: number | null
   waiting_on: string | null
@@ -28,9 +33,11 @@ export interface Item {
 
 export interface Reminder {
   id: string
-  item_id: string | null
+  target_type: 'item' | 'event'
+  target_id: string
   fire_at_utc: string
   rrule: string | null
+  offset_minutes: number | null
   condition_json: string | null
   state: ReminderState
   delivered_at: string | null
@@ -38,6 +45,20 @@ export interface Reminder {
   created_at: string
   // joined for display
   item_title?: string | null
+}
+
+export interface Activity {
+  id: string
+  target_type: TargetType | string
+  target_id: string
+  project_id: string | null
+  verb: string
+  actor: Actor
+  summary: string
+  before_json: string | null
+  after_json: string | null
+  reversible: number
+  created_at: string
 }
 
 export type LogLevel = 'info' | 'warn' | 'error'
@@ -57,7 +78,7 @@ export interface CreateItemInput {
   remindAtLocal: string | null
 }
 
-// ---------- Conversation (Phase 1) ----------
+// ---------- Conversation ----------
 
 export type MessageRole = 'user' | 'assistant' | 'system'
 
@@ -69,12 +90,12 @@ export interface ChatMessage {
   created_at: string
 }
 
-/** Ground truth of what the tool executor committed for one user message. Shown under the reply. */
+/** Ground truth of what the tool executor committed. Shown under the reply. */
 export interface AppliedChange {
   tool: string
-  /** Terse ground-truth line shown under the reply, e.g. `Created task "Call the bank" · reminder Thu 17 Sep 15:00` */
+  /** Terse ground-truth line, e.g. `Created task "Call the bank" · reminder Thu 17 Sep 15:00` */
   summary: string
-  /** Warm one-sentence confirmation composed in code from the committed result; used as the reply so no second model call is needed. */
+  /** Warm one-sentence confirmation composed in code from the committed result. */
   phrase: string
   itemId?: string
   reminderId?: string
@@ -86,6 +107,14 @@ export interface ChatResponse {
   applied: AppliedChange[]
   /** Set when the model or a tool failed; the DB is unchanged for that failure. */
   error: string | null
+}
+
+/** Result of a manual (UI-driven) tool run — same tool layer as the model. */
+export interface ToolRunResult {
+  applied: AppliedChange[]
+  error: string | null
+  /** The tool declined to act and wants confirmation first (consequential change). */
+  confirm: { question: string; wouldAffect: string[] } | null
 }
 
 export type ChatStatus =
@@ -140,6 +169,12 @@ export interface SecretaryApi {
   onChatStatus(cb: (status: ChatStatus) => void): () => void
   /** Main asks the renderer to put text in the input box (e.g. "Reschedule" from a toast button). */
   onChatPrefill(cb: (text: string) => void): () => void
+
+  // Manual editing — same tool layer as the AI (spec hard rule 3)
+  runTool(name: string, args: Record<string, unknown>): Promise<ToolRunResult>
+  listActivities(limit?: number): Promise<Activity[]>
+  /** Last N AI calls (from the scheduler log), for the debug panel. */
+  listAiCalls(limit?: number): Promise<SchedulerLogEntry[]>
 }
 
 export const IPC = {
@@ -159,5 +194,8 @@ export const IPC = {
   chatHistory: 'chat:history',
   listExtractions: 'chat:extractions',
   chatStatus: 'chat:status',
-  chatPrefill: 'chat:prefill'
+  chatPrefill: 'chat:prefill',
+  runTool: 'tools:run',
+  listActivities: 'activities:list',
+  listAiCalls: 'ai:calls'
 } as const

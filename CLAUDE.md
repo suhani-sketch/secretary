@@ -3,7 +3,7 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 1 — built against the revised SPEC, plus Tier 0 router pulled forward from Phase 2 (2026-09-15). Phase 0's strict restart test still skipped by user choice.
+## Current phase: Phase 1 — complete against the rewritten SPEC (third pass, 2026-09-15): spine, activities, undo, manual editing, confidence tiers, one-call rule. Phase 0's strict reboot test still not observed (user choice).
 
 ## What works (verified 2026-09-15)
 - Electron 44 + React 19 + Vite 7 + Tailwind 4 + TypeScript, built with `electron-vite`.
@@ -48,6 +48,34 @@ Update it at the end of every session (spec §11).
   → same row, reminder moved to 16:00; "cancel the reminder for the bank" → reminder cancelled, task still open; "gotta finish the
   article tomorrow" → `day` precision, due_at_utc = local midnight, no clock time; "remind me to water the plants tomorrow" → day
   item + reminder at default 09:00 with the summary saying it's a default. Reply text only after commit.
+
+## Spec third pass (2026-09-15) — what changed in code
+- **Migration 3** (never edit 1/2): items +hardness +sort_order; `reminders` rebuilt as polymorphic (`target_type`/`target_id`,
+  `offset_minutes`, state adds `paused`), old rows migrated with target_type='item'; new `events`, `notes`, `activities` tables.
+- **Activities recorder**: every write tool records an `activities` row (verb, actor user|assistant|system, summary, before/after
+  JSON). Scheduler records reminder_fired / reminder_missed / dismissed / delivery_failed / next-occurrence. `record_activity`
+  tool stores completed actions ("I emailed the professor") as history, not tasks; `now_waiting_on` spawns a waiting item.
+- **Undo** (`undo_last`, tier-0 "undo"/"undo that", header button): restores `before_json` of the last reversible user/assistant
+  activity; created → row removed; deleted → row + its reminders restored; complete/cancel → item restored and ONLY the alarms
+  that change stopped are revived (recorded as `before: {item, stopped:[ids]}`). Marks original irreversible, logs verb `undone`.
+- **Confidence tiers in the tool layer**: `cancel_item` on a project or anything with `part_of` children, and `delete_item`
+  always, return `confirm {question, wouldAffect}` and the round is rolled back; caller re-runs with `confirmed: true`.
+  Orchestrator surfaces the question as the reply; UI uses window.confirm; model is told to relay it.
+- **One call per message, asserted**: `MAX_MODEL_CALLS_PER_MESSAGE = 1`; read-only tool results are phrased in code
+  (`phraseReadResults`), never a second call; `ai.call_budget_exceeded` error is logged if ever breached; the model is told it gets one response.
+- **Manual editing** (`Editors.tsx`): ItemEditor (title, details, kind, status, due day/time with honest precision, hardness,
+  reminders list + add, Done/Cancel/Delete…) and ReminderEditor (day, time, recurrence presets or custom RRULE, snooze when fired,
+  pause/resume, cancel). Everything calls `window.api.runTool` → `applyExternalTools('manual','user')` — same tool layer.
+  No importance control anywhere (spec: priority is inferred, never asked). Rail rows open editors; hover ✓ completes.
+- **Reminder offer**: an exact-time item created without a reminder ends with "Want a reminder?"; a standing offer is kept
+  in memory and a plain "yes" (tier 0) creates it. Any other write clears the offer.
+- **Recurrence**: `rrule` validated on create/update_reminder; scheduler queues the next occurrence as a new pending row
+  after delivery (DTSTART = the delivered fire time). RRULE across DST is untested (spec §9 risk).
+- **Dedup in tier 0**: "remind me to X <date>" when an open item titled X exists → create_reminder on it, not a new item.
+- Debug panel tabs: Scheduler · AI calls (last 20) · Activity · Extractions · Reminders.
+- Dev hook `SECRETARY_CHAT` accepts `!tool_name {json}` lines for manual-tool steps with `$ITEM`/`$REMINDER` substitution.
+- Acceptance A (spec §10) run 2026-09-15: steps 1–6 pass via the hook; step 7 (restart persistence) verified by relaunch.
+  Toast buttons still only verified via simulated protocol URLs.
 
 ## Spec second pass (invariants) — how each is enforced
 1. Honest precision: tools take `*_at_local` (clock stated → exact) OR `*_date_local` (day only → `day`/`week`/`vague`,
@@ -105,7 +133,11 @@ Update it at the end of every session (spec §11).
 - `npm run typecheck`
 
 ## Next
-- Phase 2 (revised): widen Tier 0 coverage using the `tier` column, timezone-correct storage review, RRULE recurrence.
+- Phase 2 (revised spec): widen Tier 0 using the `tier` column; timezone review; RRULE for reminders is in but needs the
+  "every Sunday recurs and survives restart" test and a DST-boundary test.
+- Flash-Lite sometimes creates a duplicate instead of updating an existing Thing (seen once). Phase 3 dedupe by name similarity.
+- Not yet built from the tool list: project/checklist/note/event/link/constraint tools, get_free_slots, check_conflicts,
+  propose_plan (Phases 3–6).
 - Observed once: a Gemini round took ~80 s with no 429 logged. Watch `ai.response` timings; if it recurs, add a request timeout.
 - Not yet built from the tool list: add_link/remove_link, add_constraint/remove_constraint/check_conflicts (Phase 3), propose_plan (Phase 5).
 - Toast buttons were verified only by simulating the protocol URL; a real click on a Windows toast is still to be observed by the user.

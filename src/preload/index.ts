@@ -32,7 +32,11 @@ const api: SecretaryApi = {
     const handler = (_e: unknown, text: string): void => cb(text)
     ipcRenderer.on(IPC.chatPrefill, handler)
     return () => ipcRenderer.removeListener(IPC.chatPrefill, handler)
-  }
+  },
+
+  runTool: (name, args) => ipcRenderer.invoke(IPC.runTool, name, args),
+  listActivities: (limit) => ipcRenderer.invoke(IPC.listActivities, limit),
+  listAiCalls: (limit) => ipcRenderer.invoke(IPC.listAiCalls, limit)
 }
 
 contextBridge.exposeInMainWorld('api', api)

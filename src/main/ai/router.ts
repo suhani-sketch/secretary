@@ -1,7 +1,7 @@
 import * as chrono from 'chrono-node'
 import { DateTime } from 'luxon'
 import * as repo from '../repo'
-import { getFocus } from './context'
+import { getFocus, getOffer } from './context'
 import type { Item, Reminder } from '../../shared/types'
 
 /**
@@ -136,6 +136,32 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
   if (!text || text.length > 160 || text.includes('\n')) return null
   let m: RegExpExecArray | null
 
+  // ---- undo ----
+  if (/^(?:undo|undo that|undo the last change|undo last|revert that|take that back)$/.test(text)) {
+    return [{ name: 'undo_last', args: {} }]
+  }
+
+  // ---- "yes" to a standing offer ("Want a reminder?") ----
+  if (/^(?:yes|yes please|yep|yeah|sure|ok|okay|please|do it|go ahead|yes do)$/.test(text)) {
+    const offer = getOffer()
+    if (!offer) return null
+    const item = repo.getItem(offer.itemId)
+    if (!item || !item.due_at_utc || item.status !== 'open') return null
+    const due = DateTime.fromISO(item.due_at_utc, { zone: 'utc' }).toLocal()
+    return item.due_precision === 'exact'
+      ? [{ name: 'create_reminder', args: { item_id: item.id, fire_at_local: due.toFormat("yyyy-MM-dd'T'HH:mm") } }]
+      : [{ name: 'create_reminder', args: { item_id: item.id, fire_date_local: due.toFormat('yyyy-MM-dd') } }]
+  }
+
+  // ---- pause / resume the reminder ----
+  if ((m = /^(pause|resume|unpause) (?:the |that |this |my )?(?:reminder|alarm)(?: (?:for|on|about) (?:the |that |this )?(.+))?$/.exec(text))) {
+    const item = resolveTarget(m[2])
+    if (!item) return null
+    const rs = repo.pendingRemindersForItems([item.id])
+    const rem = rs.length === 1 ? rs[0] : null
+    return rem ? [{ name: 'pause_reminder', args: { id: rem.id, resume: m[1] !== 'pause' } }] : null
+  }
+
   // ---- done ----
   if ((m = /^(?:ok(?:ay)?,? )?(?:i(?:'ve| have)? )?(?:done|finished|completed|did)(?: it| that| this)?(?: with)?(?: (?:the |that |this )?(.+))?$/.exec(text))) {
     const item = resolveTarget(m[1])
@@ -170,7 +196,7 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     const fired = repo.listReminders().filter((r) => r.state === 'delivered' && (r.delivered_at ?? '') >= since)
     const top = getFocus()[0]
     let rem: Reminder | null = null
-    if (top) rem = fired.find((r) => r.item_id === top.itemId) ?? null
+    if (top) rem = fired.find((r) => r.target_type === 'item' && r.target_id === top.itemId) ?? null
     if (!rem && fired.length === 1) rem = fired[0]
     return rem ? [{ name: 'snooze_reminder', args: { id: rem.id, minutes } }] : null
   }
@@ -199,6 +225,12 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     if (!when) return null
     const title = cleanTitle(m[1], when.text)
     if (!title || words(title).length === 0) return null
+    // Nothing is duplicated (invariant 9): "remind me to call the bank…" when "Call the bank" already exists
+    // adds a reminder to that item instead of creating a second one.
+    const existing = findItemByWords(title)
+    if (existing && norm(existing.title) === norm(title)) {
+      return [{ name: 'create_reminder', args: { item_id: existing.id, ...(when.exact ? { fire_at_local: when.dateTime } : { fire_date_local: when.date }) } }]
+    }
     return [{ name: 'create_item', args: { kind: 'task', title, ...dueArgs(when), ...remindArgs(when) } }]
   }
 
