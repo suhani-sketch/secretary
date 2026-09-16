@@ -286,11 +286,18 @@ function phraseReadResults(results: ToolResult[]): string | null {
       const d = res as unknown as D
       const day = DateTime.fromISO(d.date).toFormat('cccc d LLL')
       const bits: string[] = []
-      if (d.schedule.length) bits.push(`${d.is_past ? 'Scheduled' : 'Schedule'}: ${d.schedule.map((s) => `${s.title} ${s.when}`).join('; ')}.`)
+      // A work block that serves an obligation is ONE thing: it appears once, in the schedule, annotated — not again under a
+      // separate "time set aside" sentence.
+      const dws = (res as unknown as { due_with_time_set_aside?: { title: string; item: string; when: string }[] }).due_with_time_set_aside ?? []
+      const served = new Map(dws.map((x) => [x.title, x.item]))
+      const annotate = (s: { title: string; when: string }): string => {
+        const item = served.get(s.title)
+        if (item === undefined) return `${s.title} ${s.when}`
+        return `${s.title} ${s.when} (time set aside${item !== s.title ? ` for "${item}"` : ''})`
+      }
+      if (d.schedule.length) bits.push(`${d.is_past ? 'Scheduled' : 'Schedule'}: ${d.schedule.map(annotate).join('; ')}.`)
       else bits.push(d.is_past ? 'Nothing was scheduled.' : 'Nothing scheduled.')
       if (d.due.length) bits.push(`Due that day: ${d.due.map((x) => x.title).join(', ')}.`)
-      const dws = (res as unknown as { due_with_time_set_aside?: { item: string; when: string }[] }).due_with_time_set_aside ?? []
-      if (dws.length) bits.push(`Time set aside: ${dws.map((x) => `${x.item} ${x.when}`).join('; ')}.`)
       if (d.overdue.length) bits.push(`Still open from earlier: ${d.overdue.map((x) => `${x.title}${x.was_due ? ` (was ${x.was_due})` : ''}`).join(', ')}.`)
       if (d.priorities.length) bits.push(`What matters most: ${d.priorities.map((p) => `${p.title} — ${p.why}`).join('; ')}.`)
       if (d.reminders.length) bits.push(`Reminders: ${d.reminders.map((x) => `${x.for} at ${x.at}${d.is_past && x.state !== 'pending' ? ` (${x.state})` : ''}`).join(', ')}.`)
