@@ -43,7 +43,8 @@ const api: SecretaryApi = {
   activitiesForItem: (itemId, limit) => ipcRenderer.invoke(IPC.activitiesForItem, itemId, limit),
   listConstraints: () => ipcRenderer.invoke(IPC.listConstraints),
   getSetting: (key) => ipcRenderer.invoke(IPC.getSetting, key),
-  setSetting: (key, value) => ipcRenderer.invoke(IPC.setSetting, key, value)
+  setSetting: (key, value) => ipcRenderer.invoke(IPC.setSetting, key, value),
+  listHappenings: () => ipcRenderer.invoke(IPC.listHappenings)
 }
 
 contextBridge.exposeInMainWorld('api', api)

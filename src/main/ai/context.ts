@@ -100,6 +100,7 @@ export function assembleContext(userText: string): string {
   const reminders = repo.pendingRemindersForItems(all.map((i) => i.id))
   const prefs = repo.listPreferences()
   const constraints = repo.activeConstraints()
+  const happenings = repo.runningHappenings()
   const dateNotes = repo.dateNotesBetween(now.minus({ days: 1 }).toISODate()!, now.plus({ days: 14 }).toISODate()!)
   const events = repo.eventsBetween(now.startOf('day').toUTC().toISO()!, now.plus({ days: 1 }).endOf('day').toUTC().toISO()!)
   const offer = getOffer()
@@ -147,6 +148,11 @@ export function assembleContext(userText: string): string {
     constraints.length
       ? `Availability constraints (the app checks these when a time is booked; you do not need to):\n${constraints.map((c) => `- [${shortId(c.id)}] ${c.kind}: ${describeConstraint(c)} [${c.source}]`).join('\n')}`
       : `Availability constraints: none recorded.`,
+    happenings.length
+      ? `Happening right now (living activities — never tasks, never history):\n${happenings
+          .map((h) => `- [${shortId(h.id)}] ${h.label}${h.ends_at ? ` · ends ${formatClock(h.ends_at)}` : ' · open-ended'}${h.metaphor ? ` (${h.metaphor})` : ''}`)
+          .join('\n')}`
+      : `Happening right now: nothing.`,
     dateNotes.length
       ? `Notes on upcoming days (inform planning; not tasks):\n${dateNotes.map((n) => `- ${n.target_id}: [${shortId(n.id)}] ${n.body}`).join('\n')}`
       : `Notes on upcoming days: none.`,

@@ -19,6 +19,8 @@ import { useCompanion, type CompanionState } from './companionState'
 import { ItemEditor, NoteEditor, ReminderEditor } from './Editors'
 import { ItemHistory, ProjectView } from './ProjectView'
 import { formatClock, formatDue, isOverdue } from '../../shared/format'
+import { RightNow } from './Happenings'
+import type { Happening } from '../../shared/types'
 
 const fmtLocal = (utcIso: string | null): string => (utcIso ? formatClock(utcIso) : '—')
 
@@ -45,6 +47,7 @@ export default function App(): React.JSX.Element {
   const [links, setLinks] = useState<Link[]>([])
   const [notes, setNotes] = useState<Note[]>([])
   const [constraints, setConstraints] = useState<Constraint[]>([])
+  const [happenings, setHappenings] = useState<Happening[]>([])
   const [reminders, setReminders] = useState<Reminder[]>([])
   const [logs, setLogs] = useState<SchedulerLogEntry[]>([])
   const [aiCalls, setAiCalls] = useState<SchedulerLogEntry[]>([])
@@ -107,7 +110,7 @@ export default function App(): React.JSX.Element {
 
   const refresh = useCallback(async () => {
     try {
-      const [i, r, l, a, x, ac, act, lk, nt, cs] = await Promise.all([
+      const [i, r, l, a, x, ac, act, lk, nt, cs, hp] = await Promise.all([
         window.api.listItems(),
         window.api.listReminders(),
         window.api.listLog(50),
@@ -117,12 +120,14 @@ export default function App(): React.JSX.Element {
         window.api.listActivities(40),
         window.api.listLinks(),
         window.api.listNotes(),
-        window.api.listConstraints()
+        window.api.listConstraints(),
+        window.api.listHappenings()
       ])
       setItems(i)
       setLinks(lk)
       setNotes(nt)
       setConstraints(cs)
+      setHappenings(hp)
       setReminders(r)
       setLogs(l)
       setInfo(a)
@@ -507,6 +512,7 @@ export default function App(): React.JSX.Element {
                 ))}
               </ul>
             </section>
+            <RightNow happenings={happenings} onFinish={(id, outcome) => void quick('finish_happening', { id, outcome })} />
             {constraints.length > 0 && (
               <section className="rounded-2xl bg-stone-100/80 p-4 flex flex-col gap-1 min-h-0">
                 <h2 className="text-xs font-medium uppercase tracking-wide text-stone-500">Unavailable / preferences ({constraints.length})</h2>

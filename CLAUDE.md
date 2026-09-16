@@ -3,7 +3,34 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 4 — Companion and room (spec renumbered 2026-09-16: 4 companion, 5 living activities, 6 calendar).
+## Current phase: Phase 5 — Living activities (slice 5a built 2026-09-16, testable). Phase 4 companion + room built and committed.
+
+## Phase 5a — happenings core (2026-09-16)
+- **Migration 5**: `happenings` (spec §3) + a `kind` column (addition: lets micro-rituals remember a "no" per kind). Deliberately
+  separate from `activities`: no happening ever calls `act()`; nothing about one is written to items/reminders/activities. Not undoable.
+- `src/shared/happenings.ts`: metaphor system (egg/tea/laundry/plant/download/focus → stage words; last stage = finished; the first
+  stage is only the opening 8 %; open-ended sits in stage two), `stageFor`, `formatRemaining`. Plain timer where no metaphor fits.
+- `src/main/happenings.ts`: deterministic recognition — `detectHappeningStart` ("I've put an egg on for 8 minutes", "started the
+  washing machine", "making tea", "starting a 25 minute focus session", "charging my phone", "I'm taking a shower", "set a 10 minute
+  timer") → {label, kind, metaphor, minutes|null}; refuses anything that reads as an obligation/alarm (need to, tomorrow, remind me).
+  `detectHappeningEnd` ("laundry's done", "egg's ready", "I'm out of the shower", "never mind the tea") → fragment + done|abandoned.
+  `parseDurationMinutes`, `kindForLabel`.
+- Tools `start_happening {label, minutes?, metaphor?, project_id?}` / `finish_happening {id?|label?, outcome}` (write tools →
+  transaction + extractions row, but NO activity). Duplicate label while running → "already on". Finishing something that already
+  ended → friendly "already finished at HH:MM" (matching prefers the most recent on a tie).
+- Router (before the availability rule, so "I'm out of the shower" is not a constraint): end phrases first (running match → finish;
+  recently ended match → REPLY "Yes — finished at …"), then start phrases. Repo: `insertHappening`, `runningHappenings`,
+  `dueHappenings`, `happeningsForWindow`, `finishHappening`, `recentlyEndedHappenings`, `matchHappening`.
+- Scheduler: `endDueHappenings` in tick and startup sweep — marks done, one plain toast (metaphor doneLine or "<label> — time's up."),
+  no buttons, "Finished at HH:MM, while I wasn't running" when noticed late. Log event `happening.ended`.
+- Context: "Happening right now" section. Prompt: four-way table (task / happening / reminder / resolved).
+- UI: `Happenings.tsx` `RightNow` card at the top of the rail — glyph, label, stage word, exact remaining/elapsed time ticking each
+  second, ✓ / × on hover; finished ones faded for 15 min. IPC `happenings:list`. Never in Open.
+- Verified on a scratch DB: egg 1 min → row, no item; "I need to do laundry tomorrow" → task; "started the washing machine" →
+  happening; "remind me to move the laundry in 45 minutes" → task + reminder; laundry's done / never mind the tea / out of the
+  shower → finished/dropped; egg expiry via startup sweep → toast; activities table has zero happening rows.
+- Next slices: 5b metaphor pictures + room reaction (creature at desk for focus, beside a kitchen object for cooking, reading while
+  waiting); 5c micro-rituals (offer a timer once, remember "no" per kind) + rationed personality lines (never repeated, never when struggling).
 Phase 3 slices 3a–3f built. **§11B TISS run passed end to end 2026-09-16** (steps 1–6, real quit + relaunch, steps 7–10) on a
 scratch database via `SECRETARY_USER_DATA` — one project, no duplicates, conditional follow-up Fri 14:00 with `unless_resolved`.
 Fixes that came out of it: "I haven't sent it yet" is a tier-0 no-op reply (it used to become a waiting item, and step 6 then

@@ -1,3 +1,5 @@
+import { detectHappeningStart, kindForLabel } from '../happenings'
+import { METAPHORS } from '../../shared/happenings'
 import { z } from 'zod'
 import { DateTime } from 'luxon'
 import { describeRRule as describeRule, firstOccurrence, normalizeRRule } from '../recurrence'
@@ -140,6 +142,17 @@ export const toolSchemas = {
     })
     .refine((v) => !!v.date_local || (!!v.starts_at_local && !!v.ends_at_local), 'Give date_local, or both starts_at_local and ends_at_local'),
   remove_constraint: z.object({ id: idRef.optional(), label: z.string().max(100).optional() }).refine((v) => !!v.id || !!v.label, 'Give id or label'),
+  start_happening: z.object({
+    label: z.string().min(1).max(80).describe('What is happening, in the user\'s words: "egg", "washing machine", "tea", "focus session", "shower".'),
+    minutes: z.number().int().min(1).max(24 * 60).optional().describe('How long it runs, ONLY if the user said so ("for 8 minutes"). Omit for open-ended.'),
+    metaphor: z.enum(['egg', 'tea', 'laundry', 'plant', 'download', 'focus']).optional().describe('Only when obvious. Omit otherwise; the app shows a plain timer.'),
+    project_id: idRef.optional().describe('Only if the happening is genuinely work on a tracked Thing (a focus session on it).')
+  }),
+  finish_happening: z.object({
+    id: idRef.optional(),
+    label: z.string().max(80).optional().describe('Words from the running happening ("egg", "the wash"). Omit only when exactly one thing is running.'),
+    outcome: z.enum(['done', 'abandoned']).default('done').describe('done = it finished / the user is done with it; abandoned = never mind.')
+  }),
   check_conflicts: z
     .object({
       starts_at_local: localDateTime.describe(DT_DESC),
@@ -254,6 +267,8 @@ const descriptions: Record<ToolName, string> = {
   remove_link: 'Remove a dependency.',
   add_constraint: 'Record when the user is unavailable or prefers/avoids a time ("I\'m busy tomorrow afternoon", "travelling Friday", "no mornings", "class every Tuesday 2–5"). Used to detect conflicts when booking.',
   remove_constraint: 'Remove an availability constraint ("I\'m free tomorrow afternoon after all").',
+  start_happening: 'Something is happening in the real world right now: "I\'ve put an egg on for 8 minutes", "started the washing machine", "making tea", "starting a focus session", "charging my phone", "I\'m showering". NOT a task, NOT an obligation, NOT history — it expires on its own. Minutes only if stated.',
+  finish_happening: 'A running happening ended: "laundry\'s done", "egg\'s ready", "I\'m out of the shower" (done) or "never mind the egg" (abandoned).',
   check_conflicts: 'What clashes with a proposed time. The app computes it; you phrase it.',
   update_note: 'Change the text of an existing note.',
   delete_note: 'Remove a note.',
@@ -283,6 +298,8 @@ const descriptions: Record<ToolName, string> = {
 }
 
 const WRITE_TOOLS: ReadonlySet<string> = new Set([
+  'start_happening',
+  'finish_happening',
   'add_link',
   'remove_link',
   'add_constraint',
@@ -600,6 +617,44 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       act({ targetType: 'link', targetId: `${from.id}|${to.id}|${x.type}`, verb: 'deleted', summary: `"${from.title}" no longer ${x.type === 'blocks' ? 'blocks' : 'relates to'} "${to.title}"`, before: { from: from.id, to: to.id, type: x.type } })
       const summary = `Unlinked "${from.title}" → "${to.title}"`
       return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `"${to.title}" no longer waits on "${from.title}".`, itemId: to.id } }
+    }
+    case 'start_happening': {
+      // Phase 5. Deliberately NO act(): a happening is not history, not an obligation, not undoable. Its own row is all there is.
+      const x = a as z.infer<typeof toolSchemas.start_happening>
+      const label = x.label.trim().replace(/[.!]+$/, '')
+      const detected = detectHappeningStart(label) ?? kindForLabel(label)
+      const kind = detected.kind
+      const metaphor = x.metaphor ?? detected.metaphor ?? null
+      const dup = repo.runningHappenings().find((h) => h.label.toLowerCase() === label.toLowerCase())
+      if (dup) {
+        const summary = `"${label}" is already running`
+        return { result: { ok: true, happening_id: shortId(dup.id), summary, already_running: true }, applied: { tool: name, summary, phrase: `"${capital(label)}" is already on${dup.ends_at ? ` — until ${formatClock(dup.ends_at)}` : ''}.` } }
+      }
+      const startedAt = new Date().toISOString()
+      const endsAt = x.minutes ? new Date(Date.now() + x.minutes * 60_000).toISOString() : null
+      const projectId = x.project_id ? repo.resolveItemId(x.project_id) : null
+      const h = repo.insertHappening({ label, kind, metaphor, startedAt, endsAt, projectId })
+      clearOffer()
+      const untilClock = endsAt ? DateTime.fromISO(endsAt, { zone: 'utc' }).toLocal().toFormat('HH:mm') : null
+      const summary = `Happening: ${label}${x.minutes ? ` · ${x.minutes} min (until ${untilClock})` : ' · open-ended'}`
+      const phrase = x.minutes ? `${capital(label)} — ${x.minutes} min, I'll say when it's ${metaphor === 'egg' || metaphor === 'tea' || kind === 'cooking' ? 'ready' : 'done'} (${untilClock}).` : `${capital(label)} — noted. Say when it's done.`
+      return { result: { ok: true, happening_id: shortId(h.id), summary, ends_at: endsAt }, applied: { tool: name, summary, phrase } }
+    }
+    case 'finish_happening': {
+      const x = a as z.infer<typeof toolSchemas.finish_happening>
+      const ref = x.id ?? x.label ?? ''
+      const h = repo.resolveRunningHappening(ref)
+      if (!h) {
+        const running = repo.runningHappenings()
+        const recent = repo.matchHappening(repo.recentlyEndedHappenings(new Date(Date.now() - 6 * 3600_000).toISOString()), ref, true)
+        if (recent) throw new Error(`the ${recent.label} already ${recent.state === 'done' ? 'finished' : 'was dropped'} at ${formatClock(recent.ends_at!).replace(/^.*? at /, '')}`)
+        throw new Error(running.length ? `nothing running matches "${ref}" — running now: ${running.map((r) => r.label).join(', ')}` : 'nothing is happening right now')
+      }
+      const ended = repo.finishHappening(h.id, x.outcome)!
+      const mins = Math.max(0, Math.round((new Date(ended.ends_at!).getTime() - new Date(h.started_at).getTime()) / 60_000))
+      const summary = x.outcome === 'done' ? `Finished: ${h.label}${mins ? ` (${mins} min)` : ''}` : `Dropped: ${h.label}`
+      const phrase = x.outcome === 'done' ? (h.metaphor && METAPHORS[h.metaphor] ? `${METAPHORS[h.metaphor].doneLine}` : `${capital(h.label)} — done.`) : `Okay, forgetting the ${h.label}.`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase } }
     }
     case 'add_constraint': {
       const x = a as z.infer<typeof toolSchemas.add_constraint>
@@ -1375,3 +1430,5 @@ export function inTransaction<T>(fn: () => T): T {
     throw e
   }
 }
+
+const capital = (s: string): string => (s ? s[0].toUpperCase() + s.slice(1) : s)

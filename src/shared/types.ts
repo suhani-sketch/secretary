@@ -76,6 +76,23 @@ export interface Constraint {
   created_at: string
 }
 
+/**
+ * A living activity (spec §8 Phase 5): something happening in the real world right now — an egg on, a wash running, a
+ * focus session. Never an item, never in Open, never history. Separate from `activities` on purpose.
+ */
+export interface Happening {
+  id: string
+  label: string
+  kind: string | null
+  metaphor: 'egg' | 'tea' | 'laundry' | 'plant' | 'download' | 'focus' | null
+  started_at: string
+  /** Null while open-ended ("I'm showering"). Set to the finish time when it ends. */
+  ends_at: string | null
+  state: 'running' | 'done' | 'abandoned'
+  project_id: string | null
+  created_at: string
+}
+
 export interface Link {
   from_item: string
   to_item: string
@@ -223,6 +240,8 @@ export interface SecretaryApi {
   /** Small persistent UI settings (scene choice etc.), stored in the settings table. */
   getSetting(key: string): Promise<string | null>
   setSetting(key: string, value: string): Promise<void>
+  /** Living activities: everything running now, plus ones that ended in the last few minutes (so the rail can fade them out). */
+  listHappenings(): Promise<Happening[]>
 }
 
 export const IPC = {
@@ -252,5 +271,6 @@ export const IPC = {
   activitiesForItem: 'activities:item',
   listConstraints: 'constraints:list',
   getSetting: 'settings:get',
-  setSetting: 'settings:set'
+  setSetting: 'settings:set',
+  listHappenings: 'happenings:list'
 } as const

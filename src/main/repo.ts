@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto'
 import { DateTime } from 'luxon'
 import { getDb } from './db'
 import type {
+  Happening,
   Activity,
   Actor,
   ChatMessage,
@@ -889,4 +890,77 @@ export function insertExtraction(messageId: string | null, toolsJson: string, ap
 
 export function listExtractions(limit = 30): ExtractionEntry[] {
   return getDb().prepare(`SELECT * FROM extractions ORDER BY created_at DESC LIMIT ?`).all(limit) as ExtractionEntry[]
+}
+
+// ---- Living activities (spec §8 Phase 5) --------------------------------------------------------------------------
+// Ephemeral by design. Nothing in here writes to `activities`, `items` or `reminders`, and nothing here is undoable.
+
+export function insertHappening(h: { label: string; kind: string | null; metaphor: Happening['metaphor']; startedAt: string; endsAt: string | null; projectId: string | null }): Happening {
+  const id = randomUUID()
+  getDb()
+    .prepare(`INSERT INTO happenings (id, label, kind, metaphor, started_at, ends_at, state, project_id, created_at) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?)`)
+    .run(id, h.label.trim(), h.kind, h.metaphor, h.startedAt, h.endsAt, h.projectId, nowIso())
+  return getHappening(id)!
+}
+
+export function getHappening(id: string): Happening | undefined {
+  return getDb().prepare('SELECT * FROM happenings WHERE id = ?').get(id) as Happening | undefined
+}
+
+export function runningHappenings(): Happening[] {
+  return getDb().prepare(`SELECT * FROM happenings WHERE state = 'running' ORDER BY started_at`).all() as Happening[]
+}
+
+/** Timed happenings whose time is up and that are still running — the scheduler ends these. */
+export function dueHappenings(nowUtcIso: string): Happening[] {
+  return getDb().prepare(`SELECT * FROM happenings WHERE state = 'running' AND ends_at IS NOT NULL AND ends_at <= ? ORDER BY ends_at`).all(nowUtcIso) as Happening[]
+}
+
+/** Running ones plus anything that ended after `sinceUtcIso`, newest first — what the window shows. */
+export function happeningsForWindow(sinceUtcIso: string): Happening[] {
+  return getDb()
+    .prepare(`SELECT * FROM happenings WHERE state = 'running' OR (ends_at IS NOT NULL AND ends_at >= ?) ORDER BY (state = 'running') DESC, started_at DESC LIMIT 12`)
+    .all(sinceUtcIso) as Happening[]
+}
+
+/** End a happening now. When it finishes early (or was open-ended), ends_at becomes the moment it ended. */
+export function finishHappening(id: string, state: 'done' | 'abandoned'): Happening | undefined {
+  const h = getHappening(id)
+  if (!h || h.state !== 'running') return h
+  const now = nowIso()
+  const endsAt = h.ends_at && h.ends_at <= now ? h.ends_at : now
+  getDb().prepare(`UPDATE happenings SET state = ?, ends_at = ? WHERE id = ?`).run(state, endsAt, id)
+  return getHappening(id)
+}
+
+/** Happenings that ended (done or dropped) after `sinceUtcIso`, newest first. */
+export function recentlyEndedHappenings(sinceUtcIso: string): Happening[] {
+  return getDb().prepare(`SELECT * FROM happenings WHERE state != 'running' AND ends_at >= ? ORDER BY ends_at DESC`).all(sinceUtcIso) as Happening[]
+}
+
+/** Find a running happening by id prefix, else by words in its label ("egg" → "eggs", "the wash" → "washing machine"). */
+export function resolveRunningHappening(ref: string): Happening | null {
+  return matchHappening(runningHappenings(), ref)
+}
+
+/** The same matching over any list: id prefix, else label/kind/metaphor word overlap; null when nothing or a tie. */
+export function matchHappening(running: Happening[], ref: string, preferFirstOnTie = false): Happening | null {
+  const r = ref.trim().toLowerCase()
+  if (!r) return running.length === 1 ? running[0] : null
+  const byId = running.filter((h) => h.id.startsWith(r))
+  if (byId.length === 1) return byId[0]
+  const stem = (w: string): string => w.replace(/(ing|ed|es|s)$/, '')
+  const refWords = r.split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !['the', 'and', 'for', 'with', 'from', 'that', 'this', 'timer'].includes(w)).map(stem)
+  if (!refWords.length) return running.length === 1 ? running[0] : null
+  const scored = running
+    .map((h) => {
+      const hw = `${h.label} ${h.kind ?? ''} ${h.metaphor ?? ''}`.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).map(stem)
+      const hits = refWords.filter((w) => hw.some((x) => x === w || x.startsWith(w) || w.startsWith(x))).length
+      return { h, hits }
+    })
+    .filter((s) => s.hits > 0)
+    .sort((a, b) => b.hits - a.hits)
+  if (scored.length === 1 || (scored.length > 1 && scored[0].hits > scored[1].hits)) return scored[0].h
+  if (scored.length > 1 && preferFirstOnTie) return scored[0].h
+  return null
 }

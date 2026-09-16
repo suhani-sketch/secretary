@@ -7,6 +7,7 @@ import { resolveEntity } from '../entity'
 import { PART_OF_DAY } from '../planning'
 import { log } from '../log'
 import type { Item, Reminder } from '../../shared/types'
+import { detectHappeningEnd, detectHappeningStart } from '../happenings'
 
 /**
  * Tier 0 router (spec §4): deterministic, no model call, instant.
@@ -235,6 +236,32 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     const offer = getOffer()
     if (offer?.kind === 'project_match') return [{ name: 'create_project', args: { title: offer.proposedTitle, force_new: true } }]
     return null
+  }
+
+  // ---- living activities (Phase 5): happenings start and end here, before "done" can turn them into item completions ----
+  // "egg's done" / "laundry's done" / "I'm out of the shower" → finish the running happening it names. Only when one is
+  // actually running and matches; otherwise the phrase means an item and falls through to the ordinary rules.
+  {
+    const end = detectHappeningEnd(text)
+    if (end) {
+      const running = repo.runningHappenings()
+      const h = end.fragment ? repo.matchHappening(running, end.fragment) : running.length === 1 ? running[0] : null
+      if (h) return [{ name: 'finish_happening', args: { id: h.id, outcome: end.outcome } }]
+      // "egg's done" after the timer already ended it: agree, don't fail — and don't let it become an item completion.
+      const recent = end.fragment ? repo.matchHappening(repo.recentlyEndedHappenings(new Date(Date.now() - 6 * 3600_000).toISOString()), end.fragment, true) : null
+      if (recent) {
+        const at = DateTime.fromISO(recent.ends_at!, { zone: 'utc' }).toLocal().toFormat('HH:mm')
+        return [{ name: REPLY, args: { text: recent.state === 'done' ? `Yes — the ${recent.label} finished at ${at}.` : `The ${recent.label} was dropped at ${at}; nothing is running for it.` } }]
+      }
+    }
+    // "I've put an egg on for 8 minutes" / "started the washing machine" / "making tea" / "starting a focus session".
+    const start = detectHappeningStart(text)
+    if (start) {
+      const args: Record<string, unknown> = { label: start.label }
+      if (start.minutes) args.minutes = start.minutes
+      if (start.metaphor) args.metaphor = start.metaphor
+      return [{ name: 'start_happening', args }]
+    }
   }
 
   // ---- availability (3f): "I'm busy tomorrow afternoon" / "I'm travelling on Friday" / "I'm out on the 20th" ----

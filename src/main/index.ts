@@ -465,6 +465,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.activitiesForProject, (_e, projectId: string, limit?: number) => repo.activitiesForProject(projectId, limit ?? 200))
   ipcMain.handle(IPC.activitiesForItem, (_e, itemId: string, limit?: number) => repo.activitiesFor('item', itemId, limit ?? 100))
   ipcMain.handle(IPC.listConstraints, () => repo.activeConstraints())
+  ipcMain.handle(IPC.listHappenings, () => repo.happeningsForWindow(new Date(Date.now() - 15 * 60_000).toISOString()))
   // UI settings (scene choice). Only whitelisted keys, so the renderer cannot touch anything else in the table.
   const UI_SETTING = /^scene\.(environment|timeOfDay)$|^companion\.[a-z_]+$/
   ipcMain.handle(IPC.getSetting, (_e, key: string) => {

@@ -198,6 +198,26 @@ const MIGRATIONS: { version: number; sql: string }[] = [
       ALTER TABLE reminders ADD COLUMN series_anchor_local TEXT;
       ALTER TABLE reminders ADD COLUMN series_tz TEXT;
     `
+  },
+  {
+    // Phase 5: living activities. Deliberately separate from `activities` (the permanent history log): a happening is
+    // ephemeral, never an obligation, never in Open, never undoable history. `kind` is an addition to the spec's columns
+    // so micro-rituals can remember a "no" per kind of happening.
+    version: 5,
+    sql: `
+      CREATE TABLE happenings (
+        id           TEXT PRIMARY KEY,
+        label        TEXT NOT NULL,
+        kind         TEXT,
+        metaphor     TEXT,
+        started_at   TEXT NOT NULL,
+        ends_at      TEXT,
+        state        TEXT NOT NULL DEFAULT 'running',
+        project_id   TEXT REFERENCES items(id) ON DELETE SET NULL,
+        created_at   TEXT NOT NULL
+      );
+      CREATE INDEX idx_happenings_state ON happenings(state, ends_at);
+    `
   }
 ]
 
