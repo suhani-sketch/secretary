@@ -20,7 +20,35 @@ Update it at the end of every session (spec §11).
   imports repo and moves to core when 6f touches it.
 - **Migration 7:** `plans` table; `events.plan_id`, `events.session_state`; index on `events.starts_at_utc`.
 
-## Phase 6a — aggregation and the day view (2026-09-16)
+## Phase 6a — redone against the full slice (2026-09-16, second pass)
+- **Day View Model** (`src/core/calendar/aggregate.ts`, `assembleDay(DayInputs) → DayBundle`): four states — `scheduled`
+  (occurrences with `span` single|starts|continues|ends), `unscheduled` (due, no time set aside), `overdue` (open, due before the
+  viewed day AND already overdue now — carried into today and every future date; never a projection of things not yet due),
+  `completed` (done or dropped that day; history, never load). `priorities: PriorityEntry[]` = item + score + reasons + overdue/
+  blocked/scheduled flags (`scoreItem`: overdue +50 always in, commitment +30, hard deadline +25, critical +30 / high +15, due
+  proximity, blocked −20, time-set-aside −10). Empty for past dates. `summary: DaySummary` = counts (priorities, due, scheduled,
+  reminders, overdue, completed, hard_deadlines, high_importance, commitments), scheduled/due-effort/available minutes,
+  conflicts (overlapping timed pairs), `status` (null for past dates). `notes: DayNote[]` = notes on the date + notes on items/
+  events appearing that day, each saying what it is on. `projects` = Things the day's items belong to. `history` = the day's
+  activities (past dates and today). `waiting` empty for past dates. `buildSummaries(from, days)` runs the same model per day
+  for Month/Week (6d).
+- **Migration 8:** `events.item_id` — a work block serves one obligation ("Thursday 6–8pm, case study" → work_block with item_id;
+  the task is then `scheduled`, not `unscheduled`, and its priority score drops). `create_event.item_id`, `end_date_local`
+  (multi-day all-day: ONE event, end exclusive), kind defaults to work_block when item_id is given.
+- **Multi-day:** router "I'm in Delhi Monday to Wednesday" → one all-day event; `spanFor` marks starts/continues/ends per day;
+  the day view lists spanning items under "All day" with the span word; grid titles carry "(continues)".
+- **Past dates:** no priorities/status/waiting; Completed and "What happened" (activities) shown; `get_day` says "looking back"
+  and reports reminder states. Router: "what did I do yesterday / what happened on monday" → get_day.
+- **Week start:** setting `calendar.weekStart` (0–6, default 1 Monday) → adapter `firstDay`; control in the day header.
+- Bugs fixed on the way: bare "note: thursday - …" now a DATE note (was attached to the focused item); "3:30" with no am/pm
+  read as 03:30 (now afternoon like a bare "3"); "cancel the dentist" failed because the model never saw events (context now
+  lists 14 days of occurrences with ids; tier-0 cancel-by-title added); the empty all-day "due" row in the day grid removed.
+- Verified on scratch DB c2: overdue-from-yesterday appears as the top priority today and on every future day; a task with a
+  work block leaves Due today and shows as "time set aside"; Delhi Mon–Wed is one event, "continues" on Tuesday; yesterday shows
+  no priorities and reads "looking back"; a completed item sits in Completed, not in load. §11C 23 and 24 exercised, 25 (week
+  start) built and persisted.
+
+## Phase 6a — first pass (2026-09-16)
 - Types: `CalendarEvent`, `Plan`, `EventOccurrence` (series row + `occurrence_start_utc`/`occurrence_end_utc`), `DayBundle`
   (date, status, scheduled_minutes, priorities, due, schedule, reminders, waiting, happenings, notes, completed, constraints).
 - Repo: `insertEvent/getEvent/updateEvent/deleteEventRow/restoreEvent/resolveEventId/eventsTouching/itemsForDay/

@@ -175,8 +175,10 @@ export const toolSchemas = {
       ends_at_local: localDateTime.optional().describe('End, if stated. Otherwise duration_minutes or a 60-minute default.'),
       duration_minutes: z.number().int().min(5).max(24 * 60).optional(),
       date_local: localDate.optional().describe('For an ALL-DAY event ("conference on Friday"). ' + DATE_DESC),
+      end_date_local: localDate.optional().describe('Last day, inclusive, of a MULTI-DAY all-day event ("in Delhi Monday to Wednesday" → date_local Monday, end_date_local Wednesday). One event, not three.'),
       rrule: rruleStr.optional().describe('Recurring series ("every Tuesday"): the RRULE; starts_at_local is the first occurrence.'),
       kind: z.enum(['commitment', 'work_block']).optional().describe('commitment = an appointment with others; work_block = time set aside for the user\'s own work. Omit for ordinary events.'),
+      item_id: idRef.optional().describe('For a work_block: the obligation this time is set aside for ("Thursday 6–8pm, case study" → the case study task).'),
       project_id: idRef.optional(),
       override_conflicts: z.boolean().optional().describe('Only after the user, told of a clash, says to book it anyway.')
     })
@@ -790,21 +792,34 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
           return { result: { ok: false, needs_confirmation: true, question }, confirm: { question, wouldAffect: hard.map(describeConflict) } }
         }
       } else {
+        // All-day, possibly spanning several days: ONE event whose end is the day after the last day (exclusive).
         const d = DateTime.fromISO(x.date_local!, { zone }).startOf('day')
+        const last = x.end_date_local ? DateTime.fromISO(x.end_date_local, { zone }).startOf('day') : d
+        if (last < d) throw new ToolValidationError('The last day is before the first day')
         startsAtUtc = d.toUTC().toISO()!
-        endsAtUtc = d.plus({ days: 1 }).toUTC().toISO()!
+        endsAtUtc = last.plus({ days: 1 }).toUTC().toISO()!
         allDay = true
       }
       const rr = validateRRule(x.rrule)
       const projectId = x.project_id ? repo.resolveItemId(x.project_id) : null
-      const ev = repo.insertEvent({ title: x.title, startsAtUtc, endsAtUtc, allDay, tz: zone, rrule: rr, projectId, kind: x.kind ?? null })
-      act({ targetType: 'event', targetId: ev.id, projectId, verb: 'created', summary: `Created event "${ev.title}" ${allDay ? formatDue(startsAtUtc, 'day') : formatClock(startsAtUtc)}${rr ? ` ${describeRRule(rr)}` : ''}`, after: ev })
+      const itemId = x.item_id ? repo.resolveItemId(x.item_id) : null
+      const servedItem = itemId ? repo.getItem(itemId) : undefined
+      const ev = repo.insertEvent({ title: x.title, startsAtUtc, endsAtUtc, allDay, tz: zone, rrule: rr, projectId: projectId ?? (servedItem ? (repo.parentProjectOf(servedItem.id)?.id ?? null) : null), kind: x.kind ?? (itemId ? 'work_block' : null), itemId })
+      const spanDays = allDay ? Math.round((DateTime.fromISO(endsAtUtc!).toMillis() - DateTime.fromISO(startsAtUtc).toMillis()) / 86_400_000) : 1
+      act({ targetType: 'event', targetId: ev.id, projectId: ev.project_id, verb: 'created', summary: `Created ${ev.kind ?? 'event'} "${ev.title}" ${allDay ? (spanDays > 1 ? `${formatDue(startsAtUtc, 'day')} – ${formatDue(DateTime.fromISO(endsAtUtc!, { zone: 'utc' }).minus({ days: 1 }).toISO()!, 'day')}` : formatDue(startsAtUtc, 'day')) : formatClock(startsAtUtc)}${rr ? ` ${describeRRule(rr)}` : ''}${servedItem ? ` for "${servedItem.title}"` : ''}`, after: ev })
       pushFocus(ev.id, ev.title, 'event created', 'event')
+      if (servedItem) pushFocus(servedItem.id, servedItem.title, 'time set aside')
       clearOffer()
-      const when = allDay ? formatDue(startsAtUtc, 'day') : `${formatClock(startsAtUtc)}–${DateTime.fromISO(endsAtUtc!, { zone: 'utc' }).toLocal().toFormat('HH:mm')}`
+      const when = allDay
+        ? spanDays > 1
+          ? `${formatDue(startsAtUtc, 'day')} to ${formatDue(DateTime.fromISO(endsAtUtc!, { zone: 'utc' }).minus({ days: 1 }).toISO()!, 'day')} (${spanDays} days)`
+          : formatDue(startsAtUtc, 'day')
+        : `${formatClock(startsAtUtc)}–${DateTime.fromISO(endsAtUtc!, { zone: 'utc' }).toLocal().toFormat('HH:mm')}`
       const softNote = x.starts_at_local ? conflictsFor(startsAtUtc, endsAtUtc!).filter((c) => !blockingConflicts([c]).length).map(describeConflict) : []
-      const summary = `Event "${ev.title}" · ${when}${rr ? ` · ${describeRRule(rr)}` : ''}${x.override_conflicts ? ' · booked over a clash as asked' : ''}`
-      const phrase = `${rr ? 'Recurring: ' : ''}"${ev.title}" is on the calendar, ${when}${rr ? ` ${describeRRule(rr)}` : ''}${x.override_conflicts ? ' (booked over the clash as you asked)' : ''}${softNote.length ? `. Note: it sits against ${softNote.join(' and ')}` : ''}.`
+      const summary = `${ev.kind === 'work_block' ? 'Work block' : 'Event'} "${ev.title}" · ${when}${servedItem ? ` · for "${servedItem.title}"` : ''}${rr ? ` · ${describeRRule(rr)}` : ''}${x.override_conflicts ? ' · booked over a clash as asked' : ''}`
+      const phrase = servedItem
+        ? `Time set aside for "${servedItem.title}": ${when}. The task itself is unchanged.${softNote.length ? ` Note: it sits against ${softNote.join(' and ')}.` : ''}`
+        : `${rr ? 'Recurring: ' : ''}"${ev.title}" is on the calendar, ${when}${rr ? ` ${describeRRule(rr)}` : ''}${x.override_conflicts ? ' (booked over the clash as you asked)' : ''}${softNote.length ? `. Note: it sits against ${softNote.join(' and ')}` : ''}.`
       return { result: { ok: true, event_id: shortId(ev.id), summary }, applied: { tool: name, summary, phrase } }
     }
     case 'update_event': {
@@ -898,15 +913,21 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       return {
         result: {
           date: d.date,
-          status: d.status,
-          scheduled_minutes: d.scheduled_minutes,
-          priorities: d.priorities.map((i) => ({ id: shortId(i.id), title: i.title, kind: i.kind, hardness: i.hardness, committed_to: i.committed_to ?? undefined })),
-          due: d.due.map((i) => ({ id: shortId(i.id), title: i.title, kind: i.kind })),
-          schedule: d.schedule.map((o) => ({ id: shortId(o.id), title: o.title, when: o.all_day ? 'all day' : `${formatClock(o.occurrence_start_utc).replace(/^.*? at /, '')}${o.occurrence_end_utc ? `–${DateTime.fromISO(o.occurrence_end_utc, { zone: 'utc' }).toLocal().toFormat('HH:mm')}` : ''}`, kind: o.kind })),
-          reminders: d.reminders.map((r) => ({ id: shortId(r.id), for: r.item_title ?? 'reminder', at: formatClock(r.fire_at_utc).replace(/^.*? at /, '') })),
+          is_past: d.summary.is_past,
+          status: d.summary.status,
+          scheduled_minutes: d.summary.scheduled_minutes,
+          priorities: d.priorities.map((p) => ({ id: shortId(p.item.id), title: p.item.title, kind: p.item.kind, why: p.reasons.join(', '), committed_to: p.item.committed_to ?? undefined })),
+          due: d.unscheduled.map((i) => ({ id: shortId(i.id), title: i.title, kind: i.kind })),
+          due_with_time_set_aside: d.scheduled
+            .filter((o) => o.item_id)
+            .map((o) => ({ title: o.title, item: repo.getItem(o.item_id!)?.title ?? o.title, when: `${formatClock(o.occurrence_start_utc).replace(/^.*? at /, '')}${o.occurrence_end_utc ? `–${DateTime.fromISO(o.occurrence_end_utc, { zone: 'utc' }).toLocal().toFormat('HH:mm')}` : ''}` })),
+          overdue: d.overdue.map((i) => ({ id: shortId(i.id), title: i.title, was_due: i.due_at_utc ? formatDue(i.due_at_utc, i.due_precision) : null })),
+          schedule: d.scheduled.map((o) => ({ id: shortId(o.id), title: o.title, when: o.all_day ? (o.span === 'single' ? 'all day' : o.span) : `${formatClock(o.occurrence_start_utc).replace(/^.*? at /, '')}${o.occurrence_end_utc ? `–${DateTime.fromISO(o.occurrence_end_utc, { zone: 'utc' }).toLocal().toFormat('HH:mm')}` : ''}`, kind: o.kind, span: o.span })),
+          reminders: d.reminders.map((r) => ({ id: shortId(r.id), for: r.item_title ?? 'reminder', at: formatClock(r.fire_at_utc).replace(/^.*? at /, ''), state: r.state })),
           waiting: d.waiting.map((w) => ({ who: w.waiting_on, about: w.details })),
-          notes: d.notes.map((n) => n.body),
-          completed: d.completed.map((i) => i.title)
+          notes: d.notes.map((n) => (n.on_kind === 'date' ? n.note.body : `${n.note.body} (on ${n.on})`)),
+          completed: d.completed.map((i) => i.title),
+          history: d.summary.is_past ? d.history.slice(0, 12).map((a) => a.summary) : undefined
         }
       }
     }

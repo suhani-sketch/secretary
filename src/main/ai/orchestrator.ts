@@ -275,19 +275,23 @@ function phraseReadResults(results: ToolResult[]): string | null {
         if (rest.length) lines.push(`Also: ${rest.slice(0, 4).map((h) => h.replace(/^.*?· \w+: /, '')).join('; ')}.`)
       }
     } else if (r.name === 'get_day') {
-      type D = { date: string; status: string; priorities: { title: string; kind: string; committed_to?: string }[]; due: { title: string }[]; schedule: { title: string; when: string }[]; reminders: { for: string; at: string }[]; waiting: { who: string | null; about: string | null }[]; notes: string[]; completed: string[] }
+      type D = { date: string; is_past: boolean; status: string | null; priorities: { title: string; why: string }[]; due: { title: string }[]; overdue: { title: string; was_due: string | null }[]; schedule: { title: string; when: string }[]; reminders: { for: string; at: string; state: string }[]; waiting: { who: string | null; about: string | null }[]; notes: string[]; completed: string[]; history?: string[] }
       const d = res as unknown as D
       const day = DateTime.fromISO(d.date).toFormat('cccc d LLL')
       const bits: string[] = []
-      if (d.schedule.length) bits.push(`Schedule: ${d.schedule.map((s) => `${s.title} ${s.when}`).join('; ')}.`)
-      else bits.push('Nothing scheduled.')
+      if (d.schedule.length) bits.push(`${d.is_past ? 'Scheduled' : 'Schedule'}: ${d.schedule.map((s) => `${s.title} ${s.when}`).join('; ')}.`)
+      else bits.push(d.is_past ? 'Nothing was scheduled.' : 'Nothing scheduled.')
       if (d.due.length) bits.push(`Due that day: ${d.due.map((x) => x.title).join(', ')}.`)
-      if (d.priorities.length) bits.push(`What matters most: ${d.priorities.map((p) => `${p.title}${p.committed_to ? ` (promised to ${p.committed_to})` : p.kind === 'deadline' ? ' (deadline)' : ''}`).join(', ')}.`)
-      if (d.reminders.length) bits.push(`Reminders: ${d.reminders.map((x) => `${x.for} at ${x.at}`).join(', ')}.`)
+      const dws = (res as unknown as { due_with_time_set_aside?: { item: string; when: string }[] }).due_with_time_set_aside ?? []
+      if (dws.length) bits.push(`Time set aside: ${dws.map((x) => `${x.item} ${x.when}`).join('; ')}.`)
+      if (d.overdue.length) bits.push(`Still open from earlier: ${d.overdue.map((x) => `${x.title}${x.was_due ? ` (was ${x.was_due})` : ''}`).join(', ')}.`)
+      if (d.priorities.length) bits.push(`What matters most: ${d.priorities.map((p) => `${p.title} — ${p.why}`).join('; ')}.`)
+      if (d.reminders.length) bits.push(`Reminders: ${d.reminders.map((x) => `${x.for} at ${x.at}${d.is_past && x.state !== 'pending' ? ` (${x.state})` : ''}`).join(', ')}.`)
       if (d.waiting.length) bits.push(`Still waiting on ${d.waiting.map((w) => w.who ?? 'someone').join(', ')}.`)
       if (d.notes.length) bits.push(`Notes: ${d.notes.join(' · ')}.`)
       if (d.completed.length) bits.push(`Done: ${d.completed.join(', ')}.`)
-      lines.push(`${day} looks ${d.status}. ${bits.join(' ')}`)
+      if (d.history?.length) bits.push(`That day: ${d.history.slice(0, 6).join('; ')}.`)
+      lines.push(d.is_past ? `${day}, looking back. ${bits.join(' ')}` : `${day} looks ${d.status ?? 'quiet'}. ${bits.join(' ')}`)
     } else if (r.name === 'get_calendar') {
       const c = res as unknown as { from: string; to: string; events: { title: string; when: string; end: string | null; recurring: boolean }[] }
       lines.push(c.events.length ? `On the calendar: ${c.events.map((e) => `${e.title} ${e.when}${e.end ? `–${e.end}` : ''}${e.recurring ? ' ↻' : ''}`).join('; ')}.` : `Nothing on the calendar between ${c.from} and ${c.to}.`)

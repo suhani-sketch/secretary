@@ -247,6 +247,12 @@ const MIGRATIONS: { version: number; sql: string }[] = [
       ALTER TABLE events ADD COLUMN session_state TEXT;
       CREATE INDEX idx_events_start ON events(starts_at_utc);
     `
+  },
+  {
+    // 6a: a work block can serve one obligation ("Thursday 6–8pm, case study"). Addition to the spec's columns so the Day
+    // View Model can tell a scheduled obligation from an unscheduled one without guessing by title.
+    version: 8,
+    sql: `ALTER TABLE events ADD COLUMN item_id TEXT REFERENCES items(id) ON DELETE SET NULL;`
   }
 ]
 

@@ -449,9 +449,13 @@ Primary window, conversation-first:
 └────────────────┴──┴────────────────────┴──┴──────────┘
 ```
 
-Secondary views, reachable but not the home screen: **Calendar**, **Today**, **Things**, **Settings**. Later: Memory, Search.
+Secondary views, reachable but not the home screen: **Calendar**, **Things**, **Settings**. Later: Memory, Search.
 
-**Today** answers "what actually matters today" — a few events, the live obligations, blockers, waiting items needing follow-up, and one suggested next action. Not a dashboard.
+**There is no separate Today view.** An earlier draft had one, and it collided with both the rail and the calendar's day view. Three surfaces showing overlapping versions of today is how an app stops being trustworthy — the user can't tell which is authoritative. The resolution:
+
+- **The rail** is the ambient glance beside the conversation: overdue, coming up, open, waiting, what's running right now. Enough to confirm the assistant recorded things. Never a dashboard.
+- **The calendar's day view** is the full picture of a date, today included, built from the Day View Model in §8 Phase 6a.
+- Both read the same records. Neither is a separate query.
 
 ### Manual editing is mandatory
 
@@ -601,11 +605,33 @@ A happening never enters `items`, never appears in Open, and never becomes an ob
 
 Build in slices.
 
-**6a — Aggregation and the day view.** For any date, assemble: timed events, all-day events, tasks and deadlines due, checklist items due, reminders, work blocks, commitments, waiting items needing attention, happenings, date-attached notes, and completed items. All from their existing records.
+**6a — Aggregation and the day view.** For any date, assemble a complete temporal representation from existing records: timed events, all-day events, tasks and deadlines due, checklist items due, reminders firing, work blocks, commitments, waiting items needing attention, relevant happenings, **notes attached to the date itself** as well as notes on the things appearing that day, completed items, relevant project context, and **unresolved overdue items carried in from earlier days**. Never create duplicate calendar records.
 
-**Tasks can appear on a day without occupying time.** A task due Thursday shows on Thursday; it does not silently consume thirty minutes of the schedule. Time-bound and date-bound are different things, and the day view needs a **Due today** area distinct from **Schedule**, or dateless obligations get lost.
+**One Day View Model, consumed by every view.** This is the most important instruction in the phase. Build a single function returning the complete state of a date. Day renders it directly; Week takes seven; Month takes summary versions; Agenda takes them chronologically. Four bespoke queries would drift apart and make every later addition a fourfold change.
 
-Day view structure: *Priorities → Due today → Schedule → Reminders and follow-ups → Notes → Completed (collapsed)*.
+**Nothing is converted into a calendar event to make it appear.** "Finish case study Thursday" is a task. "Thursday 6–8pm, case study" is a work block. "Remind me Thursday at 5" is a reminder. "Application due Thursday 5pm" is a deadline. They sit together in the day view and stay four different objects in four different shapes — invariant 5, restated here because this is the slice where it would be easiest to break.
+
+**Four states, not one list.** The model returns items grouped as `scheduled`, `unscheduled` (date-bound, no allocated time), `overdue`, `completed`. This is what makes 6e's unscheduled area and drag-to-schedule straightforward rather than a retrofit.
+
+**Tasks can appear on a day without occupying time.** A task due Thursday shows on Thursday; it is never assigned an arbitrary slot to make it visible. Time-bound and date-bound are different. The day view needs a **Due today** area distinct from **Schedule**, or dateless obligations get lost.
+
+**Computation happens here, deterministically, with no model call.** The Day View Model calculates: priority ordering (from importance, deadline proximity, `hardness`, overdue status, blocker state, whether it is a commitment, whether it is already scheduled), scheduled minutes, estimated due effort, counts of hard deadlines and high-importance obligations, available capacity, conflicts, and a day load status. 6c and 6d only *display* these. **Anything overdue and unresolved is pressing by definition** and must appear in priorities.
+
+**The model exposes a day summary**, not just a list: counts of priorities, due items, scheduled items, reminders and overdue items, plus the load status. Month view is built from exactly these numbers, which is why they are computed once here rather than derived separately per view.
+
+**Completed items are history, never workload.** Shown in a collapsed section, never counted as open obligations or toward the day's load.
+
+Day structure: *Priorities → Due today → Schedule → Reminders and follow-ups → Notes → Completed (collapsed)*.
+
+**Do not expand the UI beyond what 6a requires.** Build the aggregation cleanly; 6b–6f build the surfaces on top of it. Polishing the current layout instead of building the model is the failure mode for this slice.
+
+**Done when:** selecting any date produces a complete deterministic representation of everything due, scheduled, relevant or unresolved on it; date-bound tasks occupy no arbitrary slot; overdue items surface as priorities; completed items remain as history without counting as load; priorities and workload compute with no AI call; and the same Day View Model can serve Month, Week, Day and Agenda.
+
+**Also in 6a, easily missed:**
+
+- **Multi-day things.** "I'm in Delhi Monday to Wednesday" is one event spanning three days, not three events. It appears on each day it covers, marked as continuing rather than starting, and renders as a continuous band across month and week cells. The Day View Model must report whether a spanning item starts, continues or ends on the date being viewed.
+- **Past dates are first-class.** Navigating backwards shows what actually happened: completed items, fired reminders, resolved waiting items, finished happenings, and the day's activity history. The calendar is a record, not only a plan. Priorities and workload are not computed for past dates — there is nothing to prioritise.
+- **Week starts on Monday**, with a setting to change it. Do not hard-code Sunday.
 
 **6b — Day detail panel.** Clicking a day, event or task opens a side panel with the complete context for that date, directly editable. Complete, reschedule, cancel, snooze, add a note, change importance — all from here, all through the same tool layer. This is functional architecture, not decoration, which is why it is here rather than in Phase 9.
 
@@ -740,8 +766,13 @@ Run across a restart.
 21. A heavy day reads as busy or overloaded in month view, descriptively.
 22. Nothing existing was moved at any point without approval.
 
+**Spanning, past and week start**
+23. "I'm in Delhi Monday to Wednesday" → one event, shown on all three days, marked as continuing on Tuesday and Wednesday, rendered as a band in week and month.
+24. Navigate to a past date → completed items, fired reminders and that day's history are visible; no priorities are computed for it.
+25. The week starts on Monday, and the setting changes it.
+
 **Persistence**
-23. Restart. The whole calendar, plan and session states persist.
+26. Restart. The whole calendar, plan and session states persist.
 
 ### D. The application (Phase 8)
 1. "I need to submit my IIM application Monday at 5." → project + hard deadline

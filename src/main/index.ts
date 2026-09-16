@@ -474,7 +474,7 @@ function registerIpc(): void {
     return buildDay(dateLocal)
   })
   // UI settings (scene choice). Only whitelisted keys, so the renderer cannot touch anything else in the table.
-  const UI_SETTING = /^scene\.(environment|timeOfDay)$|^companion\.[a-z_]+$/
+  const UI_SETTING = /^scene\.(environment|timeOfDay)$|^companion\.[a-z_]+$|^calendar\.(weekStart|view)$/
   ipcMain.handle(IPC.getSetting, (_e, key: string) => {
     if (!UI_SETTING.test(key)) return null
     const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined

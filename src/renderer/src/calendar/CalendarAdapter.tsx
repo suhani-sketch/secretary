@@ -52,6 +52,8 @@ interface Props extends GridCallbacks {
   dayEndHour?: number
   /** Show the all-day row (the Due strip in week view). The day view has its own Due list and hides it. */
   allDayRow?: boolean
+  /** 0 = Sunday … 6 = Saturday. Monday by default (spec 6a), never hard-coded in views. */
+  weekStart?: number
 }
 
 const VIEW_NAME: Record<GridView, string> = { month: 'dayGridMonth', week: 'timeGridWeek', day: 'timeGridDay', list: 'listWeek' }
@@ -99,7 +101,7 @@ export function CalendarGrid(p: Props): React.JSX.Element {
       height="100%"
       expandRows
       nowIndicator
-      firstDay={1}
+      firstDay={p.weekStart ?? 1}
       slotMinTime={`${String(p.dayStartHour ?? 6).padStart(2, '0')}:00:00`}
       slotMaxTime={`${String(p.dayEndHour ?? 24).padStart(2, '0')}:00:00`}
       slotDuration="00:30:00"

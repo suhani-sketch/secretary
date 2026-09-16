@@ -1036,6 +1036,7 @@ export interface NewEvent {
   kind?: CalendarEvent['kind']
   planId?: string | null
   sessionState?: CalendarEvent['session_state']
+  itemId?: string | null
 }
 
 export function insertEvent(e: NewEvent): CalendarEvent {
@@ -1043,10 +1044,10 @@ export function insertEvent(e: NewEvent): CalendarEvent {
   const ts = nowIso()
   getDb()
     .prepare(
-      `INSERT INTO events (id, title, starts_at_utc, ends_at_utc, all_day, tz, rrule, exdates, project_id, kind, plan_id, session_state, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO events (id, title, starts_at_utc, ends_at_utc, all_day, tz, rrule, exdates, project_id, kind, plan_id, session_state, item_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(id, e.title.trim(), e.startsAtUtc, e.endsAtUtc, e.allDay ? 1 : 0, e.tz, e.rrule ?? null, e.projectId ?? null, e.kind ?? null, e.planId ?? null, e.sessionState ?? null, ts, ts)
+    .run(id, e.title.trim(), e.startsAtUtc, e.endsAtUtc, e.allDay ? 1 : 0, e.tz, e.rrule ?? null, e.projectId ?? null, e.kind ?? null, e.planId ?? null, e.sessionState ?? null, e.itemId ?? null, ts, ts)
   return getEvent(id)!
 }
 
@@ -1071,6 +1072,7 @@ export interface EventPatch {
   projectId?: string | null
   kind?: CalendarEvent['kind']
   sessionState?: CalendarEvent['session_state']
+  itemId?: string | null
 }
 
 export function updateEvent(id: string, p: EventPatch): CalendarEvent {
@@ -1089,6 +1091,7 @@ export function updateEvent(id: string, p: EventPatch): CalendarEvent {
   if (p.projectId !== undefined) set('project_id', p.projectId)
   if (p.kind !== undefined) set('kind', p.kind)
   if (p.sessionState !== undefined) set('session_state', p.sessionState)
+  if (p.itemId !== undefined) set('item_id', p.itemId)
   if (!sets.length) return getEvent(id)!
   set('updated_at', nowIso())
   vals.push(id)
@@ -1105,10 +1108,10 @@ export function deleteEventRow(id: string): void {
 export function restoreEvent(e: CalendarEvent): void {
   getDb()
     .prepare(
-      `INSERT OR REPLACE INTO events (id, title, starts_at_utc, ends_at_utc, all_day, tz, rrule, exdates, project_id, kind, plan_id, session_state, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT OR REPLACE INTO events (id, title, starts_at_utc, ends_at_utc, all_day, tz, rrule, exdates, project_id, kind, plan_id, session_state, item_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(e.id, e.title, e.starts_at_utc, e.ends_at_utc, e.all_day, e.tz, e.rrule, e.exdates, e.project_id, e.kind, e.plan_id, e.session_state, e.created_at, e.updated_at)
+    .run(e.id, e.title, e.starts_at_utc, e.ends_at_utc, e.all_day, e.tz, e.rrule, e.exdates, e.project_id, e.kind, e.plan_id, e.session_state, e.item_id, e.created_at, e.updated_at)
 }
 
 /** Series that could produce an occurrence in [from, to): one-offs overlapping it, and every recurring series that started before `to`. */
@@ -1133,9 +1136,10 @@ export function itemsForDay(fromUtc: string, toUtc: string): Item[] {
     .prepare(
       `SELECT * FROM items WHERE status != 'archived' AND kind != 'checklist_item' AND (
          (due_at_utc >= ? AND due_at_utc < ?) OR (status = 'open' AND due_at_utc < ?) OR (completed_at >= ? AND completed_at < ?)
+         OR (status = 'cancelled' AND updated_at >= ? AND updated_at < ?)
        ) ORDER BY due_at_utc`
     )
-    .all(fromUtc, toUtc, fromUtc, fromUtc, toUtc) as Item[]
+    .all(fromUtc, toUtc, fromUtc, fromUtc, toUtc, fromUtc, toUtc) as Item[]
 }
 
 export function remindersBetween(fromUtc: string, toUtc: string): Reminder[] {
@@ -1149,4 +1153,16 @@ export function remindersBetween(fromUtc: string, toUtc: string): Reminder[] {
 
 export function happeningsBetween(fromUtc: string, toUtc: string): Happening[] {
   return getDb().prepare(`SELECT * FROM happenings WHERE started_at < ? AND (state = 'running' OR COALESCE(ends_at, started_at) >= ?) ORDER BY started_at`).all(toUtc, fromUtc) as Happening[]
+}
+
+/** Everything recorded on a window of time, newest first — the day's history for past dates (spec 6a). */
+export function activitiesBetween(fromUtc: string, toUtc: string, limit = 200): Activity[] {
+  return getDb().prepare('SELECT * FROM activities WHERE created_at >= ? AND created_at < ? ORDER BY created_at DESC LIMIT ?').all(fromUtc, toUtc, limit) as Activity[]
+}
+
+/** Notes on many targets at once (items and events appearing on a day). */
+export function notesForMany(targetType: Note['target_type'], ids: string[]): Note[] {
+  if (!ids.length) return []
+  const marks = ids.map(() => '?').join(',')
+  return getDb().prepare(`SELECT * FROM notes WHERE target_type = ? AND target_id IN (${marks}) ORDER BY created_at`).all(targetType, ...ids) as Note[]
 }

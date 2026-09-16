@@ -110,6 +110,8 @@ export interface CalendarEvent {
   kind: 'commitment' | 'work_block' | 'session' | null
   plan_id: string | null
   session_state: 'planned' | 'done' | 'missed' | 'moved' | null
+  /** For a work block: the obligation it is time set aside for. */
+  item_id: string | null
   created_at: string
   updated_at: string
 }
@@ -292,22 +294,80 @@ export interface EventOccurrence extends CalendarEvent {
   occurrence_start_utc: string
   occurrence_end_utc: string | null
   is_recurring_instance: boolean
+  /** For an occurrence that spans several days: how it relates to the date being viewed (spec 6a "multi-day things"). */
+  span: 'single' | 'starts' | 'continues' | 'ends'
 }
 
-/** The day view's data (spec 6a). Assembled by src/core/calendar/aggregate.ts from existing records — nothing is copied. */
+export type DayStatus = 'light' | 'normal' | 'busy' | 'overloaded'
+
+/** A priority entry: the item plus WHY it ranks where it does, so views can show the reason and never a bare colour. */
+export interface PriorityEntry {
+  item: Item
+  score: number
+  reasons: string[]
+  overdue: boolean
+  blocked: boolean
+  scheduled: boolean
+}
+
+/** Counts computed once, consumed by Month/Week/Agenda (spec 6a "the model exposes a day summary"). */
+export interface DaySummary {
+  date: string
+  is_past: boolean
+  is_today: boolean
+  priorities: number
+  due: number
+  scheduled: number
+  reminders: number
+  overdue: number
+  completed: number
+  hard_deadlines: number
+  high_importance: number
+  commitments: number
+  scheduled_minutes: number
+  due_effort_minutes: number
+  available_minutes: number
+  conflicts: number
+  /** null for past dates — there is nothing to prioritise or load. */
+  status: DayStatus | null
+}
+
+/**
+ * The Day View Model (spec 6a): the complete state of one date, assembled deterministically from existing records with
+ * no model call. Day renders it; Week takes seven; Month takes `summary`; Agenda takes them chronologically. Four object
+ * kinds stay four shapes: tasks (`unscheduled`), work blocks/events (`scheduled`), reminders, deadlines (items with hardness).
+ */
 export interface DayBundle {
   date: string
-  status: 'light' | 'normal' | 'busy' | 'overloaded'
-  scheduled_minutes: number
-  priorities: Item[]
-  due: Item[]
-  schedule: EventOccurrence[]
+  summary: DaySummary
+  /** What matters on this day, ordered. Empty for past dates. Overdue-and-unresolved is always included. */
+  priorities: PriorityEntry[]
+  /** Time-bound: event occurrences, work blocks, sessions. Spanning items carry `span`. */
+  scheduled: EventOccurrence[]
+  /** Date-bound obligations due this day with no time set aside for them. Never occupy a slot. */
+  unscheduled: Item[]
+  /** Open obligations from earlier days, still unresolved, carried in (today and future dates only). */
+  overdue: Item[]
+  /** Finished on this day — history, never workload. */
+  completed: Item[]
   reminders: Reminder[]
   waiting: Item[]
   happenings: Happening[]
-  notes: Note[]
-  completed: Item[]
+  /** Notes attached to the date itself AND notes on the things appearing that day (with what they are on). */
+  notes: DayNote[]
+  /** Things (projects) that the day's items belong to, for context. */
+  projects: { project: Item; open_parts: number; items_today: string[] }[]
+  /** Unavailable/prefer/avoid windows touching the day, as concrete windows. */
   constraints: Constraint[]
+  /** What happened on this day (activities), newest first — the calendar is a record, not only a plan. */
+  history: Activity[]
+}
+
+export interface DayNote {
+  note: Note
+  /** "the date", or the title of the item/event the note is attached to. */
+  on: string
+  on_kind: 'date' | 'item' | 'event' | 'reminder'
 }
 
 export const IPC = {

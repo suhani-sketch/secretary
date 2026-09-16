@@ -45,7 +45,7 @@ export function expandEvents(events: CalendarEvent[], fromUtc: string, toUtc: st
     const durationMs = end ? end.toMillis() - start.toMillis() : e.all_day ? 24 * 3600_000 : 60 * 60_000
     if (!e.rrule) {
       const occEnd = start.plus({ milliseconds: durationMs })
-      if (occEnd > from && start < to) out.push({ ...e, occurrence_start_utc: e.starts_at_utc, occurrence_end_utc: e.ends_at_utc ?? occEnd.toISO()!, is_recurring_instance: false })
+      if (occEnd > from && start < to) out.push({ ...e, occurrence_start_utc: e.starts_at_utc, occurrence_end_utc: e.ends_at_utc ?? occEnd.toISO()!, is_recurring_instance: false, span: 'single' })
       continue
     }
     const zone = e.tz || 'utc'
@@ -68,7 +68,7 @@ export function expandEvents(events: CalendarEvent[], fromUtc: string, toUtc: st
       if (exdates.has(occStartIso)) continue
       const occEnd = occStart.plus({ milliseconds: durationMs })
       if (occEnd <= from || occStart >= to) continue
-      out.push({ ...e, occurrence_start_utc: occStartIso, occurrence_end_utc: occEnd.toISO()!, is_recurring_instance: true })
+      out.push({ ...e, occurrence_start_utc: occStartIso, occurrence_end_utc: occEnd.toISO()!, is_recurring_instance: true, span: 'single' })
     }
   }
   out.sort((a, b) => a.occurrence_start_utc.localeCompare(b.occurrence_start_utc))

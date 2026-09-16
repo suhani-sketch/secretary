@@ -68,6 +68,11 @@ export default function App(): React.JSX.Element {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   })
   const [refreshKey, setRefreshKey] = useState(0)
+  // Week start (spec 6a): Monday by default, a setting, never hard-coded in views.
+  const [weekStart, setWeekStart] = useState(1)
+  useEffect(() => {
+    void window.api.getSetting('calendar.weekStart').then((v) => v !== null && setWeekStart(Number(v)))
+  }, [])
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
@@ -459,6 +464,11 @@ export default function App(): React.JSX.Element {
               }}
               onQuick={quick}
               refreshKey={refreshKey}
+              weekStart={weekStart}
+              onChangeWeekStart={(n) => {
+                setWeekStart(n)
+                void window.api.setSetting('calendar.weekStart', String(n))
+              }}
             />
           </div>
         ) : (

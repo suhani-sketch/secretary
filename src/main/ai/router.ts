@@ -383,8 +383,21 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     if (when) return [{ name: 'add_note', args: { date_local: when.exact ? when.dateTime!.slice(0, 10) : when.date, body: restoreCase(m[2]) } }]
   }
 
+  // ---- multi-day (6a): "I'm in Delhi Monday to Wednesday" → ONE all-day event spanning the days, never three ----
+  if ((m = /^(?:i'?m|i am|i'?ll be|i will be|we'?re|we are) (?:going to be |away |off |travelling |traveling )?(?:in|at|to|visiting) (.+?) (?:from )?((?:next |this )?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today|the \d{1,2}(?:st|nd|rd|th)?(?: of \w+)?|\w+ \d{1,2}(?:st|nd|rd|th)?)) (?:to|until|till|through|-|–) ((?:next |this )?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|the \d{1,2}(?:st|nd|rd|th)?(?: of \w+)?|\w+ \d{1,2}(?:st|nd|rd|th)?))$/.exec(text))) {
+    const a = parseWhen(m[2])
+    const b = parseWhen(m[3])
+    if (a && b) {
+      const first = a.exact ? a.dateTime!.slice(0, 10) : a.date!
+      let last = b.exact ? b.dateTime!.slice(0, 10) : b.date!
+      if (last < first) last = DateTime.fromISO(last).plus({ weeks: 1 }).toISODate()! // "friday to monday" rolls forward
+      const place = restoreCase(m[1]).replace(/^(?:the )/i, '')
+      return [{ name: 'create_event', args: { title: `In ${place}`, date_local: first, end_date_local: last } }]
+    }
+  }
+
   // ---- calendar (6a): "meeting with Professor X Thursday at 3" → event; "what am I doing thursday?" → get_day ----
-  if ((m = /^(?:so,? )?(?:what(?:'s| is| am i doing| do i have| have i got)(?: on| for)?|anything(?: on)?|show me) (today|tomorrow|(?:this |next )?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|the \d{1,2}(?:st|nd|rd|th)?(?: of \w+)?|\w+ \d{1,2}(?:st|nd|rd|th)?)\??$/.exec(text))) {
+  if ((m = /^(?:so,? )?(?:what(?:'s| is| am i doing| do i have| have i got| did i do| happened| was)(?: on| for)?|anything(?: on)?|show me|how was) (today|tomorrow|yesterday|(?:this |next |last )?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|the \d{1,2}(?:st|nd|rd|th)?(?: of \w+)?|\w+ \d{1,2}(?:st|nd|rd|th)?)\??$/.exec(text))) {
     const when = parseWhen(m[1])
     if (when && !when.exact) return [{ name: 'get_day', args: { date_local: when.date } }]
     if (when?.exact) return [{ name: 'get_day', args: { date_local: when.dateTime!.slice(0, 10) } }]
@@ -450,6 +463,12 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     return [{ name: 'add_note', args: { item_id: target.id, body: restoreCase(m[2]) } }]
   }
   if ((m = /^note(?: to self)?[:\s]+(.+)$/.exec(text)) && !/^(?:to|on|for|about) /.test(m[1])) {
+    // "note: thursday - bring the signed copy" names a day up front → a note on that DATE, not on whatever is in focus.
+    const dated = /^(today|tomorrow|(?:this |next )?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|the \d{1,2}(?:st|nd|rd|th)?(?: of \w+)?|\w+ \d{1,2}(?:st|nd|rd|th)?)\s*[:\-–—,]\s*(.+)$/.exec(m[1])
+    if (dated) {
+      const when = parseWhen(dated[1])
+      if (when) return [{ name: 'add_note', args: { date_local: when.exact ? when.dateTime!.slice(0, 10) : when.date, body: restoreCase(dated[2]) } }]
+    }
     const top = getFocus()[0]
     const item = top ? repo.getItem(top.itemId) : undefined
     if (item && item.status !== 'done' && item.status !== 'cancelled') return [{ name: 'add_note', args: { item_id: item.id, body: restoreCase(m[1]) } }]
