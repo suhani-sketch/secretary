@@ -124,9 +124,10 @@ export const toolSchemas = {
       item_id: idRef.optional().describe('Attach to this item/project/waiting item (id from the context).'),
       item_title: z.string().max(200).optional().describe('Or the item/project as the user named it ("the application"); the app matches it.'),
       reminder_id: idRef.optional().describe('Attach to a reminder.'),
+      event_id: idRef.optional().describe('Attach to a calendar event ("bring the slides" on the meeting).'),
       date_local: localDate.optional().describe('Attach to a day instead of an item: "I\'ll be travelling Friday" → that Friday. ' + DATE_DESC)
     })
-    .refine((v) => [v.item_id, v.item_title, v.reminder_id, v.date_local].filter(Boolean).length === 1, 'Give exactly one target: item_id, item_title, reminder_id or date_local'),
+    .refine((v) => [v.item_id, v.item_title, v.reminder_id, v.event_id, v.date_local].filter(Boolean).length === 1, 'Give exactly one target: item_id, item_title, reminder_id, event_id or date_local'),
   add_link: z
     .object({
       from_id: idRef.describe('For type blocks: the item that must be done FIRST (the blocker).'),
@@ -981,7 +982,11 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       let targetId: string
       let label: string
       let projectId: string | null = null
-      if (x.date_local) {
+      if (x.event_id) {
+        targetType = 'event'
+        targetId = repo.resolveEventId(x.event_id)
+        label = `"${repo.getEvent(targetId)?.title ?? 'that event'}"`
+      } else if (x.date_local) {
         targetType = 'date'
         targetId = x.date_local
         label = formatDue(repo.resolveDue(x.date_local, null).dueAtUtc, 'day')

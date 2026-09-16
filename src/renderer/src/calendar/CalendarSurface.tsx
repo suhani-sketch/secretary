@@ -1,11 +1,16 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { DayBundle, DayStatus, Item } from '../../../shared/types'
 import { DayView } from './DayView'
+import { DayPanel } from './DayPanel'
+import type { Selection } from './selection'
 
 /**
  * The Calendar surface (spec §7): its own full-width screen, switched to from the navigation — never a column inside the
  * conversation layout, and never with the conversation's rail beside it. Header: date navigation, Month / Week / Day /
  * Agenda. Only Day works in 6a; the other three are placeholders until 6d, and say so.
+ *
+ * 6b: clicking the day, an event, a task or a reminder opens the day detail panel on the right, with the complete context
+ * for the date, directly editable through the tool layer.
  */
 
 export type CalendarMode = 'month' | 'week' | 'day' | 'agenda'
@@ -17,10 +22,12 @@ interface Props {
   onChangeMode: (m: CalendarMode) => void
   weekStart: number
   onChangeWeekStart: (n: number) => void
-  onOpenItem: (item: Item) => void
-  onOpenEvent: (eventId: string) => void
+  /** Hands an item to the full editor (title, details, kind, recurrence…) for fields the panel does not carry. */
+  onOpenEditor: (item: Item) => void
   onQuick: (tool: string, args: Record<string, unknown>) => Promise<void>
   refreshKey: number
+  /** Dev hook: open the panel on load. */
+  initialSelection?: Selection | null
 }
 
 const addDays = (d: string, n: number): string => {
@@ -45,9 +52,16 @@ const MODES: { id: CalendarMode; label: string }[] = [
 ]
 
 export function CalendarSurface(p: Props): React.JSX.Element {
-  const [summary, setSummary] = useState<DayBundle['summary'] | null>(null)
+  const [day, setDay] = useState<DayBundle | null>(null)
+  const [selection, setSelection] = useState<Selection | null>(p.initialSelection ?? null)
   const isToday = p.dateLocal === todayLocal()
   const step = p.mode === 'month' ? 30 : p.mode === 'week' || p.mode === 'agenda' ? 7 : 1
+  // Changing the date closes a thing-level selection but keeps the panel open on the new date if it was open.
+  useEffect(() => {
+    setSelection((s) => (s ? { kind: 'date' } : s))
+  }, [p.dateLocal])
+  const summary = day?.summary ?? null
+
   return (
     <div className="flex flex-col min-h-0 h-full gap-4">
       {/* header: date navigation · status · view controls */}
@@ -63,10 +77,10 @@ export function CalendarSurface(p: Props): React.JSX.Element {
             ›
           </button>
         </div>
-        <h1 className="text-xl font-semibold tracking-tight truncate min-w-0">
+        <button className="text-xl font-semibold tracking-tight truncate min-w-0 text-left hover:text-[#8B6A55]" onClick={() => setSelection((s) => (s?.kind === 'date' ? null : { kind: 'date' }))} title="Open the day panel">
           {longDate(p.dateLocal)}
           {summary?.is_past && <span className="text-sm text-stone-400 font-normal"> · looking back</span>}
-        </h1>
+        </button>
         {summary?.status && p.mode === 'day' && (
           <span className={`text-xs rounded-full px-2 py-0.5 whitespace-nowrap ${STATUS_TONE[summary.status]}`} title={`${hours(summary.scheduled_minutes)} scheduled · ${summary.due} due · ${summary.overdue} overdue · ~${hours(summary.due_effort_minutes)} of due work · ${hours(summary.available_minutes)} available${summary.conflicts ? ` · ${summary.conflicts} clash${summary.conflicts === 1 ? '' : 'es'}` : ''}`}>
             {STATUS_WORD[summary.status]}
@@ -91,18 +105,21 @@ export function CalendarSurface(p: Props): React.JSX.Element {
         </div>
       </header>
 
-      {/* body */}
-      <div className="flex-1 min-h-0 rounded-3xl bg-white/50 p-5">
-        {p.mode === 'day' ? (
-          <DayView dateLocal={p.dateLocal} onOpenItem={p.onOpenItem} onOpenEvent={p.onOpenEvent} onQuick={p.onQuick} refreshKey={p.refreshKey} weekStart={p.weekStart} onLoaded={(b) => setSummary(b.summary)} />
-        ) : (
-          <div className="h-full flex items-center justify-center text-center text-stone-400 text-sm">
-            <div>
-              <div className="text-base text-stone-500 mb-1">{MODES.find((m) => m.id === p.mode)?.label} view arrives in slice 6d.</div>
-              <div>It will be built from the same Day View Model that Day uses — {p.mode === 'month' ? 'one summary per day: workload, deadlines, gaps' : p.mode === 'week' ? 'seven days side by side, for planning' : 'the days in order, as a list'}.</div>
+      {/* body: the view, with the day panel beside it when something is selected */}
+      <div className={`flex-1 min-h-0 grid gap-4 ${selection && day ? 'grid-cols-[minmax(0,1fr)_360px]' : 'grid-cols-1'}`}>
+        <div className="min-h-0 rounded-3xl bg-white/50 p-5">
+          {p.mode === 'day' ? (
+            <DayView dateLocal={p.dateLocal} onSelect={setSelection} selection={selection} onQuick={p.onQuick} refreshKey={p.refreshKey} weekStart={p.weekStart} onLoaded={setDay} />
+          ) : (
+            <div className="h-full flex items-center justify-center text-center text-stone-400 text-sm">
+              <div>
+                <div className="text-base text-stone-500 mb-1">{MODES.find((m) => m.id === p.mode)?.label} view arrives in slice 6d.</div>
+                <div>It will be built from the same Day View Model that Day uses — {p.mode === 'month' ? 'one summary per day: workload, deadlines, gaps' : p.mode === 'week' ? 'seven days side by side, for planning' : 'the days in order, as a list'}.</div>
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
+        {selection && day && <DayPanel day={day} selection={selection} onSelect={setSelection} onQuick={p.onQuick} onOpenEditor={p.onOpenEditor} onClose={() => setSelection(null)} />}
       </div>
     </div>
   )

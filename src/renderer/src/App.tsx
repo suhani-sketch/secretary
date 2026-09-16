@@ -186,7 +186,7 @@ export default function App(): React.JSX.Element {
     if (light) setTimeChoice(light[1] as TimeChoice)
     if (hash === 'calendar' || hash.startsWith('calendar:')) {
       setSurface('calendar')
-      const d = /^calendar:(\d{4}-\d{2}-\d{2})$/.exec(hash)
+      const d = /^calendar:(\d{4}-\d{2}-\d{2})/.exec(hash)
       if (d) setCalDate(d[1])
     } else if (hash === 'project' || hash === 'timeline') {
       const p = items.find((i) => i.kind === 'project' && i.status !== 'archived')
@@ -429,18 +429,10 @@ export default function App(): React.JSX.Element {
               setWeekStart(n)
               void window.api.setSetting('calendar.weekStart', String(n))
             }}
-            onOpenItem={(it) => setEditing(it.kind === 'project' ? { kind: 'project', project: it } : { kind: 'item', item: it })}
-            onOpenEvent={(eventId) => {
-              // Event editing arrives with the day panel (6b) and manipulation (6e). Until then the conversation is the editor.
-              void window.api.listEvents(`${calDate}T00:00:00.000Z`, `${calDate}T23:59:59.000Z`).then((occ) => {
-                const ev = occ.find((o) => o.id === eventId)
-                setSurface('conversation')
-                setDraft(`Move "${ev?.title ?? 'that event'}" to `)
-                setTimeout(() => inputRef.current?.focus(), 50)
-              })
-            }}
+            onOpenEditor={(it) => setEditing(it.kind === 'project' ? { kind: 'project', project: it } : { kind: 'item', item: it })}
             onQuick={quick}
             refreshKey={refreshKey}
+            initialSelection={hashParts['panel'] ? { kind: 'date' } : null}
           />
         </div>
       )}

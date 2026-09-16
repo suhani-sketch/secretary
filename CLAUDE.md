@@ -20,6 +20,22 @@ Update it at the end of every session (spec §11).
   imports repo and moves to core when 6f touches it.
 - **Migration 7:** `plans` table; `events.plan_id`, `events.session_state`; index on `events.starts_at_utc`.
 
+## Phase 6b — day detail panel (2026-09-16)
+- `calendar/DayPanel.tsx` opens on the right of the Calendar surface when the date title, a task, an event or a reminder is
+  clicked (`calendar/selection.ts`: date | item | event(+occurrence) | reminder | happening). Header: the date and the summary
+  counts. Top: the selected thing, editable — item: ✓ Done, ↻ Tomorrow, Cancel, Full editor…, Reschedule (date + optional time
+  → `update_item due_at_local|due_date_local`), Importance (critical/high/normal/low → `update_item importance`), add a note
+  (`add_note item_id`); event: rename on blur (`update_event title`), Move date/start/end (`update_event`, with
+  `occurrence_start_local` for one occurrence of a series), Skip this one / Cancel series… / Cancel event (`delete_event`),
+  ✓ Task done for a work block's item, add a note (`add_note event_id` — new target); reminder: ↻ 15 min / 1 h / Tomorrow
+  (`snooze_reminder`), Move (`update_reminder fire_at_local`), Cancel alarm (`cancel_reminder`). Then a note on the date itself,
+  then the rest of the day as selectable rows (Priorities, Due, Schedule, Reminders, Notes, Completed). Everything goes through
+  `quick` → `runTool` → the same tool layer, so each change lands in `activities` and the model sees it.
+- `DayView` no longer opens editors itself: every row/grid entry selects for the panel. Dev hook `SECRETARY_VIEW=calendar:<date>,panel:date`.
+- Verified by screenshot on scratch c2 (Thursday): panel shows 4 pressing · 3 due · 2 scheduled · 1 reminder · 1 overdue with the
+  day's rows; "add a note to the meeting with professor x: bring the slides" attached to the event via the new target.
+  §11C 10 exercised; 11 (complete from the panel → gone from Open, still in history) uses the existing complete_item path.
+
 ## Phase 6a — third pass: the Calendar surface (2026-09-16)
 - **Surfaces (spec §7):** `App.tsx` now has a top navigation — Conversation · Calendar · Things · Settings — and renders ONE
   surface at a time. Conversation is the old three-zone layout (room · conversation · rail). Calendar is

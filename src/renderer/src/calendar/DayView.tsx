@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { DayBundle, Item, PriorityEntry } from '../../../shared/types'
 import { formatDue } from '../../../shared/format'
 import { CalendarGrid, type GridEntry } from './CalendarAdapter'
+import type { Selection } from './selection'
 
 /**
  * Day view (spec §8 6a): renders the Day View Model directly. Priorities → Due today → Schedule → Reminders and
@@ -11,8 +12,9 @@ import { CalendarGrid, type GridEntry } from './CalendarAdapter'
 
 interface Props {
   dateLocal: string
-  onOpenItem: (item: Item) => void
-  onOpenEvent: (eventId: string) => void
+  /** Clicking anything selects it for the day panel (6b); the panel carries the editors. */
+  onSelect: (s: Selection) => void
+  selection: Selection | null
   onQuick: (tool: string, args: Record<string, unknown>) => Promise<void>
   refreshKey: number
   /** 0 = Sunday … 6 = Saturday. */
@@ -37,7 +39,9 @@ export function importanceMark(i: Item): { glyph: string; word: string; tone: st
   return { glyph: '•', word: 'normal', tone: 'text-stone-600' }
 }
 
-export function DayView({ dateLocal, onOpenItem, onOpenEvent, onQuick, refreshKey, weekStart, onLoaded }: Props): React.JSX.Element {
+export function DayView({ dateLocal, onSelect, selection, onQuick, refreshKey, weekStart, onLoaded }: Props): React.JSX.Element {
+  const onOpenItem = (i: Item): void => onSelect({ kind: 'item', id: i.id })
+  const isSel = (kind: Selection['kind'], id: string): boolean => !!selection && selection.kind === kind && 'id' in selection && selection.id === id
   const [day, setDay] = useState<DayBundle | null>(null)
   const [showDone, setShowDone] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
@@ -89,19 +93,19 @@ export function DayView({ dateLocal, onOpenItem, onOpenEvent, onQuick, refreshKe
             {!s.is_past && (
               <Section title="Priorities" empty="Nothing pressing." count={day.priorities.length}>
                 {day.priorities.map((p) => (
-                  <PriorityRow key={p.item.id} p={p} onOpen={onOpenItem} onDone={() => void onQuick('complete_item', { id: p.item.id })} />
+                  <PriorityRow key={p.item.id} p={p} active={isSel('item', p.item.id)} onOpen={onOpenItem} onDone={() => void onQuick('complete_item', { id: p.item.id })} />
                 ))}
               </Section>
             )}
             <Section title="Due today" empty="Nothing due." count={day.unscheduled.length} hint="date-bound · no time taken from the schedule">
               {day.unscheduled.map((i) => (
-                <ItemRow key={i.id} item={i} onOpen={onOpenItem} onDone={() => void onQuick('complete_item', { id: i.id })} />
+                <ItemRow key={i.id} item={i} active={isSel('item', i.id)} onOpen={onOpenItem} onDone={() => void onQuick('complete_item', { id: i.id })} />
               ))}
             </Section>
             {spanning.length > 0 && (
               <Section title="All day" empty="" count={spanning.length}>
                 {spanning.map((o) => (
-                  <li key={`${o.id}:${o.occurrence_start_utc}`} className="text-sm flex items-center gap-2 px-1 py-0.5 rounded hover:bg-white/70 cursor-pointer" onClick={() => onOpenEvent(o.id)}>
+                  <li key={`${o.id}:${o.occurrence_start_utc}`} className={`text-sm flex items-center gap-2 px-1 py-0.5 rounded cursor-pointer ${isSel('event', o.id) ? 'bg-white ring-1 ring-[#3A2E28]/30' : 'hover:bg-white/70'}`} onClick={() => onSelect({ kind: 'event', id: o.id, occurrenceStartUtc: o.occurrence_start_utc })}>
                     <span className="text-xs">▬</span>
                     <span className="flex-1 break-words">{o.title}</span>
                     <span className="text-[10px] text-stone-400">{o.span === 'single' ? 'all day' : o.span}</span>
@@ -111,7 +115,7 @@ export function DayView({ dateLocal, onOpenItem, onOpenEvent, onQuick, refreshKe
             )}
             <Section title="Reminders and follow-ups" empty="No reminders." count={day.reminders.length + day.waiting.length}>
               {day.reminders.map((r) => (
-                <li key={r.id} className="text-sm flex items-center gap-2 px-1 py-0.5">
+                <li key={r.id} className={`text-sm flex items-center gap-2 px-1 py-0.5 rounded cursor-pointer ${isSel('reminder', r.id) ? 'bg-white ring-1 ring-[#3A2E28]/30' : 'hover:bg-white/70'}`} onClick={() => onSelect({ kind: 'reminder', id: r.id })}>
                   <span className="text-xs">🔔</span>
                   <span className="flex-1 break-words">{r.item_title ?? 'Reminder'}</span>
                   <span className="text-xs text-stone-500 tabular-nums">{clock(r.fire_at_utc)}</span>
@@ -202,7 +206,10 @@ export function DayView({ dateLocal, onOpenItem, onOpenEvent, onQuick, refreshKe
                 weekStart={weekStart}
                 renderEntry={(e) => <GridEntryContent entry={e} />}
                 onEntryClick={(e) => {
-                  if (e.kind === 'event' || e.kind === 'commitment' || e.kind === 'work_block' || e.kind === 'session') onOpenEvent((e.data as { id: string }).id)
+                  if (e.kind === 'event' || e.kind === 'commitment' || e.kind === 'work_block' || e.kind === 'session') {
+                    const o = e.data as { id: string; occurrence_start_utc: string }
+                    onSelect({ kind: 'event', id: o.id, occurrenceStartUtc: o.occurrence_start_utc })
+                  } else if (e.kind === 'happening') onSelect({ kind: 'happening', id: (e.data as { id: string }).id })
                 }}
               />
             </div>
@@ -225,16 +232,16 @@ function Section({ title, count, empty, hint, children }: { title: string; count
   )
 }
 
-function PriorityRow({ p, onOpen, onDone }: { p: PriorityEntry; onOpen: (i: Item) => void; onDone: () => void }): React.JSX.Element {
+function PriorityRow({ p, onOpen, onDone, active }: { p: PriorityEntry; onOpen: (i: Item) => void; onDone: () => void; active?: boolean }): React.JSX.Element {
   const mark = importanceMark(p.item)
   return (
-    <li className="group text-sm flex items-start gap-2 rounded-lg px-1 py-1 hover:bg-white/80 cursor-pointer" onClick={() => onOpen(p.item)}>
+    <li className={`group text-sm flex items-start gap-2 rounded-lg px-1 py-1 cursor-pointer ${active ? 'bg-white ring-1 ring-[#3A2E28]/30' : 'hover:bg-white/80'}`} onClick={() => onOpen(p.item)}>
       <span className={`w-4 text-center ${p.overdue ? 'text-amber-800' : mark.tone}`} title={p.reasons.join(', ')} aria-label={p.reasons.join(', ')}>
         {p.overdue ? '⚠' : mark.glyph}
       </span>
       <div className="min-w-0 flex-1">
         <div className="break-words leading-snug">{p.item.title}</div>
-        <div className={`text-xs truncate ${p.overdue ? 'text-amber-800' : 'text-stone-500'}`}>
+        <div className={`text-xs break-words ${p.overdue ? 'text-amber-800' : 'text-stone-500'}`}>
           {p.overdue && p.item.due_at_utc ? `was due ${formatDue(p.item.due_at_utc, p.item.due_precision)}` : p.reasons.filter((r) => r !== 'overdue').join(' · ') || mark.word}
           {p.blocked ? ' · blocked' : ''}
         </div>
@@ -253,16 +260,16 @@ function PriorityRow({ p, onOpen, onDone }: { p: PriorityEntry; onOpen: (i: Item
   )
 }
 
-function ItemRow({ item, onOpen, onDone }: { item: Item; onOpen: (i: Item) => void; onDone: () => void }): React.JSX.Element {
+function ItemRow({ item, onOpen, onDone, active }: { item: Item; onOpen: (i: Item) => void; onDone: () => void; active?: boolean }): React.JSX.Element {
   const mark = importanceMark(item)
   return (
-    <li className="group text-sm flex items-start gap-2 rounded-lg px-1 py-1 hover:bg-white/80 cursor-pointer" onClick={() => onOpen(item)}>
+    <li className={`group text-sm flex items-start gap-2 rounded-lg px-1 py-1 cursor-pointer ${active ? 'bg-white ring-1 ring-[#3A2E28]/30' : 'hover:bg-white/80'}`} onClick={() => onOpen(item)}>
       <span className={`w-4 text-center ${mark.tone}`} title={mark.word} aria-label={mark.word}>
         {mark.glyph}
       </span>
       <div className="min-w-0 flex-1">
         <div className="break-words leading-snug">{item.title}</div>
-        <div className="text-xs text-stone-500 truncate">
+        <div className="text-xs text-stone-500 break-words">
           {mark.word}
           {item.kind !== 'task' && item.kind !== 'commitment' ? ` · ${item.kind}` : ''}
         </div>
