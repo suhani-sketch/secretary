@@ -538,9 +538,11 @@ const findTwin = (title: string, pool: Item[]): Item | null => {
   const a = new Set(tokens(title))
   const b = new Set(tokens(res.entity.title))
   if (!a.size || !b.size) return null
-  // Containment needs substance on both sides: "TISS" inside "Email TISS about the mailing" is not the same thing.
-  const contained = Math.min(a.size, b.size) >= 2 && ([...a].every((w) => b.has(w)) || [...b].every((w) => a.has(w)))
-  return res.kind === 'match' && (res.score >= 0.9 || contained) ? res.entity : null
+  // Containment needs substance on both sides and almost nothing extra on the longer one: "TISS" inside "Email TISS about
+  // the mailing" is not the same thing, and neither is "Umar Khalid screening" inside "Book room for Umar Khalid screening".
+  const contained = Math.min(a.size, b.size) >= 2 && Math.abs(a.size - b.size) <= 1 && ([...a].every((w) => b.has(w)) || [...b].every((w) => a.has(w)))
+  // 0.9 is exactly what one title fully inside another scores (containment × 0.9), so the bar sits above it.
+  return res.kind === 'match' && (res.score >= 0.95 || contained) ? res.entity : null
 }
 const strip = (r: Reminder): Omit<Reminder, 'item_title'> => {
   const { item_title: _t, ...rest } = r

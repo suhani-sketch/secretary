@@ -60,9 +60,13 @@ export interface Recommendation {
   /** Why each open thing was set aside — used when nothing can start, and to explain the ranking. */
   excluded: { candidate: NowCandidate; why: string }[]
   none_reason: string | null
+  energy_low: boolean
 }
 
 const MIN_START_MINUTES = 15
+
+/** Something the user attends at a fixed time (a screening, a meeting, a class) is not work that can be started. */
+export const ATTENDANCE = /\b(screening|meeting|class|lecture|tutorial|seminar|workshop|appointment|dentist|doctor|interview|viva|exam|flight|train|party|wedding|dinner|lunch|brunch|concert|show|gig|match|game|ceremony|premiere|conference|webinar|talk|standup|stand-up|call with)\b/i
 
 export const bandFor = (nowUtc: string, zone: string): Band => {
   const h = DateTime.fromISO(nowUtc, { zone: 'utc' }).setZone(zone).hour
@@ -115,6 +119,18 @@ export function recommendNow(inp: NowInput): Recommendation {
     if (c.blocked_by.length) {
       excluded.push({ candidate: c, why: `waits on ${c.blocked_by.join(' and ')}` })
       continue
+    }
+    // Fixed-time things are attended, not started: an exact clock more than two hours away, or an attendance-like title.
+    if (!c.scheduled_now && c.due_at_utc) {
+      const minutesAway = (new Date(c.due_at_utc).getTime() - new Date(inp.nowUtc).getTime()) / 60_000
+      if (ATTENDANCE.test(c.title)) {
+        excluded.push({ candidate: c, why: `is something you attend (${dueWord(c, inp.zone)}), not work to start` })
+        continue
+      }
+      if (c.due_precision === 'exact' && minutesAway > 120) {
+        excluded.push({ candidate: c, why: `is fixed for ${dueWord(c, inp.zone)}` })
+        continue
+      }
     }
     // Inside a meeting/class: only a genuinely tiny thing can start; everything else waits for it to end.
     if (inp.inEvent && !c.scheduled_now && effort > 10) {
@@ -186,9 +202,9 @@ export function recommendNow(inp: NowInput): Recommendation {
       reasons.push('a big one for a fresh morning')
     }
     if (inp.context.energyLow) {
-      if (effort > 60) score -= 15
+      if (effort >= 45) score -= 20
       else if (effort <= 20) {
-        score += 5
+        score += 10
         reasons.push('light enough for a low day')
       }
     }
@@ -209,7 +225,7 @@ export function recommendNow(inp: NowInput): Recommendation {
     else if (inp.inEvent) noneReason = `Nothing to start right now — you're in "${inp.inEvent.title}"${excluded.length ? `; ${excluded.slice(0, 3).map((e) => `${e.candidate.title} ${e.why}`).join('; ')}` : ''}.`
     else noneReason = `Nothing you can start right now: ${excluded.slice(0, 4).map((e) => `${e.candidate.title} ${e.why}`).join('; ')}.`
   }
-  return { band, pick, alternatives, excluded, none_reason: noneReason }
+  return { band, pick, alternatives, excluded, none_reason: noneReason, energy_low: inp.context.energyLow }
 }
 
 /** The reply, computed. One action with its reason; runners-up only when genuinely close; honesty when nothing can start. */
@@ -222,8 +238,9 @@ export function describeRecommendation(r: Recommendation): string {
   const name = `${p.candidate.title}${p.candidate.project ? ` (${p.candidate.project})` : ''}`
   const effort = p.effort_assumed ? '' : ` It's about ${minutesText(p.effort_minutes)}, your figure.`
   let text = `${name} — ${p.reasons.slice(0, 3).join(', ')}.${effort}`
+  if (r.energy_low && p.effort_minutes >= 45) text += ` You said you're low today — this is the smallest thing that's actually open (about ${minutesText(p.effort_minutes)}${p.effort_assumed ? ', assumed' : ''}). Leaving it for tomorrow is fine.`
   // Late at night the honest answer to "a big job is all that's left" is to say so, not to push it.
-  if (r.band === 'night' && p.effort_minutes > 45 && !p.candidate.scheduled_now) text += ` It's late and this is about ${minutesText(p.effort_minutes)}${p.effort_assumed ? ' (assumed)' : ''} — tomorrow morning may suit it better.`
+  if (r.band === 'night' && p.effort_minutes > 45 && !p.candidate.scheduled_now && !r.energy_low) text += ` It's late and this is about ${minutesText(p.effort_minutes)}${p.effort_assumed ? ' (assumed)' : ''} — tomorrow morning may suit it better.`
   if (r.alternatives.length) text += ` If not that: ${r.alternatives.map((a) => `${a.candidate.title} (${a.reasons[0]})`).join(', or ')}.`
   const blockedNote = r.excluded.filter((e) => e.why.startsWith('waits on')).slice(0, 2)
   if (blockedNote.length && r.pick.score < 40) text += ` Set aside: ${blockedNote.map((e) => `${e.candidate.title} ${e.why}`).join('; ')}.`

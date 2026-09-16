@@ -598,6 +598,34 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
   if ((m = /^(?:i(?:'m| am| will be|'ll be)|i have|i've got) (busy|unavailable|out|away|travelling|traveling|off|in class|in a meeting|at the gym|at work|on leave|on holiday|a class|a meeting|an exam|a flight)(?: (.+))?$/.exec(text))) {
     const label = m[1].replace(/^(?:a|an) /, '')
     const tail = m[2] ?? ''
+    // "for the next hour" / "for 2 hours" / "for 45 minutes" / "until 3" / "right now": a window that starts NOW, to the
+    // minute. (chrono reads "next hour" as a point an hour from now, which used to shift the whole window forward.)
+    {
+      const t = tail.trim()
+      // "for the next hour" carries no number — a missing quantity means one.
+      const dur = /\b(?:for|over) (?:the next |another |about |roughly |the coming )?(an?|one|two|three|four|half an|\d+(?:\.\d+)?)? ?(hours?|hrs?|h|minutes?|mins?|m)\b/.exec(t)
+      const until = /^(?:right now |now |at the moment |currently )?(?:until|till|up to|through|thru) (\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/.exec(t)
+      const rightNow = /^(?:right now|now|at the moment|currently|for a (?:bit|while))$/.test(t)
+      if (dur || until || rightNow) {
+        const now = DateTime.local().startOf('minute')
+        let end: DateTime
+        if (dur) {
+          const q = dur[1] ?? 'one'
+          const n = q === 'half an' ? 0.5 : /^(?:an?|one)$/.test(q) ? 1 : q === 'two' ? 2 : q === 'three' ? 3 : q === 'four' ? 4 : Number(q)
+          const minutes = /^h/.test(dur[2]) ? n * 60 : n
+          end = now.plus({ minutes: Math.max(5, Math.round(minutes)) })
+        } else if (until) {
+          let h = Number(until[1])
+          const mm = until[2] ? Number(until[2]) : 0
+          if (until[3] === 'pm' && h < 12) h += 12
+          else if (until[3] === 'am' && h === 12) h = 0
+          else if (!until[3] && h < now.hour) h += 12
+          end = now.set({ hour: h % 24, minute: mm })
+          if (end <= now) end = end.plus({ days: 1 })
+        } else end = now.plus({ minutes: 60 })
+        return [{ name: 'add_constraint', args: { kind: 'unavailable', label, starts_at_local: now.toFormat("yyyy-MM-dd'T'HH:mm"), ends_at_local: end.toFormat("yyyy-MM-dd'T'HH:mm") } }]
+      }
+    }
     const part = /\b(morning|afternoon|evening|night|all day)\b/.exec(tail)?.[1]
     const range = /\b(?:from |between )?(\d{1,2})(?::(\d{2}))?\s*(?:-|–|to|till|until)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/.exec(tail)
     const rec = parseRecurrencePhrase(tail)

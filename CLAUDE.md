@@ -45,6 +45,19 @@ was not performed; 25 passes against planted history (see below).** Phase 5 comp
 - Tool `recommend_now {at_local?}` (read; `at_local` only for testing the clock), router: "what should I do (right) now / next /
   first / today", "what now", "where do I start", "what's next", "give me one thing". Prompt: relay, never answer from memory.
 - Dev hook: manual read tools in `SECRETARY_CHAT` now print their phrased answer ("→ …") via `ToolRunResult.text`.
+- **Fixes from the user's first real run (2026-09-17 01:30 IST):** (1) "I'm busy for the next hour" became 02:00–03:00: NOT a
+  timezone fault (machine, Node and the app all agree on Asia/Calcutta; message timestamps match the clock) — chrono reads
+  "next hour" as a point an hour ahead and the rule rounded it to the hour. The availability rule now handles durations and
+  end times starting NOW, to the minute: "for the next hour / for 2 hours / for 45 minutes / half an hour", "until 3 / till
+  4pm", "right now / for a bit" (→ 60 min). (2) Low energy weighed too weakly (only effort > 60 min was penalised, the
+  assumed hour was not): now effort ≥ 45 −20, ≤ 20 +10, and when the pick is still ≥ 45 min the sentence says "You said
+  you're low today — this is the smallest thing that's actually open … leaving it for tomorrow is fine." (3) Things you
+  ATTEND are not work to start: an attendance-like title (`ATTENDANCE` regex: screening, meeting, class, appointment, flight,
+  dinner …) or an exact clock more than two hours away is set aside ("is something you attend (Sat 16:00), not work to
+  start" / "is fixed for …"), never offered, never "you can make a start". The user's "Umar Khalid screening" is a TASK row
+  with an exact time — semantically an event; consider turning such rows into events when the user confirms.
+- Gotcha hit again: a Python heredoc through Bash turned `\b` into a backspace inside the ATTENDANCE regex — repaired with
+  `chr(92)+'b'`; always scan for control characters after a heredoc patch.
 
 ## Phase 7b — deadline intelligence (2026-09-17)
 - **Compute, then phrase — literally.** `src/core/deadline.ts` (`assessDeadline(input) → DeadlineAssessment`, `describeAssessment`)
