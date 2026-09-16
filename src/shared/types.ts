@@ -287,6 +287,8 @@ export interface SecretaryApi {
   listEvents(fromUtc: string, toUtc: string): Promise<EventOccurrence[]>
   /** Everything the secretary knows about one local date, aggregated from the existing records (spec 6a). */
   getDay(dateLocal: string): Promise<DayBundle>
+  /** The same Day View Model for a run of dates (Week takes seven, Month up to 42, Agenda a fortnight). */
+  getDays(fromDateLocal: string, days: number): Promise<DayBundle[]>
 }
 
 /** One occurrence of an event: the series row plus this instance's start/end. `occurrence_start_utc` identifies it in `exdates`. */
@@ -400,5 +402,6 @@ export const IPC = {
   setSetting: 'settings:set',
   listHappenings: 'happenings:list',
   listEvents: 'events:list',
-  getDay: 'calendar:day'
+  getDay: 'calendar:day',
+  getDays: 'calendar:days'
 } as const

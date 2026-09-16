@@ -25,7 +25,7 @@ export const isHard = (i: Item): boolean => i.hardness === 'hard' || i.kind === 
 export type Grammar = 'event' | 'commitment' | 'work_block' | 'session' | 'deadline' | 'task' | 'reminder' | 'happening' | 'constraint' | 'waiting' | 'note' | 'project' | 'checklist_item' | 'idea'
 export const TYPE: Record<Grammar, { glyph: string; word: string; chip: string }> = {
   event: { glyph: '▪', word: 'event', chip: 'bg-[#8B6A55] text-[#FAF6F0]' },
-  commitment: { glyph: '🤝', word: 'appointment / promise', chip: 'bg-[#9C6E5A] text-[#FAF6F0]' },
+  commitment: { glyph: '🤝', word: 'appointment', chip: 'bg-[#9C6E5A] text-[#FAF6F0]' },
   work_block: { glyph: '▤', word: 'work block', chip: 'bg-[#D9B79F] text-[#3A2E28]' },
   session: { glyph: '📘', word: 'session', chip: 'bg-[#8FA3B5] text-[#FAF6F0]' },
   deadline: { glyph: '◆', word: 'deadline', chip: 'bg-[#3A2E28] text-[#FAF6F0]' },
@@ -94,8 +94,8 @@ export const titleClass = (i: Item): string => IMPORTANCE[importanceOf(i)].weigh
 export function PrioritySummary({ summary, priorities, compact }: { summary: DaySummary; priorities?: PriorityEntry[]; compact?: boolean }): React.JSX.Element | null {
   if (summary.is_past) return null
   const chips: { glyph: string; text: string; cls: string; title: string }[] = []
-  if (summary.overdue) chips.push({ glyph: '⚠', text: `${summary.overdue} overdue`, cls: 'bg-amber-100 text-amber-900', title: 'unresolved from earlier' })
-  const critical = priorities?.filter((p) => importanceOf(p.item) === 0).length ?? 0
+  if (summary.overdue && (summary.is_today || !compact)) chips.push({ glyph: '⚠', text: `${summary.overdue} overdue`, cls: 'bg-amber-100 text-amber-900', title: 'unresolved from earlier' })
+  const critical = priorities?.filter((p) => importanceOf(p.item) === 0 && (!compact || summary.is_today || !p.overdue)).length ?? 0
   if (critical) chips.push({ glyph: '‼', text: `${critical} critical`, cls: 'bg-rose-100 text-rose-900', title: 'critical importance' })
   if (summary.hard_deadlines) chips.push({ glyph: '◆', text: `${summary.hard_deadlines} hard deadline${summary.hard_deadlines === 1 ? '' : 's'}`, cls: 'bg-[#3A2E28] text-[#FAF6F0]', title: 'dates that are not negotiable' })
   if (summary.commitments) chips.push({ glyph: '🤝', text: `${summary.commitments} promise${summary.commitments === 1 ? '' : 's'}`, cls: 'bg-rose-50 text-rose-900', title: 'commitments to named people' })
@@ -104,7 +104,7 @@ export function PrioritySummary({ summary, priorities, compact }: { summary: Day
   if (summary.scheduled_minutes) chips.push({ glyph: '▪', text: `${Math.round(summary.scheduled_minutes / 6) / 10} h booked`, cls: 'bg-[#8B6A55]/15 text-[#3A2E28]', title: 'time already scheduled' })
   if (summary.due && !compact) chips.push({ glyph: '☐', text: `${summary.due} due`, cls: 'bg-white text-stone-700 ring-1 ring-stone-200', title: 'date-bound, no time set aside' })
   if (summary.reminders && !compact) chips.push({ glyph: '🔔', text: `${summary.reminders}`, cls: 'bg-white text-stone-700 ring-1 ring-stone-200', title: 'reminders' })
-  const top = (priorities ?? []).slice(0, compact ? 1 : 3)
+  const top = (priorities ?? []).filter((p) => !compact || summary.is_today || !p.overdue).slice(0, compact ? 1 : 3)
   if (!chips.length && !top.length) return compact ? null : <span className="text-xs text-stone-400">Nothing pressing.</span>
   return (
     <div className={`flex items-center gap-1.5 flex-wrap ${compact ? 'text-[10px]' : 'text-xs'}`}>

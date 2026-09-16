@@ -60,9 +60,9 @@ export function dayStatus(scheduledMin: number, dueEffortMin: number, hardDeadli
   const load = scheduledMin + dueEffortMin + hardDeadlines * 45
   if (load === 0) return 'light'
   const ratio = load / Math.max(1, availableMin)
-  if (ratio < 0.3) return 'light'
-  if (ratio < 0.6) return 'normal'
-  if (ratio < 0.9) return 'busy'
+  if (ratio < 0.25) return 'light'
+  if (ratio < 0.45) return 'normal'
+  if (ratio < 0.75) return 'busy'
   return 'overloaded'
 }
 
@@ -196,9 +196,12 @@ export function assembleDay(inp: DayInputs): DayBundle {
     .filter((p) => p.items_today.length)
 
   const scheduledMin = scheduledMinutes(scheduled, startUtc, endUtc)
-  const hardDeadlines = [...dueToday, ...overdue].filter((i) => i.hardness === 'hard' || i.kind === 'deadline').length
-  const highImportance = [...dueToday, ...overdue].filter((i) => (i.importance ?? 2) <= 1).length
-  const dueEffort = unscheduled.length * effort + overdue.length * effort
+  // The summary describes THIS day. Carried-in overdue counts toward today only; on a future date it is context, not that
+  // day's workload (otherwise one forgotten task would paint the whole month).
+  const forCounts = [...dueToday, ...(isToday ? overdue : [])]
+  const hardDeadlines = forCounts.filter((i) => i.hardness === 'hard' || i.kind === 'deadline').length
+  const highImportance = forCounts.filter((i) => (i.importance ?? 2) <= 1).length
+  const dueEffort = unscheduled.length * effort + (isToday ? overdue.length : 0) * effort
   const available = Math.max(4 * 60, 12 * 60 - unavailableMinutes(constraints, startUtc, endUtc))
   const summary: DaySummary = {
     date: inp.date,
@@ -212,7 +215,7 @@ export function assembleDay(inp: DayInputs): DayBundle {
     completed: completed.length,
     hard_deadlines: hardDeadlines,
     high_importance: highImportance,
-    commitments: [...dueToday, ...overdue].filter((i) => i.kind === 'commitment').length,
+    commitments: forCounts.filter((i) => i.kind === 'commitment').length,
     scheduled_minutes: scheduledMin,
     due_effort_minutes: dueEffort,
     available_minutes: available,

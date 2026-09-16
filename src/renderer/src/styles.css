@@ -48,3 +48,8 @@ body {
 .cal-grid .fc-theme-standard td, .cal-grid .fc-theme-standard th { border-color: var(--fc-border-color); }
 .cal-grid .fc .fc-daygrid-day-number { color: #3A2E28; }
 .cal-grid .fc-daycell { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+/* Week view due strip: date-bound markers, readable on the light chip (the library's default event text is cream). */
+.cal-grid .fc .fc-event.k-due, .cal-grid .fc .fc-event.k-due .fc-event-main { background: #F3EADF; color: #3A2E28; border: 1px solid rgba(58,46,40,0.15); box-shadow: none; }
+.cal-grid .fc .fc-event.k-due.t-critical { background: #FAF6F0; border-color: #3A2E28; }
+.cal-grid .fc .fc-col-header-cell { vertical-align: top; }
+.cal-grid .fc .fc-col-header-cell-cushion { display: block; width: 100%; padding: 2px 4px; }

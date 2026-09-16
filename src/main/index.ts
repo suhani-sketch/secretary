@@ -7,7 +7,7 @@ import { clearLog, listLog, log } from './log'
 import { NOTIFICATION_ID_PREFIX, PROTOCOL, dispatchToastAction, setToastActionHandler, showToast } from './notifier'
 import * as repo from './repo'
 import { TICK_MS, startScheduler, startupSweep, stopScheduler, tick } from './scheduler'
-import { buildDay, occurrencesBetween } from './calendar'
+import { buildDay, buildDays, occurrencesBetween } from './calendar'
 import { inferImportance } from '../core/importance'
 import { createTray, refreshTrayMenu } from './tray'
 import { GeminiProvider } from './ai/gemini'
@@ -474,6 +474,10 @@ function registerIpc(): void {
   ipcMain.handle(IPC.getDay, (_e, dateLocal: string) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateLocal)) throw new Error('Bad date')
     return buildDay(dateLocal)
+  })
+  ipcMain.handle(IPC.getDays, (_e, fromDateLocal: string, days: number) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDateLocal)) throw new Error('Bad date')
+    return buildDays(fromDateLocal, Math.max(1, Math.min(42, Math.floor(Number(days) || 7))))
   })
   // UI settings (scene choice). Only whitelisted keys, so the renderer cannot touch anything else in the table.
   const UI_SETTING = /^scene\.(environment|timeOfDay)$|^companion\.[a-z_]+$|^calendar\.(weekStart|view)$/

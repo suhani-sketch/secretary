@@ -673,13 +673,17 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     return [{ name: 'create_item', args: { kind: 'task', title, ...dueArgs(when), ...remindArgs(when) } }]
   }
 
-  // ---- imperative create with a date, no reminder: "call the bank thursday at 3" ----
+  // ---- imperative create with a date, no reminder: "call the bank thursday at 3" / "submit the report friday, hard deadline" ----
   if (IMPERATIVE.test(text)) {
-    const when = parseWhen(text)
+    // A trailing "hard deadline" / "deadline" / "must" is hardness, not part of the title (spec: hardness is its own axis).
+    const hardTail = /,?\s*(?:it'?s a |this is a |that'?s a )?(?:hard deadline|hard|deadline|non-negotiable|must)\s*$/i
+    const hard = hardTail.test(text)
+    const body = hard ? text.replace(hardTail, '') : text
+    const when = parseWhen(body)
     if (!when) return null
-    const title = cleanTitle(text, when.text)
+    const title = cleanTitle(body, when.text)
     if (!title || words(title).length === 0) return null
-    return [{ name: 'create_item', args: { kind: 'task', title, ...dueArgs(when) } }]
+    return [{ name: 'create_item', args: { kind: hard ? 'deadline' : 'task', title, ...dueArgs(when), ...(hard ? { hardness: 'hard' } : {}) } }]
   }
 
   return null

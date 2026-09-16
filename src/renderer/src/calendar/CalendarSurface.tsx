@@ -1,17 +1,19 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { DayBundle, DayStatus, Item } from '../../../shared/types'
 import { DayView } from './DayView'
 import { DayPanel } from './DayPanel'
+import { MonthView } from './MonthView'
+import { WeekView } from './WeekView'
+import { AgendaView } from './AgendaView'
 import type { Selection } from './selection'
 import { Legend, PrioritySummary } from './grammar'
 
 /**
  * The Calendar surface (spec §7): its own full-width screen, switched to from the navigation — never a column inside the
  * conversation layout, and never with the conversation's rail beside it. Header: date navigation, Month / Week / Day /
- * Agenda. Only Day works in 6a; the other three are placeholders until 6d, and say so.
- *
- * 6b: clicking the day, an event, a task or a reminder opens the day detail panel on the right, with the complete context
- * for the date, directly editable through the tool layer.
+ * Agenda. Four views with distinct jobs (6d) — Month is overview, Week is planning, Day is execution, Agenda is a
+ * chronological list — all rendered from the same Day View Model, fetched once per visible range (`getDays`).
+ * 6b: clicking anything opens the day detail panel on the right for that date, directly editable through the tool layer.
  */
 
 export type CalendarMode = 'month' | 'week' | 'day' | 'agenda'
@@ -31,55 +33,125 @@ interface Props {
   initialSelection?: Selection | null
 }
 
+const pad = (n: number): string => String(n).padStart(2, '0')
+const ymd = (d: Date): string => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+const parse = (s: string): Date => {
+  const [y, m, d] = s.split('-').map(Number)
+  return new Date(y, m - 1, d)
+}
 const addDays = (d: string, n: number): string => {
-  const [y, m, dd] = d.split('-').map(Number)
-  const dt = new Date(y, m - 1, dd + n)
-  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
+  const dt = parse(d)
+  dt.setDate(dt.getDate() + n)
+  return ymd(dt)
 }
-export const todayLocal = (): string => {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+const addMonths = (d: string, n: number): string => {
+  const dt = parse(d)
+  dt.setDate(1)
+  dt.setMonth(dt.getMonth() + n)
+  return ymd(dt)
 }
-const longDate = (d: string): string => new Date(`${d}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })
+export const todayLocal = (): string => ymd(new Date())
+/** The week-start on or before `d`, honouring the setting (0 Sunday … 6 Saturday). */
+const startOfWeek = (d: string, weekStart: number): string => {
+  const dt = parse(d)
+  const diff = (dt.getDay() - weekStart + 7) % 7
+  return addDays(d, -diff)
+}
+const longDate = (d: string): string => parse(d).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })
+const shortDate = (d: string): string => parse(d).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+const monthLabel = (d: string): string => parse(d).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
 const hours = (min: number): string => `${Math.round(min / 6) / 10} h`
 
 const STATUS_WORD: Record<DayStatus, string> = { light: 'a light day', normal: 'a normal day', busy: 'a busy day', overloaded: 'an overloaded day' }
 const STATUS_TONE: Record<DayStatus, string> = { light: 'text-emerald-800 bg-emerald-50', normal: 'text-stone-700 bg-stone-100', busy: 'text-amber-900 bg-amber-50', overloaded: 'text-rose-900 bg-rose-50' }
-const MODES: { id: CalendarMode; label: string }[] = [
-  { id: 'month', label: 'Month' },
-  { id: 'week', label: 'Week' },
-  { id: 'day', label: 'Day' },
-  { id: 'agenda', label: 'Agenda' }
+const MODES: { id: CalendarMode; label: string; job: string }[] = [
+  { id: 'month', label: 'Month', job: 'overview — where the load and the deadlines fall' },
+  { id: 'week', label: 'Week', job: 'planning — the shape of the week' },
+  { id: 'day', label: 'Day', job: 'execution — this day in full' },
+  { id: 'agenda', label: 'Agenda', job: 'the coming days as a list' }
 ]
+const AGENDA_DAYS = 14
+
+/** The visible range for a mode: where it starts and how many days it covers. */
+function rangeFor(mode: CalendarMode, dateLocal: string, weekStart: number): { from: string; days: number } {
+  if (mode === 'day') return { from: dateLocal, days: 1 }
+  if (mode === 'week') return { from: startOfWeek(dateLocal, weekStart), days: 7 }
+  if (mode === 'agenda') return { from: dateLocal, days: AGENDA_DAYS }
+  const first = addMonths(dateLocal, 0)
+  const gridStart = startOfWeek(first, weekStart)
+  const nextMonth = addMonths(dateLocal, 1)
+  const daysToEnd = Math.round((parse(nextMonth).getTime() - parse(gridStart).getTime()) / 86_400_000)
+  return { from: gridStart, days: Math.ceil(daysToEnd / 7) * 7 }
+}
 
 export function CalendarSurface(p: Props): React.JSX.Element {
-  const [day, setDay] = useState<DayBundle | null>(null)
+  const [days, setDays] = useState<DayBundle[]>([])
+  const [loading, setLoading] = useState(false)
   const [selection, setSelection] = useState<Selection | null>(p.initialSelection ?? null)
-  const isToday = p.dateLocal === todayLocal()
-  const step = p.mode === 'month' ? 30 : p.mode === 'week' || p.mode === 'agenda' ? 7 : 1
-  // Changing the date closes a thing-level selection but keeps the panel open on the new date if it was open.
+  const [panelDate, setPanelDate] = useState<string>(p.dateLocal)
+  const today = todayLocal()
+  const range = useMemo(() => rangeFor(p.mode, p.dateLocal, p.weekStart), [p.mode, p.dateLocal, p.weekStart])
+
+  // One fetch per visible range; every view below reads from the same bundles.
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      setDays(await window.api.getDays(range.from, range.days))
+    } catch {
+      setDays([])
+    } finally {
+      setLoading(false)
+    }
+  }, [range.from, range.days])
   useEffect(() => {
+    void load()
+  }, [load, p.refreshKey])
+
+  // A new date keeps the panel open (on the new date) if it was open; a thing-level selection is dropped.
+  useEffect(() => {
+    setPanelDate(p.dateLocal)
     setSelection((s) => (s ? { kind: 'date' } : s))
   }, [p.dateLocal])
-  const summary = day?.summary ?? null
+
+  const byDate = useMemo(() => new Map(days.map((d) => [d.date, d])), [days])
+  const day = p.mode === 'day' ? (byDate.get(p.dateLocal) ?? null) : (byDate.get(panelDate) ?? null)
+  const summary = p.mode === 'day' ? (byDate.get(p.dateLocal)?.summary ?? null) : null
+  const isToday = p.dateLocal === today
+  const step = (n: number): string => (p.mode === 'month' ? addMonths(p.dateLocal, n) : p.mode === 'week' ? addDays(p.dateLocal, 7 * n) : p.mode === 'agenda' ? addDays(p.dateLocal, AGENDA_DAYS * n) : addDays(p.dateLocal, n))
+  const title =
+    p.mode === 'month'
+      ? monthLabel(p.dateLocal)
+      : p.mode === 'week'
+        ? `${shortDate(range.from)} – ${shortDate(addDays(range.from, 6))}`
+        : p.mode === 'agenda'
+          ? `from ${longDate(p.dateLocal)}`
+          : longDate(p.dateLocal)
+  const openDay = (d: string): void => {
+    p.onChangeDate(d)
+    p.onChangeMode('day')
+  }
+  const selectOn = (d: string, s: Selection): void => {
+    setPanelDate(d)
+    setSelection(s)
+  }
 
   return (
     <div className="flex flex-col min-h-0 h-full gap-4">
       {/* header: date navigation · status · view controls */}
       <header className="flex items-center gap-3 rounded-3xl bg-white/50 px-5 py-3">
         <div className="flex items-center gap-1">
-          <button className="rounded-lg px-2.5 py-1 text-sm bg-white/80 hover:bg-white" onClick={() => p.onChangeDate(addDays(p.dateLocal, -step))} title="Previous">
+          <button className="rounded-lg px-2.5 py-1 text-sm bg-white/80 hover:bg-white" onClick={() => p.onChangeDate(step(-1))} title="Previous">
             ‹
           </button>
-          <button className="rounded-lg px-2.5 py-1 text-sm bg-white/80 hover:bg-white disabled:opacity-40" onClick={() => p.onChangeDate(todayLocal())} disabled={isToday}>
+          <button className="rounded-lg px-2.5 py-1 text-sm bg-white/80 hover:bg-white disabled:opacity-40" onClick={() => p.onChangeDate(today)} disabled={isToday}>
             today
           </button>
-          <button className="rounded-lg px-2.5 py-1 text-sm bg-white/80 hover:bg-white" onClick={() => p.onChangeDate(addDays(p.dateLocal, step))} title="Next">
+          <button className="rounded-lg px-2.5 py-1 text-sm bg-white/80 hover:bg-white" onClick={() => p.onChangeDate(step(1))} title="Next">
             ›
           </button>
         </div>
-        <button className="text-xl font-semibold tracking-tight truncate min-w-0 text-left hover:text-[#8B6A55]" onClick={() => setSelection((s) => (s?.kind === 'date' ? null : { kind: 'date' }))} title="Open the day panel">
-          {longDate(p.dateLocal)}
+        <button className="text-xl font-semibold tracking-tight truncate min-w-0 text-left hover:text-[#8B6A55]" onClick={() => selectOn(p.dateLocal, selection?.kind === 'date' && panelDate === p.dateLocal ? ({ kind: 'date' } as Selection) : { kind: 'date' })} title="Open the day panel">
+          {title}
           {summary?.is_past && <span className="text-sm text-stone-400 font-normal"> · looking back</span>}
         </button>
         {summary?.status && p.mode === 'day' && (
@@ -87,7 +159,9 @@ export function CalendarSurface(p: Props): React.JSX.Element {
             {STATUS_WORD[summary.status]}
           </span>
         )}
+        <span className="text-xs text-stone-400 hidden lg:inline whitespace-nowrap">{MODES.find((m) => m.id === p.mode)?.job}</span>
         <div className="ml-auto flex items-center gap-3">
+          {loading && <span className="text-[11px] text-stone-400">…</span>}
           <label className="text-[11px] text-stone-400 flex items-center gap-1 whitespace-nowrap" title="Which day the week starts on">
             week starts
             <select className="bg-white/80 rounded px-1 py-0.5 text-[11px] text-stone-600" value={p.weekStart} onChange={(e) => p.onChangeWeekStart(Number(e.target.value))}>
@@ -98,7 +172,7 @@ export function CalendarSurface(p: Props): React.JSX.Element {
           </label>
           <div className="flex rounded-xl bg-white/80 p-0.5" role="tablist" aria-label="Calendar view">
             {MODES.map((m) => (
-              <button key={m.id} role="tab" aria-selected={p.mode === m.id} onClick={() => p.onChangeMode(m.id)} className={`rounded-lg px-3 py-1 text-sm ${p.mode === m.id ? 'bg-[#3A2E28] text-[#FAF6F0]' : 'text-stone-600 hover:bg-white'}`}>
+              <button key={m.id} role="tab" aria-selected={p.mode === m.id} onClick={() => p.onChangeMode(m.id)} className={`rounded-lg px-3 py-1 text-sm ${p.mode === m.id ? 'bg-[#3A2E28] text-[#FAF6F0]' : 'text-stone-600 hover:bg-white'}`} title={m.job}>
                 {m.label}
               </button>
             ))}
@@ -121,19 +195,17 @@ export function CalendarSurface(p: Props): React.JSX.Element {
       {/* body: the view, with the day panel beside it when something is selected */}
       <div className={`flex-1 min-h-0 grid gap-4 ${selection && day ? 'grid-cols-[minmax(0,1fr)_360px]' : 'grid-cols-1'}`}>
         <div className="min-h-0 rounded-3xl bg-white/50 p-5">
-          {p.mode === 'day' ? (
-            <DayView dateLocal={p.dateLocal} onSelect={setSelection} selection={selection} onQuick={p.onQuick} refreshKey={p.refreshKey} weekStart={p.weekStart} onLoaded={setDay} />
-          ) : (
-            <div className="h-full flex items-center justify-center text-center text-stone-400 text-sm">
-              <div>
-                <div className="text-base text-stone-500 mb-1">{MODES.find((m) => m.id === p.mode)?.label} view arrives in slice 6d.</div>
-                <div>It will be built from the same Day View Model that Day uses — {p.mode === 'month' ? 'one summary per day: workload, deadlines, gaps' : p.mode === 'week' ? 'seven days side by side, for planning' : 'the days in order, as a list'}.</div>
-              </div>
-            </div>
-          )}
+          {p.mode === 'day' && <DayView dateLocal={p.dateLocal} onSelect={(s) => selectOn(p.dateLocal, s)} selection={panelDate === p.dateLocal ? selection : null} onQuick={p.onQuick} refreshKey={p.refreshKey} weekStart={p.weekStart} onLoaded={(b) => setDays((ds) => (ds.some((d) => d.date === b.date) ? ds.map((d) => (d.date === b.date ? b : d)) : [...ds, b]))} />}
+          {p.mode === 'month' && (days.length ? <MonthView gridStart={range.from} days={days} monthLabel={title} ym={p.dateLocal.slice(0, 7)} weekStart={p.weekStart} todayLocal={today} onOpenDay={openDay} /> : <Loading />)}
+          {p.mode === 'week' && (days.length ? <WeekView weekStartDate={range.from} days={days} weekStart={p.weekStart} todayLocal={today} onOpenDay={openDay} onSelectOn={selectOn} /> : <Loading />)}
+          {p.mode === 'agenda' && (days.length ? <AgendaView days={days} todayLocal={today} onOpenDay={openDay} onSelectOn={selectOn} /> : <Loading />)}
         </div>
-        {selection && day && <DayPanel day={day} selection={selection} onSelect={setSelection} onQuick={p.onQuick} onOpenEditor={p.onOpenEditor} onClose={() => setSelection(null)} />}
+        {selection && day && <DayPanel day={day} selection={selection} onSelect={(s) => selectOn(day.date, s)} onQuick={p.onQuick} onOpenEditor={p.onOpenEditor} onClose={() => setSelection(null)} />}
       </div>
     </div>
   )
+}
+
+function Loading(): React.JSX.Element {
+  return <div className="h-full flex items-center justify-center text-sm text-stone-400">Loading…</div>
 }

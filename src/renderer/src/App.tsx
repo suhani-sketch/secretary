@@ -64,7 +64,11 @@ export default function App(): React.JSX.Element {
   const [editing, setEditing] = useState<Editing>(null)
   // Calendar (Phase 6): a secondary view over the same records; conversation stays home.
   const [surface, setSurface] = useState<Surface>('conversation')
-  const [calMode, setCalMode] = useState<CalendarMode>('day')
+  const [calMode, setCalMode] = useState<CalendarMode>(() => {
+    // Dev hook: "#calendar:2026-09-17,mode:week" opens the calendar in that mode.
+    const m = /(?:^|,)mode:(month|week|day|agenda)/.exec(window.location.hash)?.[1]
+    return (m as CalendarMode | undefined) ?? 'day'
+  })
   const [calDate, setCalDate] = useState(() => {
     const d = new Date()
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`

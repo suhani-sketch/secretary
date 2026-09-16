@@ -71,6 +71,17 @@ export function buildDay(dateLocal: string): DayBundle {
   })
 }
 
+/** Full bundles for a run of days — Week takes seven, Month up to 42, Agenda a fortnight. The same model, once per day. */
+export function buildDays(fromDateLocal: string, days: number): DayBundle[] {
+  const out: DayBundle[] = []
+  let d = DateTime.fromISO(fromDateLocal)
+  for (let i = 0; i < days; i++) {
+    out.push(buildDay(d.toISODate()!))
+    d = d.plus({ days: 1 })
+  }
+  return out
+}
+
 /** Summaries for a run of days (Month/Week take these) — the same model, once per day. */
 export function buildSummaries(fromDateLocal: string, days: number): DaySummary[] {
   const out: DaySummary[] = []

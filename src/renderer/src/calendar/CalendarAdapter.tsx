@@ -47,6 +47,8 @@ interface Props extends GridCallbacks {
   entries: GridEntry[]
   renderEntry?: (entry: GridEntry) => React.ReactNode
   renderDayCell?: (dateLocal: string) => React.ReactNode
+  /** Column header in week/day views (the day's name plus whatever the caller wants: status, priority chips). */
+  renderDayHeader?: (dateLocal: string, label: string) => React.ReactNode
   /** Business/awake hours shown lighter; outside them the grid is shaded. */
   dayStartHour?: number
   dayEndHour?: number
@@ -121,6 +123,10 @@ export function CalendarGrid(p: Props): React.JSX.Element {
         const entry = arg.event.extendedProps['entry'] as GridEntry | undefined
         if (!entry || !p.renderEntry) return true
         return <>{p.renderEntry(entry)}</>
+      }}
+      dayHeaderContent={(arg) => {
+        if (!p.renderDayHeader) return true
+        return <>{p.renderDayHeader(localDate(arg.date), arg.text)}</>
       }}
       dayCellContent={(arg) => {
         const extra = p.renderDayCell?.(localDate(arg.date))

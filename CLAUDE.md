@@ -20,6 +20,28 @@ Update it at the end of every session (spec §11).
   imports repo and moves to core when 6f touches it.
 - **Migration 7:** `plans` table; `events.plan_id`, `events.session_state`; index on `events.starts_at_utc`.
 
+## Phase 6d — Month, Week, Agenda with distinct jobs (2026-09-16)
+- One fetch per visible range: IPC `calendar:days` → `buildDays(from, n)` (the same `buildDay` per date, ≤ 42). `CalendarSurface`
+  computes the range per mode (`rangeFor`: day 1 · week 7 from the week start · agenda 14 · month = full weeks covering the
+  month), fetches once, and every view reads the same `DayBundle[]`. Header title/step follow the mode (month ±1 month, week ±7,
+  agenda ±14, day ±1); a one-line "job" caption names each view's purpose. Panel works in every mode via `onSelectOn(date, sel)`.
+- **Month** (`MonthView.tsx`, our own CSS grid, no library): overview — per cell the status tint + dot + word (light/normal/busy/
+  overloaded, from `summary.status`), the compact `PrioritySummary` chips, multi-day all-day events as bands with open ends where
+  they continue (`span` starts/continues/ends), up to two timed titles, "✓ n" for past days. Click → Day. Other months muted.
+- **Week** (`WeekView.tsx`, FullCalendar timeGridWeek through the adapter): planning — seven columns; the all-day row is the
+  DUE strip (unscheduled items as `k-due` chips, hard ones with ◆), spanning events as bands, constraints hatched, column headers
+  (new adapter prop `renderDayHeader`/`dayHeaderContent`) carry the day's status word and compact chips; click a header → Day.
+- **Agenda** (`AgendaView.tsx`): chronological list — a block per day (date, status pill, compact chips), lines in time order:
+  all-day/spanning first, then timed events and reminders by clock, then due-without-time; today's block shows "carried in" and
+  "done"; empty days collapse to one line.
+- Compact chips (Month/Week/Agenda) show carried-in overdue only on TODAY, and `DaySummary` counts (hard deadlines, high,
+  commitments, due effort) describe the day itself (overdue counts toward today only) — one forgotten task no longer paints the
+  whole month. Load thresholds retuned: <0.25 light · <0.45 normal · <0.75 busy · else overloaded (Friday with 4 h booked, 3 due,
+  1 h unavailable → busy; §11C 22).
+- Router: "submit the report friday, hard deadline" → kind deadline + hardness hard, title clean.
+- Dev hook `SECRETARY_VIEW=calendar:<date>,mode:month|week|agenda`. Verified by screenshots on scratch c2: Month with the
+  Delhi band Mon–Wed and Friday busy; Week with the due strip, header chips and hatched constraint; Agenda blocks in order.
+
 ## Phase 6c — visual grammar and priorities (2026-09-16)
 - `calendar/grammar.tsx` is the one vocabulary for every calendar surface: `IMPORTANCE` (0 critical ‼ rose · 1 high ! amber ·
   2 normal • stone · 3 low · muted; each with word, glyph, badge and title weight), `TYPE` (event ▪ solid · commitment 🤝 ·
