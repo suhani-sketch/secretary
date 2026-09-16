@@ -32,6 +32,12 @@ export interface HappeningStart {
   kind: HappeningKind
   metaphor: Metaphor | null
   minutes: number | null
+  /**
+   * A bare statement of what the user is doing with nothing to time ("I'm making dinner", "I'm making tea" with no
+   * duration). Invariant 9: this is not a request. The caller may OFFER a timer where one makes sense, and creates
+   * nothing otherwise. Things with their own clock (a wash, a charge, a focus session) are not bare.
+   */
+  bare: boolean
 }
 
 /** "8 minutes", "an hour", "half an hour", "1h20", "90 sec". Returns whole minutes (seconds rounded up). */
@@ -107,6 +113,13 @@ const tidy = (s: string): string =>
  * ("I need to…", "tomorrow", "remind me") — those must stay tasks and reminders.
  */
 export function detectHappeningStart(rawText: string): HappeningStart | null {
+  const r = detectStartRaw(rawText)
+  if (!r) return null
+  const bare = r.minutes === null && (r.kind === 'tea' || r.kind === 'egg' || r.kind === 'cooking')
+  return { ...r, bare }
+}
+
+function detectStartRaw(rawText: string): Omit<HappeningStart, 'bare'> | null {
   const text = rawText.trim().toLowerCase().replace(/[.!…]+$/g, '').replace(/\s+/g, ' ')
   if (!text || text.length > 140) return null
   // Obligations and alarms are never happenings.
@@ -137,6 +150,10 @@ export function detectHappeningStart(rawText: string): HappeningStart | null {
   // "I'm making tea" / "making a coffee" / "brewing chai" / "steeping tea for 4 minutes"
   if ((m = /^(?:i'm |i am |just )?(?:making|brewing|steeping|having|pouring) (.+)$/.exec(text)) && DRINK.test(m[1])) {
     return { label: tidy(stripDuration(m[1])), kind: 'tea', metaphor: 'tea', minutes }
+  }
+  // A bare statement of cooking: "I'm making dinner" / "cooking lunch" / "making a snack" — nothing to time unless they say so.
+  if ((m = /^(?:i'm |i am |just |i'm just )?(?:making|cooking|preparing|fixing|doing|getting) (.+)$/.exec(text)) && /\b(dinner|lunch|breakfast|supper|brunch|a meal|food|a snack|snacks|something to eat|tonight's dinner)\b/.test(m[1])) {
+    return { label: tidy(stripDuration(m[1])).replace(/^(?:tonight's|some|a)\s+/, ''), kind: 'cooking', metaphor: null, minutes }
   }
   // Cooking verbs: "I'm baking bread for 40 minutes" / "soaking the dal" / "defrosting chicken" / "boiling pasta"
   if ((m = /^(?:i'm |i am |i've |i have |just |i've just |i'm just )?(?:started )?(baking|roasting|boiling|simmering|frying|steaming|cooking|soaking|steeping|defrosting|thawing|marinating|proofing|proving|chilling|reheating|warming up|toasting|grilling) (.+)$/.exec(text))) {

@@ -53,7 +53,8 @@ Not features. These hold in every phase and are never deferred or simplified.
 6. **No dead-end information.** Anything displayed can be inspected and edited directly. See §7.
 7. **One data model.** Manual edits and AI edits write to the same rows. Never two parallel systems.
 8. **Actionability threshold.** "I need to get my life together" does not become a task called *Get life together*. See §4.
-9. **Nothing is duplicated.** One "IIM application" Thing, referenced everywhere, not re-created on each mention.
+9. **Never convert an ordinary statement into an unwanted timer, task, reminder or interaction.** Saying what you are doing is not a request. The assistant may offer; it never imposes.
+10. **Nothing is duplicated.** One "IIM application" Thing, referenced everywhere, not re-created on each mention.
 
 ### The standard
 
@@ -513,10 +514,6 @@ Driven by what the app is actually doing, not by a timer:
 
 **Visual language** (also the standing direction for §8): warm cream backgrounds, muted pastel accents, dark cocoa/charcoal text, rounded forms, soft shadows, subtle paper or illustration texture, restrained borders, generous whitespace. Warm, cozy, soft, premium, illustrated, minimal, calm. Avoid corporate SaaS, Notion clones, generic AI chat interfaces, neon AI aesthetics, heavy glassmorphism, dark futuristic dashboards, and childish cartoon clutter.
 
-**Design decisions (agreed 2026-09-16).** The creature is an original dormouse-quokka: round pear body, round ears, small dark nose, calm half-lidded eyes, tiny paws that hold one prop at a time, short curling tail; cocoa/oat/cream palette; one signature accessory, a small knitted scarf in the accent colour, and never a wardrobe. Unnamed at first — later it may say "I think I should have a name", and the user names it then; never during onboarding. Eye contact is rare and meaningful: greeting, genuine happiness, being directly addressed, the occasional emotionally apt moment; otherwise it does its own thing. It has a little life of its own — reading, sitting by the window, at the desk, dozing — changing pose only every few minutes, never performing. The creature stays the same while its world changes: the room offers several cozy environments (trees and sky, rainy window, coastal, winter, library, fireplace room) with time of day layered over any of them; the user can pick one or leave it to the clock.
-
-**In this phase:** the creature, its twelve states driven by real app state, the room, time of day, and a manual environment choice with an automatic default. **Deferred (Phase 9 or later):** favourites and rotation, weather- and season-driven scenes, the room gradually acquiring objects, and the naming moment. They are recorded here so they are not forgotten and not built early.
-
 **Done when:** the creature's state reflects what the app is really doing, the room changes convincingly between morning, afternoon, evening and night, nothing animates distractingly during ordinary use, and the window is one you would leave open on your desktop because you like looking at it.
 
 ### Phase 5 — Living activities
@@ -547,6 +544,23 @@ A happening never enters `items`, never appears in Open, and never becomes an ob
 **No gamification here either.** Happenings earn nothing, track no streak, and their metaphors are illustration, not score.
 
 **Done when:** "I've put an egg on for 8 minutes" starts a visible egg that progresses and resolves without creating a task; "I need to do laundry tomorrow" still creates a task; the room reacts; and a week of use has produced no clutter in Open.
+
+**5d — Context and commitments.** The fourth thing the system must tell apart.
+
+| The user says | What it is | Lifespan |
+|---|---|---|
+| "I need to finish the application" | obligation | until done |
+| "I've put the egg on" | happening | minutes |
+| "I'm exhausted today" / "I'm at TISS until 5" | **context** | today |
+| "I told Professor X I'd email him tonight" | **commitment** | until honoured |
+
+**Context** influences current reasoning — what to recommend, what to schedule — and never becomes permanent memory or a task. It expires on its own. A durable pattern stated as such ("I work better on analytical writing in the afternoon") is a preference, not context, and that one persists.
+
+**Commitments** are obligations with another person's expectation attached. "I should email Professor X" is an intention. "I told Professor X I'd email him tonight" is a commitment. The difference is not urgency, it is that someone else is now waiting. Commitments weigh more heavily in "what am I forgetting?" and in follow-through, and are surfaced with who they were made to.
+
+**Not in scope here:** People as full entities. The schema holds `people` and it stays unused in the UI until after V1.
+
+**Done when:** the ambiguity test in §11F passes.
 
 ### Phase 6 — Calendar
 Month / week / day / agenda. Events, recurrence, exceptions. Drag, resize, edit, delete. Two-way with the assistant. Obligations displayed alongside events. Conflict detection and free-slot finding.
@@ -629,14 +643,14 @@ Each must pass **across an app restart**, and at no point may the assistant clai
 9. "What have I done for TISS mailing?" → the history
 10. "What is left?" → outstanding items and waiting states
 
-### C. Calendar (Phase 4)
+### C. Calendar (Phase 6)
 1. "I have a meeting with Professor X Thursday at 3." → event
 2. "Move it to 4." → same event updated
 3. Drag it manually to 5. → same row; assistant now knows it is at 5
 4. "When can I work on the case study?" → a real free slot
 5. "Schedule it." → work block created, not overlapping anything
 
-### D. The application (Phase 6)
+### D. The application (Phase 8)
 1. "I need to submit my IIM application Monday at 5." → project + hard deadline
 2. "It needs my CV, transcript and case study." → three components
 3. "CV is done." → that component only
@@ -652,6 +666,17 @@ Each must pass **across an app restart**, and at no point may the assistant clai
 Close the app. Restart Windows. Reminders still fire. Missed ones recovered. Nothing lost.
 
 ---
+
+### F. Ambiguous real-world statements (Phase 5)
+Proves understanding rather than cooking-equals-timer pattern matching.
+
+1. "I'm making dinner." → **nothing is created.** Not a task, not a happening, not a timer. A normal reply.
+2. "I'm making dinner, remind me to check it in 20 minutes." → happening + reminder.
+3. "I need to make dinner tomorrow." → task.
+4. "I'm exhausted today." → context. Nothing in Open, nothing in permanent memory, and it informs what gets recommended today.
+5. "I told Priya I'd send the draft tonight." → commitment, with Priya attached. It appears in "what am I forgetting?" ahead of an equivalent plain task.
+6. "I'm making tea." → at most an offer. A "no" is remembered for tea.
+
 
 ## 12. Working with Claude Code on this
 

@@ -8,6 +8,15 @@ import { PART_OF_DAY } from '../planning'
 import { log } from '../log'
 import type { Item, Reminder } from '../../shared/types'
 import { detectHappeningEnd, detectHappeningStart } from '../happenings'
+import { RITUALS as RITUAL_OFFERS } from './tools'
+
+/** A bare "I'm making dinner": an ordinary reply, nothing created, no offer (invariant 9). */
+function plainAcknowledgement(label: string): string {
+  const l = label.toLowerCase()
+  if (/dinner|lunch|breakfast|supper|brunch|meal|food|snack/.test(l)) return `Enjoy ${l.replace(/^(?:the|a|some)\s+/, '')}. I'm here if you want anything timed.`
+  if (/tea|chai|coffee/.test(l)) return `Enjoy the ${l}.`
+  return `Noted — nothing to do on my side. Say if you want it timed.`
+}
 
 /**
  * Tier 0 router (spec §4): deterministic, no model call, instant.
@@ -224,6 +233,8 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
       return [{ name: 'create_project', args: { title: offer.proposedTitle, use_existing_id: offer.existingId } }]
     }
     if (offer.kind === 'ritual') {
+      // Offered on a bare statement → nothing exists yet, so "yes" creates the timed happening now.
+      if (!offer.happeningId) return [{ name: 'start_happening', args: { label: offer.label, minutes: offer.minutes, ...(offer.metaphor ? { metaphor: offer.metaphor } : {}) } }]
       return [{ name: 'time_happening', args: { id: offer.happeningId, minutes: offer.minutes } }]
     }
     if (offer.kind !== 'reminder') return null
@@ -238,7 +249,10 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
   // "yes, 4 minutes" / "make it 6 minutes" / "4 min please" while a timer offer stands → time it with THAT length.
   if ((m = /^(?:yes,? |yeah,? |sure,? |ok,? |okay,? |make it |let'?s say |say )?(\d{1,3}) ?(?:m|min|mins|minutes?)(?: please| then| is good| works)?$/.exec(text))) {
     const offer = getOffer()
-    if (offer?.kind === 'ritual') return [{ name: 'time_happening', args: { id: offer.happeningId, minutes: Number(m[1]) } }]
+    if (offer?.kind === 'ritual') {
+      if (!offer.happeningId) return [{ name: 'start_happening', args: { label: offer.label, minutes: Number(m[1]), ...(offer.metaphor ? { metaphor: offer.metaphor } : {}) } }]
+      return [{ name: 'time_happening', args: { id: offer.happeningId, minutes: Number(m[1]) } }]
+    }
   }
 
   if (/^(?:no|nope|no,? (?:it'?s |that'?s )?(?:a )?(?:new|different|separate)(?: project| thing| one)?|(?:a )?(?:new|different|separate) (?:project|thing|one)|it'?s (?:a )?(?:new|different) (?:one|project|thing))$/.test(text)) {
@@ -274,14 +288,91 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
         return [{ name: REPLY, args: { text: recent.state === 'done' ? `Yes — the ${recent.label} finished at ${at}.` : `The ${recent.label} was dropped at ${at}; nothing is running for it.` } }]
       }
     }
-    // "I've put an egg on for 8 minutes" / "started the washing machine" / "making tea" / "starting a focus session".
+    // "I'm making dinner, remind me to check it in 20 minutes" → the happening AND the alarm (§11F 2). The alarm's title
+    // names the thing ("Check the dinner"), not "it".
+    if ((m = /^(.+?),?\s+(?:and |then |but )?(?:please )?(?:remind me|ping me|nudge me|tell me) (?:to |about |that )?(.+)$/.exec(text))) {
+      const first = detectHappeningStart(m[1])
+      const when = parseWhen(m[2])
+      if (first && when) {
+        const rawTitle = m[2].replace(/\b(?:it|that|this)\b/g, `the ${first.label}`)
+        const title = cleanTitle(rawTitle, when.text)
+        if (title && words(title).length) {
+          const args: Record<string, unknown> = { label: first.label }
+          if (first.minutes) args.minutes = first.minutes
+          if (first.metaphor) args.metaphor = first.metaphor
+          return [
+            { name: 'start_happening', args },
+            { name: 'create_item', args: { kind: 'task', title, ...dueArgs(when), ...remindArgs(when) } }
+          ]
+        }
+      }
+    }
+    // "I've put an egg on for 8 minutes" / "started the washing machine" / "starting a focus session" → a happening.
+    // "I'm making dinner" / "I'm making tea" with nothing to time → NOTHING is created (invariant 9). At most one offer
+    // where a default timer makes sense and that kind has not been declined; otherwise an ordinary reply.
     const start = detectHappeningStart(text)
     if (start) {
+      if (start.bare) {
+        const ritual = RITUAL_OFFERS[start.kind]
+        if (ritual && repo.getSettingValue(`ritual.declined.${start.kind}`) !== '1') {
+          setOffer({ kind: 'ritual', happeningId: null, happeningKind: start.kind, minutes: ritual.minutes, label: start.label, metaphor: start.metaphor })
+          return [{ name: REPLY, args: { text: `${start.label[0].toUpperCase()}${start.label.slice(1)} — ${ritual.question[0].toLowerCase()}${ritual.question.slice(1)}` } }]
+        }
+        clearOffer()
+        return [{ name: REPLY, args: { text: plainAcknowledgement(start.label) } }]
+      }
       const args: Record<string, unknown> = { label: start.label }
       if (start.minutes) args.minutes = start.minutes
       if (start.metaphor) args.metaphor = start.metaphor
       return [{ name: 'start_happening', args }]
     }
+  }
+
+  // ---- today's context (5d): shapes today's reasoning, expires tonight, never stored as a task/note/memory ----
+  if ((m = /^(?:honestly,? |ugh,? |god,? |so |really |i'?m just )?(?:i'?m|i am|i feel|feeling|i'?m feeling|i've been feeling) (?:so |really |very |pretty |quite |completely |absolutely |a bit |kind of |kinda )?(exhausted|tired|wiped|wiped out|drained|knackered|shattered|burnt out|burned out|worn out|low|down|flat|anxious|stressed|overwhelmed|not great|unwell|sick|ill|off|foggy|wired|restless|energised|energized|great|good|fine|better)(?: today| tonight| this morning| this evening| right now| at the moment)?$/.exec(text))) {
+    const word = m[1]
+    const kind = /anxious|stressed|overwhelmed|low|down|flat|not great|great|good|fine|better/.test(word) ? 'mood' : 'energy'
+    return [{ name: 'note_context', args: { kind, text: word } }]
+  }
+  // "I'm at TISS until 5" / "I'm at the office till 6" → context + a same-day unavailable window so nothing gets booked there.
+  if ((m = /^(?:i'?m|i am|i'?ll be|i will be) (?:at|in) (.+?) (?:until|till|til|up to) (\d{1,2})(?::(\d{2}))?\s*(am|pm)?(?: today| tonight)?$/.exec(text))) {
+    let hour = Number(m[2])
+    const minute = m[3] ? Number(m[3]) : 0
+    if (m[4] === 'pm' && hour < 12) hour += 12
+    else if (!m[4] && hour <= 8) hour += 12
+    const today = DateTime.local()
+    const end = today.set({ hour, minute, second: 0, millisecond: 0 })
+    if (end > today) {
+      const place = restoreCase(m[1])
+      return [
+        { name: 'note_context', args: { kind: 'location', text: `at ${place} until ${end.toFormat('HH:mm')}` } },
+        { name: 'add_constraint', args: { kind: 'unavailable', label: `at ${place}`, starts_at_local: today.toFormat("yyyy-MM-dd'T'HH:mm"), ends_at_local: end.toFormat("yyyy-MM-dd'T'HH:mm") } }
+      ]
+    }
+  }
+
+  // ---- commitments (5d): a promise to a named person — "I told Priya I'd send the draft tonight" ----
+  if (
+    (m = /^(?:i )?(?:told|promised|assured|said to) (.+?) (?:that )?(?:i'?d|i would|i'?ll|i will|i was going to|i'?m going to) (.+)$/.exec(text)) ||
+    (m = /^(?:i )?(?:said|promised) (?:that )?(?:i'?d|i would|i'?ll|i will) (.+?) (?:to|for) (.+)$/.exec(text)) ||
+    (m = /^(.+?) (?:is|are) expecting (?:me to |that i(?:'ll| will) )?(.+)$/.exec(text))
+  ) {
+    const swapped = /^(?:i )?(?:said|promised) (?:that )?(?:i'?d|i would|i'?ll|i will) /.test(text) && !/^(?:i )?(?:told|promised|assured|said to) /.test(text)
+    const personRaw = swapped ? m[2] : m[1]
+    const whatRaw = swapped ? m[1] : m[2]
+    const person = restoreCase(personRaw).replace(/^(?:to|for)\s+/i, '').trim()
+    if (person && person.split(' ').length <= 4 && !/\b(?:it|that|this|them|him|her|the)\b/i.test(person)) {
+      const when = parseWhen(whatRaw)
+      const title = cleanTitle(whatRaw, when?.text ?? '').replace(/\b(?:him|her|them)\b/gi, person)
+      if (title && words(title).length) {
+        return [{ name: 'create_item', args: { kind: 'commitment', title, committed_to: person, ...(when ? dueArgs(when) : {}) } }]
+      }
+    }
+  }
+
+  // ---- "what am I forgetting?" (5d) → deterministic, commitments first ----
+  if (/^(?:so,? )?(?:what am i forgetting|am i forgetting (?:anything|something)|what have i forgotten|anything i'?m forgetting|what'?s slipping|am i missing anything|what am i missing)\??$/.test(text)) {
+    return [{ name: 'get_forgetting', args: {} }]
   }
 
   // ---- availability (3f): "I'm busy tomorrow afternoon" / "I'm travelling on Friday" / "I'm out on the 20th" ----

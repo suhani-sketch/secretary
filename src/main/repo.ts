@@ -113,6 +113,7 @@ export interface NewItem {
   hardness?: Hardness | null
   importance?: number | null
   waitingOn?: string | null
+  committedTo?: string | null
   isSuggestion?: boolean
   confidence?: number | null
   sourceMsgId?: string | null
@@ -126,8 +127,8 @@ export function insertItem(n: NewItem): Item {
   const title = n.title.trim()
   if (!title) throw new Error('Title is required')
   db.prepare(
-    `INSERT INTO items (id, kind, title, details, status, due_at_utc, due_tz, due_precision, hardness, importance, is_suggestion, confidence, waiting_on, source_msg_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO items (id, kind, title, details, status, due_at_utc, due_tz, due_precision, hardness, importance, is_suggestion, confidence, waiting_on, committed_to, source_msg_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     n.kind,
@@ -141,6 +142,7 @@ export function insertItem(n: NewItem): Item {
     n.isSuggestion ? 1 : 0,
     n.confidence ?? null,
     n.waitingOn ?? null,
+    n.committedTo ?? null,
     n.sourceMsgId ?? null,
     ts,
     ts
@@ -156,6 +158,7 @@ export interface ItemPatch {
   hardness?: Hardness | null
   importance?: number
   waitingOn?: string | null
+  committedTo?: string | null
   kind?: ItemKind
   status?: ItemStatus
   /** false = the user confirmed a suggestion; it becomes a real obligation. */
@@ -187,6 +190,7 @@ export function updateItem(id: string, p: ItemPatch): { item: Item; movedReminde
   if (p.hardness !== undefined) set('hardness', p.hardness)
   if (p.importance !== undefined) set('importance', p.importance)
   if (p.waitingOn !== undefined) set('waiting_on', p.waitingOn)
+  if (p.committedTo !== undefined) set('committed_to', p.committedTo)
   if (p.kind !== undefined) set('kind', p.kind)
   if (p.isSuggestion !== undefined) {
     set('is_suggestion', p.isSuggestion ? 1 : 0)
@@ -982,4 +986,38 @@ export function setSettingValue(key: string, value: string): void {
 /** The last N things the user typed, newest first. */
 export function recentUserTexts(limit = 4): string[] {
   return (getDb().prepare(`SELECT content FROM messages WHERE role = 'user' ORDER BY created_at DESC, rowid DESC LIMIT ?`).all(limit) as { content: string }[]).map((r) => r.content)
+}
+
+// ---- Today's context (spec Phase 5d): influences today's reasoning, never memory. Stored under one key per day; only
+// today's key is ever read, so it expires on its own. Nothing here touches items, notes or activities. ----------------
+
+export interface ContextEntry {
+  at: string
+  kind: 'energy' | 'mood' | 'location' | 'availability' | 'other'
+  text: string
+}
+
+const contextKey = (): string => `context.${DateTime.local().toISODate()!}`
+
+export function todayContext(): ContextEntry[] {
+  try {
+    return JSON.parse(getSettingValue(contextKey()) ?? '[]') as ContextEntry[]
+  } catch {
+    return []
+  }
+}
+
+export function addContext(kind: ContextEntry['kind'], text: string): ContextEntry {
+  const entry: ContextEntry = { at: new Date().toISOString(), kind, text: text.trim().slice(0, 200) }
+  const list = todayContext().filter((e) => !(e.kind === kind && e.text.toLowerCase() === entry.text.toLowerCase()))
+  list.push(entry)
+  setSettingValue(contextKey(), JSON.stringify(list.slice(-12)))
+  // Yesterday and before are gone for good.
+  getDb().prepare(`DELETE FROM settings WHERE key LIKE 'context.%' AND key != ?`).run(contextKey())
+  return entry
+}
+
+/** Open commitments (promises to a named person), soonest first. */
+export function openCommitments(): Item[] {
+  return getDb().prepare(`SELECT * FROM items WHERE kind = 'commitment' AND status = 'open' ORDER BY COALESCE(due_at_utc, '9'), created_at`).all() as Item[]
 }

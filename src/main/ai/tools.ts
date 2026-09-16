@@ -9,7 +9,7 @@ import * as repo from '../repo'
 import { clearOffer, getFocus, pushFocus, setOffer, shortId } from './context'
 import { resolveEntity } from '../entity'
 import { afterConflicts, blockingConflicts, bookingWindowForDue, conflictsFor, describeConflict, describeConstraint } from '../planning'
-import { formatClock, formatDue } from '../../shared/format'
+import { formatClock, formatDue, isOverdue } from '../../shared/format'
 import type { ToolDefinition } from './provider'
 import type { Actor, AppliedChange, Item, Note, Reminder } from '../../shared/types'
 
@@ -66,6 +66,7 @@ export const toolSchemas = {
       ...dueFields,
       importance: importance.optional(),
       waiting_on: z.string().max(100).optional().describe('For kind=waiting: who or what is being waited on.'),
+      committed_to: z.string().max(100).optional().describe('For kind=commitment: the person the promise was made to ("I told Priya I\'d send the draft tonight" → "Priya").'),
       remind_at_local: localDateTime.optional().describe('Only if the user asked to be reminded AND gave a clock time. ' + DT_DESC),
       remind_date_local: localDate.optional().describe('Only if the user asked to be reminded on a day without a clock time; the reminder fires at their default reminder time. ' + DATE_DESC),
       remind_rrule: rruleStr.optional().describe('For a RECURRING reminder ("every Sunday", "daily at 8"): the RRULE, e.g. "FREQ=WEEKLY;BYDAY=SU". Give remind_at_local as the first occurrence. Leave due fields empty for recurring chores.'),
@@ -92,6 +93,7 @@ export const toolSchemas = {
       kind: kind.optional(),
       status: status.optional().describe('Use for in_progress / blocked / waiting / open. For done use complete_item; for cancelled use cancel_item.'),
       waiting_on: z.string().max(100).nullable().optional(),
+      committed_to: z.string().max(100).nullable().optional().describe('For a commitment: who it was promised to; null to clear.'),
       confirm_suggestion: z.boolean().optional().describe('true when the user confirms a suggested item — it becomes a real obligation.')
     })
     .refine(noBothDue, 'Give either due_at_local or due_date_local, not both'),
@@ -160,6 +162,11 @@ export const toolSchemas = {
   decline_ritual: z.object({
     kind: z.string().min(1).max(30).describe('The kind of happening the user does not want timer offers for: tea, egg, focus, break.')
   }),
+  note_context: z.object({
+    kind: z.enum(['energy', 'mood', 'location', 'availability', 'other']).describe('energy = tired/exhausted/wired; mood = how they feel; location = where they are; availability = free/busy today; other.'),
+    text: z.string().min(1).max(200).describe('The statement in a few words, e.g. "exhausted", "at TISS until 17:00".')
+  }),
+  get_forgetting: z.object({}).describe('Everything that might be slipping: commitments first (with who), then overdue, then waiting, then due soon. Phrased by the app.'),
   check_conflicts: z
     .object({
       starts_at_local: localDateTime.describe(DT_DESC),
@@ -278,6 +285,8 @@ const descriptions: Record<ToolName, string> = {
   finish_happening: 'A running happening ended: "laundry\'s done", "egg\'s ready", "I\'m out of the shower" (done) or "never mind the egg" (abandoned).',
   time_happening: 'Put a timer on a running open-ended happening ("yes" to a timer offer, "make the tea 4 minutes").',
   decline_ritual: 'The user said no to a timer offer for a kind of happening; the app will not offer it for that kind again.',
+  note_context: 'Today\'s context — "I\'m exhausted today", "I\'m at TISS until 5", "feeling low". Shapes today\'s recommendations, expires tonight, is NEVER a task, note or memory. Do not use for durable patterns ("I work better in the afternoon" → set_preference).',
+  get_forgetting: '"What am I forgetting?" — the app lists commitments (with who they were made to) ahead of everything else, then overdue, waiting and due-soon items.',
   check_conflicts: 'What clashes with a proposed time. The app computes it; you phrase it.',
   update_note: 'Change the text of an existing note.',
   delete_note: 'Remove a note.',
@@ -311,6 +320,7 @@ const WRITE_TOOLS: ReadonlySet<string> = new Set([
   'finish_happening',
   'time_happening',
   'decline_ritual',
+  'note_context',
   'add_link',
   'remove_link',
   'add_constraint',
@@ -652,7 +662,7 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       // Micro-ritual (spec Phase 5): offer a timer once, only for kinds with a sensible default, never if this kind was declined.
       const ritual = !x.minutes && kind ? RITUALS[kind] : undefined
       if (ritual && repo.getSettingValue(`ritual.declined.${kind}`) !== '1') {
-        setOffer({ kind: 'ritual', happeningId: h.id, happeningKind: kind!, minutes: ritual.minutes, label })
+        setOffer({ kind: 'ritual', happeningId: h.id, happeningKind: kind!, minutes: ritual.minutes, label, metaphor })
         phrase = `${capital(label)} — noted. ${ritual.question}`
       }
       return { result: { ok: true, happening_id: shortId(h.id), summary, ends_at: endsAt, offered_timer_minutes: ritual ? ritual.minutes : undefined }, applied: { tool: name, summary, phrase, tag: kind ?? undefined } }
@@ -692,6 +702,29 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       clearOffer()
       const summary = `No more timer offers for ${kind}`
       return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Okay — I won't offer a timer for ${kind} again.` } }
+    }
+    case 'note_context': {
+      // Phase 5d. Today only, never memory: no act(), no item, no note. Read back by the context assembler and the personality guard.
+      const x = a as z.infer<typeof toolSchemas.note_context>
+      repo.addContext(x.kind, x.text)
+      clearOffer()
+      const summary = `Today: ${x.text}`
+      const phrase =
+        x.kind === 'energy' || x.kind === 'mood'
+          ? `Okay. I'll keep today light and won't push anything that can wait.`
+          : x.kind === 'location' || x.kind === 'availability'
+            ? `Noted for today — ${x.text}. I'll plan around it and forget it tonight.`
+            : `Noted for today.`
+      return { result: { ok: true, summary, expires: 'tonight' }, applied: { tool: name, summary, phrase } }
+    }
+    case 'get_forgetting': {
+      const nowIso = new Date().toISOString()
+      const commitments = repo.openCommitments().map((c) => ({ title: c.title, to: c.committed_to, due: c.due_at_utc ? formatDue(c.due_at_utc, c.due_precision) : null, overdue: !!c.due_at_utc && isOverdue(c.due_at_utc, c.due_precision) }))
+      const overdue = repo.openItemsOverdue(nowIso, 20).filter((i) => i.kind !== 'commitment').map((i) => ({ title: i.title, kind: i.kind, due: formatDue(i.due_at_utc!, i.due_precision) }))
+      const waiting = repo.openWaitingItems().map((w) => ({ who: w.waiting_on, about: w.details, expected: w.due_at_utc ? formatDue(w.due_at_utc, w.due_precision) : null, overdue: !!w.due_at_utc && isOverdue(w.due_at_utc, w.due_precision) }))
+      const soonEnd = DateTime.utc().plus({ days: 2 }).toISO()!
+      const soon = repo.itemsDueBetween(nowIso, soonEnd).filter((i) => i.kind !== 'commitment' && i.kind !== 'waiting' && i.kind !== 'checklist_item').map((i) => ({ title: i.title, due: formatDue(i.due_at_utc!, i.due_precision) }))
+      return { result: { commitments, overdue, waiting, due_soon: soon, today_context: repo.todayContext().map((c) => c.text) } }
     }
     case 'add_constraint': {
       const x = a as z.infer<typeof toolSchemas.add_constraint>
@@ -959,6 +992,7 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
         hardness: x.hardness ?? (x.kind === 'deadline' ? 'hard' : null),
         importance: x.importance ?? null,
         waitingOn: x.waiting_on ?? null,
+        committedTo: x.kind === 'commitment' ? (x.committed_to ?? null) : null,
         isSuggestion: x.is_suggestion ?? false,
         confidence: x.is_suggestion ? (x.confidence ?? 0.5) : null,
         sourceMsgId: ctx.sourceMsgId
@@ -1010,9 +1044,13 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
           ? reminder.rrule
             ? `Noted — I'll remind you about "${item.title}" ${describeRule(reminder.rrule)}, starting ${formatClock(reminder.fire_at_utc)}${reminderNote}.`
             : `Noted — I'll remind you about "${item.title}" ${formatClock(reminder.fire_at_utc)}${reminderNote}.`
-          : item.due_at_utc
-            ? `Noted "${item.title}"${project ? ` under "${project.title}"` : ''}, due ${dueText(item)}${item.due_precision === 'day' ? ' (no time set)' : ''}${gate.note}.${offer}`
-            : `Noted "${item.title}"${project ? ` under "${project.title}"` : ''}.`
+          : item.kind === 'commitment'
+            ? item.committed_to && item.title.toLowerCase().includes(item.committed_to.toLowerCase())
+              ? `Noted — a promise to ${item.committed_to}: "${item.title}"${item.due_at_utc ? `, ${dueText(item)}` : ''}. I'll hold it as a promise, not just a task.${offer}`
+              : `Noted — you told ${item.committed_to ?? 'them'} you'd ${lowerFirst(item.title)}${item.due_at_utc ? ` ${dueText(item)}` : ''}. I'll hold it as a promise, not just a task.${offer}`
+            : item.due_at_utc
+              ? `Noted "${item.title}"${project ? ` under "${project.title}"` : ''}, due ${dueText(item)}${item.due_precision === 'day' ? ' (no time set)' : ''}${gate.note}.${offer}`
+              : `Noted "${item.title}"${project ? ` under "${project.title}"` : ''}.`
       return {
         result: {
           ok: true,
@@ -1051,6 +1089,7 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       if (x.kind !== undefined) (patch.kind = x.kind), changed.push('kind')
       if (x.status !== undefined) (patch.status = x.status), changed.push('status')
       if (x.waiting_on !== undefined) (patch.waitingOn = x.waiting_on), changed.push('waiting on')
+      if (x.committed_to !== undefined) (patch.committedTo = x.committed_to), changed.push('promised to')
       if (x.confirm_suggestion) (patch.isSuggestion = false), changed.push('confirmed')
       const { item, movedReminders } = repo.updateItem(id, patch)
       const verb = patch.dueAtUtc !== undefined ? 'rescheduled' : patch.status !== undefined ? 'status_changed' : 'updated'
@@ -1448,7 +1487,8 @@ function publicItem(i: Item): Record<string, unknown> {
     hardness: i.hardness,
     importance: i.importance,
     is_suggestion: !!i.is_suggestion,
-    waiting_on: i.waiting_on
+    waiting_on: i.waiting_on,
+    committed_to: i.committed_to ?? undefined
   }
 }
 function publicReminder(r: Reminder): Record<string, unknown> {
@@ -1471,7 +1511,7 @@ export function inTransaction<T>(fn: () => T): T {
 const capital = (s: string): string => (s ? s[0].toUpperCase() + s.slice(1) : s)
 
 /** Micro-rituals (spec Phase 5): one gentle offer per open-ended happening, only where a default timer makes sense. */
-const RITUALS: Record<string, { minutes: number; question: string }> = {
+export const RITUALS: Record<string, { minutes: number; question: string }> = {
   tea: { minutes: 5, question: 'Want a 5-minute steep timer?' },
   egg: { minutes: 7, question: 'Want a 7-minute timer? That is about soft-medium.' },
   focus: { minutes: 25, question: 'Want a 25-minute timer for it?' },

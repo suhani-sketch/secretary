@@ -25,6 +25,8 @@ export interface Item {
   is_suggestion: number
   confidence: number | null
   waiting_on: string | null
+  /** For kind=commitment: who the promise was made to ("I told Priya I'd send the draft tonight"). */
+  committed_to: string | null
   source_msg_id: string | null
   created_at: string
   updated_at: string

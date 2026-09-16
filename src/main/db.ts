@@ -218,6 +218,12 @@ const MIGRATIONS: { version: number; sql: string }[] = [
       );
       CREATE INDEX idx_happenings_state ON happenings(state, ends_at);
     `
+  },
+  {
+    // Phase 5d: a commitment is an obligation with another person's expectation attached — who it was made to.
+    // People stay a plain text here; the `people` table is unused until after V1 (spec).
+    version: 6,
+    sql: `ALTER TABLE items ADD COLUMN committed_to TEXT;`
   }
 ]
 

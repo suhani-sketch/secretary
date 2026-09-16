@@ -89,6 +89,7 @@ export function ItemEditor({
   const [clock, setClock] = useState(item.due_at_utc && item.due_precision === 'exact' ? toLocalClock(item.due_at_utc) : '')
   const [looseness, setLooseness] = useState<'day' | 'week' | 'vague'>(item.due_precision === 'week' || item.due_precision === 'vague' ? item.due_precision : 'day')
   const [hardness, setHardness] = useState<'hard' | 'soft' | ''>(item.hardness ?? '')
+  const [committedTo, setCommittedTo] = useState(item.committed_to ?? '')
   const [remDate, setRemDate] = useState('')
   const [remClock, setRemClock] = useState('')
   const [busy, setBusy] = useState(false)
@@ -130,6 +131,7 @@ export function ItemEditor({
     if (kind !== item.kind) args.kind = kind
     if (status !== item.status && status !== 'done' && status !== 'cancelled') args.status = status
     if ((hardness || null) !== (item.hardness || null) && hardness) args.hardness = hardness
+    if (kind === 'commitment' && (committedTo.trim() || null) !== (item.committed_to || null)) args.committed_to = committedTo.trim() || null
     const hadDue = !!item.due_at_utc
     if (!date && hadDue) args.clear_due = true
     else if (date) {
@@ -171,6 +173,12 @@ export function ItemEditor({
           <span className={label}>Title</span>
           <input className={field} value={title} onChange={(e) => setTitle(e.target.value)} />
         </div>
+        {kind === 'commitment' && (
+          <div>
+            <span className={label}>Promised to</span>
+            <input className={field} value={committedTo} onChange={(e) => setCommittedTo(e.target.value)} placeholder="who is expecting this" />
+          </div>
+        )}
         <div>
           <span className={label}>Details</span>
           <textarea className={field} rows={2} value={details} onChange={(e) => setDetails(e.target.value)} />

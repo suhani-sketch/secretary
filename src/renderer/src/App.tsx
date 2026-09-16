@@ -597,8 +597,8 @@ export default function App(): React.JSX.Element {
                     onClick={() => setEditing(it.kind === 'project' ? { kind: 'project', project: it } : { kind: 'item', item: it })}
                   >
                   <div className="flex items-start gap-2">
-                    <span className={`text-[10px] mt-1 rounded px-1 ${it.kind === 'project' ? 'bg-[#B5836D]/25 text-[#3A2E28]' : 'bg-stone-200 text-stone-600'}`}>
-                      {it.is_suggestion ? 'suggested' : it.kind === 'project' ? 'thing' : it.kind.replace('_', ' ')}
+                    <span className={`text-[10px] mt-1 rounded px-1 ${it.kind === 'project' ? 'bg-[#B5836D]/25 text-[#3A2E28]' : it.kind === 'commitment' ? 'bg-rose-100 text-rose-900' : 'bg-stone-200 text-stone-600'}`} title={it.kind === 'commitment' ? `Promised to ${it.committed_to ?? 'someone'}` : undefined}>
+                      {it.is_suggestion ? 'suggested' : it.kind === 'project' ? 'thing' : it.kind === 'commitment' ? `to ${it.committed_to ?? 'someone'}` : it.kind.replace('_', ' ')}
                     </span>
                     <div className="min-w-0 flex-1">
                       <div className={`truncate ${it.is_suggestion ? 'italic text-stone-500' : ''} ${it.kind === 'project' ? 'font-medium' : ''}`}>{it.title}</div>

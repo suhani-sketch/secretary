@@ -3,7 +3,7 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 5 — Living activities: slices 5a, 5b, 5c all built 2026-09-16 and testable. Phase 6 (calendar) next. Phase 4 companion + room built and committed.
+## Current phase: Phase 5 — Living activities: slices 5a–5d built 2026-09-16; §11F passed. Phase 6 (calendar) next. Phase 4 companion + room built and committed.
 
 ## Phase 5a — happenings core (2026-09-16)
 - **Migration 5**: `happenings` (spec §3) + a `kind` column (addition: lets micro-rituals remember a "no" per kind). Deliberately
@@ -58,6 +58,33 @@ Update it at the end of every session (spec §11).
   no line at all; "tea's ready" with tea and coffee both running picks the tea (label outranks kind).
 - Phase 5 done-when check: "I've put an egg on for 8 minutes" → visible egg that progresses and resolves, no task; "I need to do
   laundry tomorrow" → task; room reacts. "A week of use has produced no clutter in Open" is for the user to observe.
+
+## Phase 5d — context and commitments (2026-09-16); spec invariant 9 (never convert a statement into an unwanted timer/task/reminder/interaction)
+- **Bare statements create nothing.** `detectHappeningStart` now returns `bare` for tea/egg/cooking with no duration ("I'm making
+  dinner", "I'm making tea", "cooking lunch"). Router: bare + a kind with a default timer (`RITUALS`, exported from tools.ts) and not
+  declined → Offer `{kind:'ritual', happeningId:null, …}` + REPLY "Tea — want a 5-minute steep timer?" (no row); "yes"/"6 minutes" →
+  `start_happening` with minutes; "no" → `decline_ritual`. Bare + no default or declined → a plain reply (`plainAcknowledgement`),
+  nothing created. Things with their own clock (wash, charge, download, focus, shower) are still happenings. Compound "I'm making
+  dinner, remind me to check it in 20 minutes" → `start_happening` + `create_item` with reminder, "it" → "the dinner".
+- **Context** (today only, never memory): `note_context {kind energy|mood|location|availability|other, text}` → repo `addContext`
+  stores under setting `context.<today>` (older keys deleted); `todayContext()` feeds the context assembler ("Today's context …
+  NEVER store"), the personality guard (energy/mood → no lines) and `get_forgetting`'s closing line. No item/note/activity/preference.
+  Tier 0: "I'm exhausted/tired/low/stressed… (today)" → note_context; "I'm at TISS until 5" → note_context + a same-day
+  `add_constraint unavailable` so nothing is booked there (constraints expire when the window ends).
+- **Commitments**: migration 6 `items.committed_to`. `create_item kind=commitment, committed_to`; `update_item.committed_to`;
+  `publicItem.committed_to`; editor shows "Promised to" for commitments; rail badge "to Priya" (rose). Tier 0: "I told X I'd Y
+  <when>" / "I promised X …" / "I said I'd Y to X" / "X is expecting me to Y" → commitment (him/her → X). Context lists "Open
+  commitments" and marks items "COMMITMENT to X — they are expecting it". Phrase: "you told Priya you'd send the draft … I'll hold
+  it as a promise, not just a task."
+- **"What am I forgetting?"** → tier-0 `get_forgetting` (read tool, phrased in code): promises first (with who), then overdue,
+  waiting, coming up (2 days); adds "you said you're exhausted today — for the record, not a push" when today's context says so.
+- Prompt: the four-way separation extended with context and commitments; "saying what you are doing is not a request".
+- **§11F run 2026-09-16 on a scratch DB with a real quit + relaunch between steps 5 and 6 — all six pass:** (1) "I'm making dinner." →
+  no row, plain reply; (2) + "remind me to check it in 20 minutes" → dinner happening + "Check the dinner" task with reminder;
+  (3) "I need to make dinner tomorrow." → task, day precision; (4) "I'm exhausted today." → context setting only, no item/note/
+  preference/activity, and both "what am I forgetting?" and "what should I do right now?" reflected it; (5) "I told Priya I'd send
+  the draft tonight." → commitment to Priya, listed before the equivalent plain task "Send the report"; (6) "I'm making tea." →
+  offer only; "no" → remembered; second "I'm making tea." → "Enjoy the tea.", nothing created.
 Phase 3 slices 3a–3f built. **§11B TISS run passed end to end 2026-09-16** (steps 1–6, real quit + relaunch, steps 7–10) on a
 scratch database via `SECRETARY_USER_DATA` — one project, no duplicates, conditional follow-up Fri 14:00 with `unless_resolved`.
 Fixes that came out of it: "I haven't sent it yet" is a tier-0 no-op reply (it used to become a waiting item, and step 6 then

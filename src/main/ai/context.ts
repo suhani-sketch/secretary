@@ -35,7 +35,7 @@ export type Offer =
   /** A booking refused for clashing with availability; "yes" / "book it anyway" replays it with override_conflicts. */
   | { kind: 'conflict_override'; toolName: string; args: Record<string, unknown> }
   /** Micro-ritual (Phase 5): "Want a 5-minute steep timer?" for an open-ended happening. "yes" times it; "no" is remembered per kind. */
-  | { kind: 'ritual'; happeningId: string; happeningKind: string; minutes: number; label: string }
+  | { kind: 'ritual'; happeningId: string | null; happeningKind: string; minutes: number; label: string; metaphor: string | null }
 let offer: Offer | null = null
 export const setOffer = (o: Offer): void => {
   offer = o
@@ -51,6 +51,7 @@ function describeItem(it: Item, reminders: Reminder[]): string {
   if (it.due_at_utc) bits.push(`due ${formatDue(it.due_at_utc, it.due_precision)} (${it.due_precision} precision)`)
   if (it.importance !== 2) bits.push(`importance=${it.importance}`)
   if (it.waiting_on) bits.push(`waiting on ${it.waiting_on}${it.due_at_utc ? `, expected ${formatDue(it.due_at_utc, it.due_precision)}` : ''} since ${it.created_at.slice(0, 10)}`)
+  if (it.kind === 'commitment') bits.push(`COMMITMENT to ${it.committed_to ?? 'someone'} — they are expecting it`)
   if (it.kind === 'waiting') {
     const fu = repo.conditionalRemindersOn(it.id)
     if (fu.length) bits.push(`follow-up ${fu.map((f) => `[${shortId(f.id)}] ${formatClock(f.fire_at_utc)}`).join(', ')} unless resolved`)
@@ -103,6 +104,8 @@ export function assembleContext(userText: string): string {
   const prefs = repo.listPreferences()
   const constraints = repo.activeConstraints()
   const happenings = repo.runningHappenings()
+  const todayCtx = repo.todayContext()
+  const commitments = repo.openCommitments()
   const dateNotes = repo.dateNotesBetween(now.minus({ days: 1 }).toISODate()!, now.plus({ days: 14 }).toISODate()!)
   const events = repo.eventsBetween(now.startOf('day').toUTC().toISO()!, now.plus({ days: 1 }).endOf('day').toUTC().toISO()!)
   const offer = getOffer()
@@ -150,6 +153,12 @@ export function assembleContext(userText: string): string {
     constraints.length
       ? `Availability constraints (the app checks these when a time is booked; you do not need to):\n${constraints.map((c) => `- [${shortId(c.id)}] ${c.kind}: ${describeConstraint(c)} [${c.source}]`).join('\n')}`
       : `Availability constraints: none recorded.`,
+    todayCtx.length
+      ? `Today's context (expires tonight; shapes what you recommend today; NEVER store it anywhere):\n${todayCtx.map((c) => `- ${c.kind}: ${c.text} (${c.at.slice(11, 16)}Z)`).join('\n')}`
+      : `Today's context: nothing stated.`,
+    commitments.length
+      ? `Open commitments (promises to a named person — they weigh more than plain tasks):\n${commitments.map((c) => `- [${shortId(c.id)}] "${c.title}" to ${c.committed_to ?? 'someone'}${c.due_at_utc ? ` · ${formatDue(c.due_at_utc, c.due_precision)}` : ''}`).join('\n')}`
+      : `Open commitments: none.`,
     happenings.length
       ? `Happening right now (living activities — never tasks, never history):\n${happenings
           .map((h) => `- [${shortId(h.id)}] ${h.label}${h.ends_at ? ` · ends ${formatClock(h.ends_at)}` : ' · open-ended'}${h.metaphor ? ` (${h.metaphor})` : ''}`)
@@ -166,7 +175,9 @@ export function assembleContext(userText: string): string {
           : offer.kind === 'checklist_target'
             ? `Standing context: the user just asked for a checklist on project [${shortId(offer.projectId)}]; items they list next belong on it (add_checklist_item).`
             : offer.kind === 'ritual'
-              ? `Standing offer: you offered a ${offer.minutes}-minute timer for the running "${offer.label}" [${shortId(offer.happeningId)}]. "yes" → time_happening with that id and minutes (or the minutes they name); "no" → decline_ritual with kind "${offer.happeningKind}" (the app then never offers it for that kind again).`
+              ? offer.happeningId
+                ? `Standing offer: you offered a ${offer.minutes}-minute timer for the running "${offer.label}" [${shortId(offer.happeningId)}]. "yes" → time_happening with that id and minutes (or the minutes they name); "no" → decline_ritual with kind "${offer.happeningKind}" (the app then never offers it for that kind again).`
+                : `Standing offer: the user said they are making ${offer.label}; you offered a ${offer.minutes}-minute timer and nothing was created. "yes" → start_happening {label "${offer.label}", minutes ${offer.minutes}}; "no" → decline_ritual with kind "${offer.happeningKind}". Anything else → drop it silently.`
               : `Standing question: a booking was refused because it clashes with the user's availability. If they say to book it anyway, call ${offer.toolName} again with the same arguments plus override_conflicts=true; if they pick another time, book that instead.`
       : '',
     ``,

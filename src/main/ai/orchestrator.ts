@@ -35,6 +35,11 @@ Living activities (happenings) — four different things, keep them apart:
 - "laundry's done" / "egg's ready" / "I'm out of the shower" / "never mind the egg" → finish_happening on the running happening listed in the context (outcome done, or abandoned for never-mind). Nothing is recorded anywhere else.
 - Metaphors are the app's business (egg, tea, laundry, plant, download, focus). Pass metaphor only when obvious; leave it out otherwise and the app shows a plain timer.
 - Timer offers are the app's business too: it offers once ("Want a 5-minute steep timer?") and the user's yes/no is handled for you (time_happening / decline_ritual). Never offer a timer yourself, never nag, and never add cheerful commentary — the app adds the occasional observation itself.
+- INVARIANT: saying what you are doing is not a request. "I'm making dinner", "I'm making tea", "cooking lunch" with no duration and no "remind me" → call NO tool at all; reply in a sentence like a person would. Only a stated duration ("for 8 minutes"), a thing with its own clock (a wash, a charge, a download, a focus session, a shower) or an explicit "remind me" creates anything.
+
+Context and commitments (5d) — the last two things to keep apart:
+- CONTEXT: "I'm exhausted today", "feeling low", "I'm at TISS until 5", "I'm free this evening" → note_context. It shapes what you recommend today and disappears tonight. NEVER a task, note, activity or preference. A durable pattern stated as such ("I work better on analytical writing in the afternoon", "no mornings") IS a preference → set_preference / add_constraint.
+- COMMITMENT: an obligation with another person's expectation attached. "I should email Professor X" → a task (intention). "I told Professor X I'd email him tonight" / "I promised Priya the draft by Friday" → create_item kind=commitment, committed_to = the person, title = what was promised, due from their words. Commitments come first in "what am I forgetting?" and are shown with who they were made to. Never invent a person.
 
 Things (projects) — the life model:
 - When the user names something they are dealing with that has, or will have, parts ("TISS mailing is something I need to deal with", "my IIM application", "the wedding"), call create_project with the name they used. The context lists every project you already track with its id: if the Thing is there, DO NOT create it again — use its id.
@@ -261,6 +266,19 @@ function phraseReadResults(results: ToolResult[]): string | null {
         if (doneSoFar.length) lines.push(`Done so far: ${doneSoFar.slice(0, 8).join('; ')}.`)
         const rest = hist.filter((h) => !/· \w+: (?:Drafted|Ticked off|Recorded|Sent|Finished|Completed)/.test(h) && !doneSoFar.some((d) => h.includes(d.replace(/ \(\d{4}-\d\d-\d\d\)$/, ''))))
         if (rest.length) lines.push(`Also: ${rest.slice(0, 4).map((h) => h.replace(/^.*?· \w+: /, '')).join('; ')}.`)
+      }
+    } else if (r.name === 'get_forgetting') {
+      type F = { commitments: { title: string; to: string | null; due: string | null; overdue: boolean }[]; overdue: { title: string; kind: string; due: string }[]; waiting: { who: string | null; about: string | null; expected: string | null; overdue: boolean }[]; due_soon: { title: string; due: string }[]; today_context: string[] }
+      const f = res as unknown as F
+      const parts: string[] = []
+      if (f.commitments.length) parts.push(`Promises first: ${f.commitments.map((c) => `${c.title} — to ${c.to ?? 'someone'}${c.due ? `, ${c.due}` : ''}${c.overdue ? ' (overdue)' : ''}`).join('; ')}.`)
+      if (f.overdue.length) parts.push(`Overdue: ${f.overdue.map((o) => `${o.title} (was ${o.due})`).join('; ')}.`)
+      if (f.waiting.length) parts.push(`Waiting on: ${f.waiting.map((w) => `${w.who ?? 'someone'}${w.about ? ` about ${w.about}` : ''}${w.expected ? `, expected ${w.expected}` : ''}${w.overdue ? ' — past due' : ''}`).join('; ')}.`)
+      if (f.due_soon.length) parts.push(`Coming up: ${f.due_soon.map((s) => `${s.title} (${s.due})`).join('; ')}.`)
+      if (!parts.length) lines.push("Nothing I can see slipping. No open promises, nothing overdue, nothing waiting.")
+      else {
+        if (f.today_context.some((t) => /exhaust|tired|wiped|drained|knackered|shattered|burnt|burned|worn|low|down|flat|anxious|stressed|overwhelmed|unwell|sick|ill/i.test(t))) parts.push(`You said you're ${f.today_context[0]} today — this is for the record, not a push. Nothing here needs to happen tonight unless it's a promise.`)
+        lines.push(parts.join(' '))
       }
     } else if (r.name === 'check_conflicts') {
       const c = res as unknown as { window: string; conflicts: { kind: string; text: string }[]; clear: boolean; next_free_from: string | null }

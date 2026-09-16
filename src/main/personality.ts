@@ -59,6 +59,8 @@ function struggling(a: AppliedChange, userText: string): boolean {
   if (STRAIN.test(userText)) return true
   const recent = repo.recentUserTexts(4)
   if (recent.some((t) => STRAIN.test(t))) return true
+  // Today's stated context (Phase 5d): a low-energy or low-mood day means no observations at all.
+  if (repo.todayContext().some((c) => c.kind === 'energy' || c.kind === 'mood')) return true
   const overdue = repo.openItemsOverdue(new Date().toISOString(), 10)
   if (overdue.length >= 3) return true
   if (a.itemId) {
