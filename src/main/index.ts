@@ -1,10 +1,10 @@
-import { BrowserWindow, app, ipcMain, powerMonitor, shell } from 'electron'
+import { BrowserWindow, Notification, app, ipcMain, powerMonitor, shell } from 'electron'
 import { join } from 'path'
 import { writeFileSync } from 'fs'
 import { config as loadDotenv } from 'dotenv'
 import { closeDatabase, dbPath, getDb, openDatabase } from './db'
 import { clearLog, listLog, log } from './log'
-import { PROTOCOL, showToast } from './notifier'
+import { NOTIFICATION_ID_PREFIX, PROTOCOL, dispatchToastAction, setToastActionHandler, showToast } from './notifier'
 import * as repo from './repo'
 import { TICK_MS, startScheduler, startupSweep, stopScheduler, tick } from './scheduler'
 import { createTray, refreshTrayMenu } from './tray'
@@ -103,14 +103,22 @@ function handleProtocolUrl(raw: string): void {
     showWindow()
     return
   }
+  performReminderAction(reminderId, action, arg, 'protocol url')
+}
+
+/**
+ * The one place a reminder action is carried out, whichever way it arrived (toast button, protocol URL, cold-start
+ * activation). Every write goes through the same validated tool layer as typed input (spec §5).
+ */
+function performReminderAction(reminderId: string, action: string, arg: string | undefined, source: string): void {
   const rem = repo.getReminder(reminderId)
   if (!rem) {
-    log('warn', 'protocol.unknown_reminder', reminderId)
+    log('warn', 'toast.unknown_reminder', `${reminderId} (${source})`)
     showWindow()
     return
   }
   // The action itself, parsed — this is the line to look for when testing toast buttons.
-  log('info', 'toast.received', `action=${action}${arg ? `/${arg}` : ''} for reminder "${rem.item_title ?? 'Reminder'}" (state ${rem.state})`, reminderId)
+  log('info', 'toast.received', `action=${action}${arg ? `/${arg}` : ''} for reminder "${rem.item_title ?? 'Reminder'}" (state ${rem.state}) via ${source}`, reminderId)
   const ext = (calls: { name: string; args: Record<string, unknown> }[]): void => {
     const res = applyExternalTools('toast', 'user', calls)
     log(res.applied.length ? 'info' : 'warn', 'toast.action', `${action}: ${res.applied.map((a) => a.summary).join(' | ') || res.error || 'nothing applied'}`, reminderId)
@@ -135,6 +143,29 @@ function handleProtocolUrl(raw: string): void {
     default:
       repo.acknowledgeReminder(reminderId)
       showWindow()
+  }
+}
+
+// ---- Toast buttons (spec §5 "Notification actions") ----
+function installToastActivation(): void {
+  // Live toasts: the Notification object's `action` event → dispatchToastAction → performReminderAction.
+  setToastActionHandler((reminderId, action, arg, source) => performReminderAction(reminderId, action, arg, source))
+  // Toasts whose Notification object is gone (app restarted, GC): Windows hands the activation to the app itself.
+  if (process.platform === 'win32' && typeof Notification.handleActivation === 'function') {
+    Notification.handleActivation((details) => {
+      log('info', 'toast.activation', `type=${details.type} actionIndex=${details.actionIndex ?? '-'} args=${details.arguments}`)
+      const m = new RegExp(`${NOTIFICATION_ID_PREFIX}([0-9a-f-]{36})`).exec(details.arguments ?? '')
+      if (!m) {
+        showWindow()
+        return
+      }
+      if (details.type === 'action' && typeof details.actionIndex === 'number') dispatchToastAction(m[1], details.actionIndex, 'handleActivation')
+      else {
+        repo.acknowledgeReminder(m[1])
+        showWindow()
+      }
+    })
+    log('info', 'toast.activation_hook', 'Notification.handleActivation installed')
   }
 }
 
@@ -270,6 +301,7 @@ function onReady(): void {
   setupProvider()
   createTray(trayHandlers)
   registerIpc()
+  installToastActivation()
 
   // If a toast button launched us cold (app was not running), the URL is in our own argv.
   const coldUrl = process.argv.find((a) => a.startsWith(`${PROTOCOL}://`))

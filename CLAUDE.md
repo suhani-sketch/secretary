@@ -93,10 +93,13 @@ Update it at the end of every session (spec §11).
   every start). Without the shortcut the toast shows but button/body clicks fail with "Get an app to open this 'secretary' link",
   even though `Start-Process secretary://…` and `Launcher.LaunchUriAsync` both work (verified 2026-09-16). Look for
   `toast.received action=… ` in the log when testing buttons; `notify.clicked` is only the body click.
-- Toast buttons (Done / Snooze 15 / Snooze 1 h / Reschedule): Windows `toastXml` with protocol activation `secretary://reminder/<id>/<action>`.
-  Electron's `actions` option is macOS-only, hence XML. `app.setAsDefaultProtocolClient('secretary', electron.exe, [appDir])` in dev.
-  The URL arrives via `second-instance` argv (or own argv on a cold start) → `handleProtocolUrl` → `applyExternalTools` → same
-  tool layer. Reschedule opens the window and prefills the input. Falls back to a plain toast if the rich one fails.
+- Toast buttons (Done / Snooze 15 / Snooze 1 h / Reschedule) use **Electron's native `actions` — supported on Windows in
+  Electron 44** (my earlier "macOS-only" note was wrong for this version). Live toast → `Notification 'action'` event with
+  `actionIndex` → `dispatchToastAction` → `performReminderAction` → `applyExternalTools('toast','user')`. After a restart /
+  GC → `Notification.handleActivation` (win32) with `ActivationArguments`; the notification `id` is `reminder:<uuid>` and is
+  parsed out of `details.arguments`. **Protocol activation (`toastXml` + `secretary://`) failed on this machine** with "Get an
+  app to open this 'secretary' link" even though the registry, ACLs, `Start-Process` and `Launcher.LaunchUriAsync` were all fine —
+  kept only as a diagnostic path (`handleProtocolUrl` → same `performReminderAction`). Reschedule opens the window and prefills the input.
 - Gemini free tier is **5 requests/min per model** (not 15). **One message = one model call** in the common case: after a
   write round the reply is composed in code from `AppliedChange.phrase` (set inside each tool in `tools.ts`); the model is
   told not to write confirmations. A second call happens only for read-only tool rounds. `chat.done` log line reports
