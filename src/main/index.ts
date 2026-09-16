@@ -364,6 +364,7 @@ function onReady(): void {
           for (const a of res.applied) console.log(`    ✓ ${a.summary}`)
           if (res.confirm) console.log(`    ? confirm: ${res.confirm.question}`)
           if (res.error) console.log(`    ✗ error: ${res.error}`)
+          if (res.text) console.log(`    → ${res.text}`)
           remember(res.applied)
           continue
         }

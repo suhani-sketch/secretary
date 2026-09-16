@@ -3,7 +3,7 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 7 — Intelligence. 7a (brain dump) and 7b (deadline intelligence) built 2026-09-17, testable; 7c–7g not started. Governing rule: compute in
+## Current phase: Phase 7 — Intelligence. 7a (brain dump), 7b (deadline intelligence) and 7c (what should I do right now) built 2026-09-17, testable; 7d–7g not started. Governing rule: compute in
 code, the model only phrases — every answer costs at most ONE model call (§11G 14). Phase 6: 6a–6f built. **§11C run 2026-09-17 on scratch DB c7 across
 several real quit + relaunch cycles: 24 of 27 steps pass outright; 4 and 12 pass on the tool path the drag calls but the mouse gesture itself
 was not performed; 25 passes against planted history (see below).** Phase 5 complete (§11F passed).
@@ -24,6 +24,27 @@ was not performed; 25 passes against planted history (see below).** Phase 5 comp
   reuse all of it. `src/main/calendar.ts` is the SQLite glue (`buildDay`, `occurrencesBetween`); `planning.ts` (conflicts) still
   imports repo and moves to core when 6f touches it.
 - **Migration 7:** `plans` table; `events.plan_id`, `events.session_state`; index on `events.starts_at_utc`.
+
+## Phase 7c — "what should I do right now?" (2026-09-17)
+- **Ranked in code, phrased in code, zero model calls.** `src/core/now.ts` (`recommendNow(input) → Recommendation`,
+  `describeRecommendation`) is platform-independent; `src/main/now.ts` (`recommendNowAt(nowUtc)`) collects: open tasks /
+  deadlines / commitments / checklist steps / ideas (never suggestions, waits, projects, notes), each with open blockers
+  (waits named as "the reply from X"), how many things it unblocks, whether a work block for it is running now, its project,
+  the user's effort figure; the free window before the next timed event or unavailable constraint (`occurrencesBetween` +
+  `constraintWindows`), whether the user is inside an event / unavailable window right now; today's context (low energy).
+- **Scoring:** running work block +100 ("you set this time aside for it") · blocked → set aside with the reason · inside a
+  meeting → only ≤10 min things · free window < 15 min and effort > window → set aside ("needs about 1 h and "X" starts in
+  8 min") · fits the window +8 / won't finish −12 · overdue +50 · promise +30 · hard +25 · critical +30 / high +15 / low −8 ·
+  idea −25 · due today +14 / tomorrow +8 / ≤3 days +4 · unblocks +8 each (max 3) · night (before 07:00 or from 21:00): effort
+  > 45 min −25, ≤ 20 min +10 "it's late — a small one" · evening: > 2 h −8 · morning: ≥ 1 h and important +6 "a big one for a
+  fresh morning" · low energy: > 1 h −15, ≤ 20 min +5. Effort assumed at 30 min for a step, 60 otherwise, and said to be the
+  user's figure only when it is. Ties: earlier due, then older.
+- **Output:** ONE pick with up to three reasons; runners-up (max two) only when within 12 points; blocked things named as
+  "set aside" when the pick is weak; when nothing can start: "Nothing you can start right now: X waits on …; Y needs about
+  1 h and "Z" starts in 8 min." (+ "It's late — nothing here needs tonight." at night). Never an unranked list.
+- Tool `recommend_now {at_local?}` (read; `at_local` only for testing the clock), router: "what should I do (right) now / next /
+  first / today", "what now", "where do I start", "what's next", "give me one thing". Prompt: relay, never answer from memory.
+- Dev hook: manual read tools in `SECRETARY_CHAT` now print their phrased answer ("→ …") via `ToolRunResult.text`.
 
 ## Phase 7b — deadline intelligence (2026-09-17)
 - **Compute, then phrase — literally.** `src/core/deadline.ts` (`assessDeadline(input) → DeadlineAssessment`, `describeAssessment`)

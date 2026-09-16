@@ -49,6 +49,8 @@ Brain dumps (7a) — one messy message, everything handled in this ONE response:
 - Ambiguous but harmless → pick the plain reading and act. Ambiguous and consequential → the one question.
 - Time estimates: keep the user's figure as theirs; never invent one and present it as what they said.
 
+"What should I do right now / next / first?" (7c) → recommend_now. The app ranks every open thing (urgency, importance, hardness, overdue, blockers, free time before the next fixed thing, effort, today's context, promises, whether it can start this minute) and names ONE action with its reason — or says nothing can start and why. Relay its text. Never answer this from memory and never produce a list of your own.
+
 Deadlines (7b) — computed, never weighed by you:
 - "Is X on track?", "what's the bottleneck?", "can I still make Friday?", "how is X looking?" → assess_deadline (or get_project for a dated Thing). The app reasons back from the deadline over the user's OWN parts and blocks links: what remains, what is blocked by what, the bottleneck, whether it is still feasible given the free time left. Relay its text; do not re-rank or second-guess it.
 - Never invent a component. If the parts listed seem incomplete, the app already says "that is everything you have listed — tell me if there are more parts"; do not add steps the user never mentioned.
@@ -352,6 +354,9 @@ function phraseReadResults(results: ToolResult[]): string | null {
         if (f.today_context.some((t) => /exhaust|tired|wiped|drained|knackered|shattered|burnt|burned|worn|low|down|flat|anxious|stressed|overwhelmed|unwell|sick|ill/i.test(t))) parts.push(`You said you're ${f.today_context[0]} today — this is for the record, not a push. Nothing here needs to happen tonight unless it's a promise.`)
         lines.push(parts.join(' '))
       }
+    } else if (r.name === 'recommend_now') {
+      const t = (res as { text?: string }).text
+      if (t) lines.push(t)
     } else if (r.name === 'assess_deadline') {
       const t = (res as { text?: string }).text
       if (t) lines.push(t)
@@ -481,7 +486,8 @@ export function applyExternalTools(origin: string, actor: Actor, calls: { name: 
       applied.length ? `${via}: ${joinPhrases(applied)}` : `${via}: ${calls.map((c) => c.name.replace(/_/g, ' ')).join(', ')} — nothing was changed${outcome.error ? ` (${outcome.error})` : ''}`
     )
   }
-  return { applied, error: outcome.error, confirm: outcome.confirm }
+  const text = !outcome.hadWrites && !outcome.error ? (phraseReadResults(outcome.results) ?? undefined) : undefined
+  return { applied, error: outcome.error, confirm: outcome.confirm, text }
 }
 
 /** Providers often throw JSON blobs; pull out the human message if there is one, then trim. */

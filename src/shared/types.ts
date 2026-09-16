@@ -227,6 +227,8 @@ export interface ToolRunResult {
   error: string | null
   /** The tool declined to act and wants confirmation first (consequential change). */
   confirm: { question: string; wouldAffect: string[] } | null
+  /** For a read-only tool run by hand: the answer phrased in code (what the conversation would have said). */
+  text?: string
 }
 
 export type ChatStatus =

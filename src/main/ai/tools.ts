@@ -11,6 +11,7 @@ import * as repo from '../repo'
 import { clearOffer, getFocus, pushFocus, setOffer, shortId } from './context'
 import { resolveEntity, tokens } from '../entity'
 import { assessTarget, assessmentText, atRiskLines, noteDateConflicts } from '../deadlines'
+import { recommendNowAt, recommendationText } from '../now'
 import { afterConflicts, blockingConflicts, bookingWindowForDue, conflictsFor, describeConflict, describeConstraint } from '../planning'
 import { formatClock, formatDue, isOverdue } from '../../shared/format'
 import { assessSlot, bufferRules, describeBuffer } from '../planning'
@@ -207,6 +208,9 @@ export const toolSchemas = {
     occurrence_start_local: localDateTime.optional().describe('For a recurring series: skip only this occurrence (added to exdates). Omit to remove the whole event.'),
     confirmed: z.boolean().optional().describe('Cancelling a recurring series (or an event that has moved occurrences) is consequential: the first call returns a confirmation question; call again with confirmed=true after the user says yes.')
   }),
+  recommend_now: z.object({
+    at_local: localDateTime.optional().describe('Normally omitted (= now). A clock to reason as if it were that time — used for testing the 9 am vs 11 pm difference.')
+  }),
   assess_deadline: z.object({
     id: idRef.optional().describe('The project (Thing) or dated item to reason back from.'),
     title: z.string().max(200).optional().describe('Its name, if you do not have the id.')
@@ -376,6 +380,7 @@ const descriptions: Record<ToolName, string> = {
   create_event: 'Put something on the calendar that occupies time: "meeting with Professor X Thursday at 3", "dentist Friday 10:30", "class every Tuesday 2–4". NOT for tasks (a task due Thursday is create_item). The app checks clashes.',
   update_event: 'Move or change an existing event ("move it to 4", "make it an hour"). For one occurrence of a recurring series pass occurrence_start_local.',
   delete_event: 'Cancel an event ("cancel the meeting") or skip one occurrence of a series.',
+  recommend_now: '"What should I do right now / next?" (7c). The APP ranks every open thing by urgency, importance, hardness, overdue state, blockers, the free time before the next fixed thing, effort, today\'s context and commitments, and names ONE action with its reason (or says honestly that nothing can start). Relay its text; never produce your own list.',
   assess_deadline: 'Deadline intelligence (7b): "is the TISS mailing on track?", "what\'s the bottleneck?", "can I still make Friday?". The APP computes what remains, what blocks what, the bottleneck and feasibility from the user\'s own parts and links — you only relay its text. Never add a component the user did not state.',
   ask_clarification: 'Brain dumps (7a): ask the ONE clarifying question that would change an action, alongside the tool calls for every clear part of the message. Only one per message is ever asked; never use it instead of acting, never for wording or priority.',
   get_calendar: 'Events between two days, expanded. Use for "what have I got this week?".',
@@ -1008,6 +1013,20 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const movedGone = doomed.filter((e) => !e.rrule).length
       const detail = seriesInvolved ? ` — the whole series${movedGone ? ` and ${plural(movedGone, 'moved occurrence')}` : ''}` : ''
       return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Cancelled "${ev.title}"${detail}. Nothing else was touched.` } }
+    }
+    case 'recommend_now': {
+      const x = a as z.infer<typeof toolSchemas.recommend_now>
+      const at = x.at_local ? repo.localToUtc(x.at_local) : new Date().toISOString()
+      const r = recommendNowAt(at)
+      return {
+        result: {
+          band: r.band,
+          pick: r.pick ? { id: shortId(r.pick.candidate.id), title: r.pick.candidate.title, reasons: r.pick.reasons, effort_minutes: r.pick.effort_minutes, effort_assumed: r.pick.effort_assumed } : null,
+          alternatives: r.alternatives.map((alt) => ({ id: shortId(alt.candidate.id), title: alt.candidate.title, reason: alt.reasons[0] })),
+          set_aside: r.excluded.slice(0, 6).map((e) => ({ title: e.candidate.title, why: e.why })),
+          text: recommendationText(r)
+        }
+      }
     }
     case 'assess_deadline': {
       const x = a as z.infer<typeof toolSchemas.assess_deadline>

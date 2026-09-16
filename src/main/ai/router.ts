@@ -400,6 +400,11 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     }
   }
 
+  // ---- "what should I do right now?" (7c) → recommend_now, ranked in code, one action with a reason ----
+  if (/^(?:so,? |ok,? |okay,? |right,? |hmm,? )?(?:what should i (?:do|be doing|start(?: with| on)?|tackle|work on|focus on|pick up|get on with)(?: right)?(?: now| next| first| today| this (?:morning|afternoon|evening)| tonight)?|what (?:do|can|could) i do (?:right )?(?:now|next|first)|what(?:'s| is) (?:the )?(?:next|first)(?: thing)?(?: to do| for me| up)?|what now|what next|where (?:do|should|shall) i (?:start|begin)|what'?s next|next\??|what would you (?:do|suggest|pick)(?: now| first)?|give me (?:one|a|the next) (?:thing|task)(?: to do)?|(?:one|just one) thing(?: to do)?(?: now)?)\??$/.test(text)) {
+    return [{ name: 'recommend_now', args: {} }]
+  }
+
   // ---- "what am I forgetting?" (5d) → deterministic, commitments first ----
   if (/^(?:so,? )?(?:what am i forgetting|am i forgetting (?:anything|something)|what have i forgotten|anything i'?m forgetting|what'?s slipping|am i missing anything|what am i missing)\??$/.test(text)) {
     return [{ name: 'get_forgetting', args: {} }]
