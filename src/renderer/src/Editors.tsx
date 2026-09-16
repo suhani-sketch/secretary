@@ -69,13 +69,16 @@ export function ItemEditor({
   projects,
   parentId,
   notes,
+  blockers,
+  candidates,
   runTool,
   onDone,
   onClose,
   onOpenReminder,
   onHistory
-}: EditorProps<Item> & { projects: Item[]; parentId: string | null; notes: Note[]; onHistory: () => void }): React.JSX.Element {
+}: EditorProps<Item> & { projects: Item[]; parentId: string | null; notes: Note[]; blockers: Item[]; candidates: Item[]; onHistory: () => void }): React.JSX.Element {
   const [parent, setParent] = useState<string>(parentId ?? '')
+  const [newBlocker, setNewBlocker] = useState('')
   const [newNote, setNewNote] = useState('')
   const [editingNote, setEditingNote] = useState<{ id: string; body: string } | null>(null)
   const [title, setTitle] = useState(item.title)
@@ -239,6 +242,57 @@ export function ItemEditor({
             ))}
           </div>
         </div>
+
+        {item.kind !== 'project' && (
+          <div className="rounded-2xl bg-white/70 p-3">
+            <span className={label}>Blocked by (computed from dependencies)</span>
+            {blockers.length === 0 && <p className="text-sm text-stone-400">Nothing — this can be done now.</p>}
+            {blockers.map((b) => (
+              <div key={b.id} className="flex items-center gap-2 text-sm py-1">
+                <span className="text-xs">⛔</span>
+                <span className="flex-1">{b.title}</span>
+                <button
+                  className="text-xs text-stone-500 hover:text-red-700"
+                  onClick={async () => {
+                    setBusy(true)
+                    const res = await runTool('remove_link', { from_id: b.id, to_id: item.id, type: 'blocks' })
+                    setBusy(false)
+                    if (res.error) setErr(res.error)
+                  }}
+                >
+                  remove
+                </button>
+              </div>
+            ))}
+            {candidates.length > 0 && (
+              <div className="flex items-end gap-2 mt-2">
+                <select className={`${field} flex-1`} value={newBlocker} onChange={(e) => setNewBlocker(e.target.value)}>
+                  <option value="">Must wait for…</option>
+                  {candidates
+                    .filter((c) => !blockers.some((b) => b.id === c.id))
+                    .map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.title}
+                      </option>
+                    ))}
+                </select>
+                <button
+                  disabled={!newBlocker || busy}
+                  className={quiet}
+                  onClick={async () => {
+                    setBusy(true)
+                    const res = await runTool('add_link', { from_id: newBlocker, to_id: item.id, type: 'blocks' })
+                    setBusy(false)
+                    if (res.error) setErr(res.error)
+                    else setNewBlocker('')
+                  }}
+                >
+                  Add
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="rounded-2xl bg-white/70 p-3">
           <span className={label}>Notes</span>

@@ -3,7 +3,27 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 3 in progress — 3a Things, 3b Checklists, 3c Waiting + conditional follow-ups, 3d Notes, 3e Activity history in the UI built 2026-09-16; 3f (blocks + constraints) not started.
+## Current phase: Phase 3 — all six slices built (3a–3f, 2026-09-16). Remaining for "Phase 3 complete": run §11B end to end across a restart with one project and no duplicates, then re-offer the Phase 0 reboot test.
+
+## Phase 3f — Dependencies and constraints (2026-09-16)
+- Dependencies: `links` type `blocks` (from = blocker, to = blocked). **Blocked is computed, never stored**: `repo.blockersOf`
+  (open blockers), `blockedByThis`, `newlyUnblockedBy`. Context marks "BLOCKED by [id] …"; `publicItem` carries `blocked_by`;
+  the rail shows "⛔ blocked by …"; the item editor has a Blocked-by block (add via select / remove) through `add_link`/
+  `remove_link`. Completing a blocker says "That unblocks X" (computed). Circular blocks are refused. Both undoable.
+- Constraints: `constraints` table (migration 2). `add_constraint {kind unavailable|prefer|avoid, label, starts/ends_at_local |
+  date_local, rrule?}`, `remove_constraint {id | label}`; undoable. `repo.activeConstraints` keeps standing (rrule) rules and
+  one-offs until their window ends.
+- `src/main/planning.ts` (deterministic): `constraintWindows` (expands rrule via recurrence.ts wall-clock), `conflictsFor(start,
+  end)` over constraints + events, `blockingConflicts` (unavailable + events), `describeConflict`, `afterConflicts`,
+  `bookingWindowForDue` (the hour ending at an exact due), `PART_OF_DAY` (morning 8–12, afternoon 12–18, evening 18–22).
+- **Conflict gate in the tool layer** (`conflictGate` in tools.ts): create_item/update_item with an exact due inside a hard
+  clash → the round is rolled back with a confirm question ("…clashes with "busy" Thu 12:00–18:00. Book it anyway, or would
+  18:00 onwards suit?"); `override_conflicts=true` books it and says so; avoid/prefer clashes are booked with a note. Day-only
+  dues are only gated by whole-day unavailability. `check_conflicts` read tool, phrased in code.
+- Tier 0: "I'm busy/travelling/out/in class … <day> [morning|afternoon|evening|all day | 2-5 | every tuesday]" → add_constraint;
+  "X blocks Y" / "Y depends on X" / "can't do Y until X is done" → add_link (both sides entity-resolved; else model).
+- Rail: "Unavailable / preferences" section with × remove. Spec 3d's "travelling Friday" now lands as a constraint (unavailable
+  all day), not a date note — the prompt says so; date notes remain for other information.
 
 ## Phase 3e — Activity history in the UI (2026-09-16)
 - `ProjectView.tsx`: clicking a Thing row opens its view (Overview: steps with tick boxes, tasks, waiting-on with "replied ✓",

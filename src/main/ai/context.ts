@@ -1,6 +1,7 @@
 import { DateTime } from 'luxon'
 import * as repo from '../repo'
 import { formatClock, formatDue } from '../../shared/format'
+import { describeConstraint } from '../planning'
 import type { Item, Reminder } from '../../shared/types'
 
 /** Short id the model uses to refer to rows. Resolved back with repo.resolveItemId / resolveReminderId. */
@@ -31,6 +32,8 @@ export type Offer =
   | { kind: 'project_match'; existingId: string; proposedTitle: string }
   /** "Add a list for the things I need to do" — the next "add A, B and C" goes onto this project's checklist. */
   | { kind: 'checklist_target'; projectId: string }
+  /** A booking refused for clashing with availability; "yes" / "book it anyway" replays it with override_conflicts. */
+  | { kind: 'conflict_override'; toolName: string; args: Record<string, unknown> }
 let offer: Offer | null = null
 export const setOffer = (o: Offer): void => {
   offer = o
@@ -59,6 +62,8 @@ function describeItem(it: Item, reminders: Reminder[]): string {
     const parent = repo.parentProjectOf(it.id)
     if (parent) bits.push(`part of [${shortId(parent.id)}] "${parent.title}"`)
   }
+  const blockers = repo.blockersOf(it.id)
+  if (blockers.length) bits.push(`BLOCKED by ${blockers.map((b) => `[${shortId(b.id)}] "${b.title}"`).join(', ')}`)
   const rs = reminders.filter((r) => r.target_type === 'item' && r.target_id === it.id)
   for (const r of rs) bits.push(`reminder [${shortId(r.id)}] ${r.state} ${formatClock(r.fire_at_utc)}`)
   if (rs.length === 0) bits.push('no reminder')
@@ -140,7 +145,7 @@ export function assembleContext(userText: string): string {
       ? `Calendar today and tomorrow:\n${events.map((e) => `- "${e.title}" ${e.all_day ? 'all day' : formatClock(e.starts_at_utc)}`).join('\n')}`
       : `Calendar today and tomorrow: nothing.`,
     constraints.length
-      ? `Availability constraints:\n${constraints.map((c) => `- ${c.kind}: ${c.label}${c.rrule ? ` (${c.rrule})` : ''} [${c.source}]`).join('\n')}`
+      ? `Availability constraints (the app checks these when a time is booked; you do not need to):\n${constraints.map((c) => `- [${shortId(c.id)}] ${c.kind}: ${describeConstraint(c)} [${c.source}]`).join('\n')}`
       : `Availability constraints: none recorded.`,
     dateNotes.length
       ? `Notes on upcoming days (inform planning; not tasks):\n${dateNotes.map((n) => `- ${n.target_id}: [${shortId(n.id)}] ${n.body}`).join('\n')}`
@@ -150,7 +155,9 @@ export function assembleContext(userText: string): string {
         ? `Standing offer: you just asked whether to add a reminder for [${shortId(offer.itemId)}]; a plain "yes" means create it.`
         : offer.kind === 'project_match'
           ? `Standing question: you asked whether "${offer.proposedTitle}" is the same Thing as project [${shortId(offer.existingId)}]. "yes" → create_project with use_existing_id; "no"/"different" → create_project with force_new=true.`
-          : `Standing context: the user just asked for a checklist on project [${shortId(offer.projectId)}]; items they list next belong on it (add_checklist_item).`
+          : offer.kind === 'checklist_target'
+            ? `Standing context: the user just asked for a checklist on project [${shortId(offer.projectId)}]; items they list next belong on it (add_checklist_item).`
+            : `Standing question: a booking was refused because it clashes with the user's availability. If they say to book it anyway, call ${offer.toolName} again with the same arguments plus override_conflicts=true; if they pick another time, book that instead.`
       : '',
     ``,
     prefs.length

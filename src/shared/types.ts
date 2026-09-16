@@ -62,6 +62,20 @@ export interface Note {
   updated_at: string
 }
 
+/** Availability constraint (spec §3): when the user is unavailable, or prefers/avoids a time. */
+export interface Constraint {
+  id: string
+  kind: 'unavailable' | 'prefer' | 'avoid'
+  label: string
+  /** UTC window of the (first) occurrence; both null for an all-day-every-day style rule is not allowed. */
+  starts_at: string | null
+  ends_at: string | null
+  /** RRULE body for standing constraints ("every Tuesday 2–5pm"); occurrences repeat the starts_at/ends_at window. */
+  rrule: string | null
+  source: 'stated' | 'inferred'
+  created_at: string
+}
+
 export interface Link {
   from_item: string
   to_item: string
@@ -204,6 +218,8 @@ export interface SecretaryApi {
   activitiesForProject(projectId: string, limit?: number): Promise<Activity[]>
   /** History of one item (task, step, waiting item), newest first. */
   activitiesForItem(itemId: string, limit?: number): Promise<Activity[]>
+  /** Availability constraints still in force (one-off ones that have ended are omitted). */
+  listConstraints(): Promise<Constraint[]>
 }
 
 export const IPC = {
@@ -230,5 +246,6 @@ export const IPC = {
   listLinks: 'links:list',
   listNotes: 'notes:list',
   activitiesForProject: 'activities:project',
-  activitiesForItem: 'activities:item'
+  activitiesForItem: 'activities:item',
+  listConstraints: 'constraints:list'
 } as const

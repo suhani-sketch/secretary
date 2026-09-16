@@ -447,6 +447,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.listNotes, () => repo.listNotes())
   ipcMain.handle(IPC.activitiesForProject, (_e, projectId: string, limit?: number) => repo.activitiesForProject(projectId, limit ?? 200))
   ipcMain.handle(IPC.activitiesForItem, (_e, itemId: string, limit?: number) => repo.activitiesFor('item', itemId, limit ?? 100))
+  ipcMain.handle(IPC.listConstraints, () => repo.activeConstraints())
 
   // Conversation (Phase 1)
   ipcMain.handle(IPC.sendChat, (_e, text: string) => {

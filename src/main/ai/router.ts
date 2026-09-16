@@ -4,6 +4,7 @@ import * as repo from '../repo'
 import { getFocus, getOffer, setOffer } from './context'
 import { firstOccurrence, parseRecurrencePhrase } from '../recurrence'
 import { resolveEntity } from '../entity'
+import { PART_OF_DAY } from '../planning'
 import { log } from '../log'
 import type { Item, Reminder } from '../../shared/types'
 
@@ -203,9 +204,12 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
   }
 
   // ---- "yes" / "no" to a standing offer or question ----
-  if (/^(?:yes|yes please|yep|yeah|sure|ok|okay|please|do it|go ahead|yes do|same|same thing|yes same)$/.test(text)) {
+  if (/^(?:yes|yes please|yep|yeah|sure|ok|okay|please|do it|go ahead|yes do|same|same thing|yes same|(?:yes,? )?(?:book|do|put|add|move|schedule) it anyway|anyway|go ahead anyway|yes anyway|override)$/.test(text)) {
     const offer = getOffer()
     if (!offer) return null
+    if (offer.kind === 'conflict_override') {
+      return [{ name: offer.toolName, args: offer.args }]
+    }
     if (offer.kind === 'project_match') {
       return [{ name: 'create_project', args: { title: offer.proposedTitle, use_existing_id: offer.existingId } }]
     }
@@ -222,6 +226,45 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     const offer = getOffer()
     if (offer?.kind === 'project_match') return [{ name: 'create_project', args: { title: offer.proposedTitle, force_new: true } }]
     return null
+  }
+
+  // ---- availability (3f): "I'm busy tomorrow afternoon" / "I'm travelling on Friday" / "I'm out on the 20th" ----
+  if ((m = /^(?:i(?:'m| am| will be|'ll be)|i have|i've got) (busy|unavailable|out|away|travelling|traveling|off|in class|in a meeting|at the gym|at work|on leave|on holiday|a class|a meeting|an exam|a flight)(?: (.+))?$/.exec(text))) {
+    const label = m[1].replace(/^(?:a|an) /, '')
+    const tail = m[2] ?? ''
+    const part = /\b(morning|afternoon|evening|night|all day)\b/.exec(tail)?.[1]
+    const range = /\b(?:from |between )?(\d{1,2})(?::(\d{2}))?\s*(?:-|–|to|till|until)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/.exec(tail)
+    const rec = parseRecurrencePhrase(tail)
+    const dateText = tail.replace(/\b(morning|afternoon|evening|night|all day)\b/, ' ').replace(range?.[0] ?? '', ' ').replace(rec ? tail.slice(tail.indexOf(tail.replace(rec.stripped, '').trim())) : '', ' ')
+    const when = parseWhen(dateText.trim() || 'today')
+    const day = when ? (when.exact ? when.dateTime!.slice(0, 10) : when.date!) : DateTime.local().toISODate()!
+    let startH: number, endH: number, startM = 0, endM = 0
+    if (range) {
+      startH = Number(range[1]); startM = Number(range[2] ?? 0); endH = Number(range[3]); endM = Number(range[4] ?? 0)
+      if (range[5] === 'pm') { if (startH < 12 && startH <= endH) startH += 12; if (endH < 12) endH += 12 } else if (!range[5]) { if (startH <= 7) startH += 12; if (endH <= 7 || endH < startH) endH += 12 }
+    } else if (part && PART_OF_DAY[part]) [startH, endH] = PART_OF_DAY[part]
+    else if (when?.exact) { const h = Number(when.dateTime!.slice(11, 13)); startH = h; endH = h + 1 }
+    else [startH, endH] = [0, 24]
+    const pad = (n: number): string => String(n).padStart(2, '0')
+    const startLocal = `${day}T${pad(startH)}:${pad(startM)}`
+    const endDay = endH >= 24 ? DateTime.fromISO(day).plus({ days: 1 }).toISODate()! : day
+    const endLocal = `${endDay}T${pad(endH >= 24 ? 0 : endH)}:${pad(endM)}`
+    const args: Record<string, unknown> = startH === 0 && endH === 24 && !rec ? { kind: 'unavailable', label, date_local: day } : { kind: 'unavailable', label, starts_at_local: startLocal, ends_at_local: endLocal }
+    if (rec) args.rrule = rec.rrule
+    return [{ name: 'add_constraint', args }]
+  }
+
+  // ---- dependencies (3f): "X blocks Y" / "Y depends on X" / "can't do Y until X is done" ----
+  if ((m = /^(.+?) (?:blocks|is blocking) (.+)$/.exec(text)) || (m = /^(.+?) (?:depends on|is waiting on|needs|is blocked by) (.+?)(?: (?:first|to be done|being done))?$/.exec(text)) ||
+      (m = /^(?:i )?can'?t (?:do|start|finish|send|submit) (.+?) (?:until|till|before) (.+?)(?: is| gets)? (?:done|finished|complete|completed|sorted|ready)$/.exec(text))) {
+    const isBlocks = /\b(?:blocks|is blocking)\b/.test(text)
+    const blockerText = isBlocks ? m[1] : m[2]
+    const blockedText = isBlocks ? m[2] : m[1]
+    const pool = repo.openItems(200)
+    const rb = resolveEntity(blockerText, pool, getFocus().map((f) => f.itemId))
+    const rd = resolveEntity(blockedText, pool, getFocus().map((f) => f.itemId))
+    if (rb.kind === 'none' || rd.kind === 'none' || rb.entity.id === rd.entity.id) return null
+    return [{ name: 'add_link', args: { from_id: rb.entity.id, to_id: rd.entity.id, type: 'blocks' } }]
   }
 
   // ---- notes (3d): "add a note to the application that the transcript must be a PDF" / "note: X" ----

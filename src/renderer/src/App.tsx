@@ -6,6 +6,7 @@ import type {
   ChatMessage,
   ChatStatus,
   ExtractionEntry,
+  Constraint,
   Item,
   Link,
   Note,
@@ -42,6 +43,7 @@ export default function App(): React.JSX.Element {
   const [items, setItems] = useState<Item[]>([])
   const [links, setLinks] = useState<Link[]>([])
   const [notes, setNotes] = useState<Note[]>([])
+  const [constraints, setConstraints] = useState<Constraint[]>([])
   const [reminders, setReminders] = useState<Reminder[]>([])
   const [logs, setLogs] = useState<SchedulerLogEntry[]>([])
   const [aiCalls, setAiCalls] = useState<SchedulerLogEntry[]>([])
@@ -59,7 +61,7 @@ export default function App(): React.JSX.Element {
 
   const refresh = useCallback(async () => {
     try {
-      const [i, r, l, a, x, ac, act, lk, nt] = await Promise.all([
+      const [i, r, l, a, x, ac, act, lk, nt, cs] = await Promise.all([
         window.api.listItems(),
         window.api.listReminders(),
         window.api.listLog(50),
@@ -68,11 +70,13 @@ export default function App(): React.JSX.Element {
         window.api.listAiCalls(20),
         window.api.listActivities(40),
         window.api.listLinks(),
-        window.api.listNotes()
+        window.api.listNotes(),
+        window.api.listConstraints()
       ])
       setItems(i)
       setLinks(lk)
       setNotes(nt)
+      setConstraints(cs)
       setReminders(r)
       setLogs(l)
       setInfo(a)
@@ -187,6 +191,13 @@ export default function App(): React.JSX.Element {
     if (child && live(child)) partsOf.set(l.to_item, (partsOf.get(l.to_item) ?? 0) + 1)
   }
   const projects = openItems.filter((i) => i.kind === 'project')
+  // Blocked = has an open blocker via a `blocks` link. Computed here from the links table, never stored.
+  const blockersOf = new Map<string, Item[]>()
+  for (const l of links) {
+    if (l.type !== 'blocks') continue
+    const b = itemById.get(l.from_item)
+    if (b && live(b)) blockersOf.set(l.to_item, [...(blockersOf.get(l.to_item) ?? []), b])
+  }
   // Checklist steps render nested under their Thing, in sort order, not as standalone rows.
   const checklistOf = new Map<string, Item[]>()
   for (const it of openItems) {
@@ -402,6 +413,30 @@ export default function App(): React.JSX.Element {
                 ))}
               </ul>
             </section>
+            {constraints.length > 0 && (
+              <section className="rounded-2xl bg-stone-100/80 p-4 flex flex-col gap-1 min-h-0">
+                <h2 className="text-xs font-medium uppercase tracking-wide text-stone-500">Unavailable / preferences ({constraints.length})</h2>
+                <ul className="flex flex-col gap-0.5 overflow-y-auto">
+                  {constraints.slice(0, 8).map((c) => (
+                    <li key={c.id} className="group text-xs flex items-center gap-2 rounded-lg px-1 py-0.5 hover:bg-white/80">
+                      <span>{c.kind === 'unavailable' ? '🚫' : c.kind === 'avoid' ? '⚠️' : '👍'}</span>
+                      <span className="flex-1 truncate text-stone-700">
+                        <span className="font-medium">{c.label}</span>
+                        <span className="text-stone-500">
+                          {' · '}
+                          {c.starts_at ? formatClock(c.starts_at).replace(/ at 00:00$/, '') : ''}
+                          {c.ends_at && c.starts_at && new Date(c.ends_at).getTime() - new Date(c.starts_at).getTime() < 23.9 * 3600000 ? `–${new Date(c.ends_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })}` : ' (all day)'}
+                          {c.rrule ? ' ↻' : ''}
+                        </span>
+                      </span>
+                      <button className="opacity-0 group-hover:opacity-100 text-stone-500 hover:text-red-700" title="Remove" onClick={() => void quick('remove_constraint', { id: c.id })}>
+                        ×
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
             {waitingItems.length > 0 && (
               <section className="rounded-2xl bg-sky-50/70 p-4 flex flex-col gap-2 min-h-0">
                 <h2 className="text-xs font-medium uppercase tracking-wide text-sky-900">Waiting on ({waitingItems.length})</h2>
@@ -463,6 +498,9 @@ export default function App(): React.JSX.Element {
                           {parentOf.has(it.id) && <span>{it.due_at_utc ? ' · ' : ''}part of {parentOf.get(it.id)!.title}</span>}
                         </div>
                       )}
+                      {blockersOf.has(it.id) && (
+                        <div className="text-xs text-amber-800 truncate">⛔ blocked by {blockersOf.get(it.id)!.map((b) => b.title).join(', ')}</div>
+                      )}
                     </div>
                     <button
                       className="opacity-0 group-hover:opacity-100 text-xs text-stone-500 hover:text-emerald-700 px-1"
@@ -513,6 +551,8 @@ export default function App(): React.JSX.Element {
           projects={projects}
           parentId={parentOf.get(editing.item.id)?.id ?? null}
           notes={notesOnItem.get(editing.item.id) ?? []}
+          blockers={blockersOf.get(editing.item.id) ?? []}
+          candidates={openItems.filter((i) => i.id !== editing.item.id && i.kind !== 'project')}
           onHistory={() => setEditing(editing.item.kind === 'project' ? { kind: 'project', project: editing.item } : { kind: 'history', item: editing.item })}
           runTool={runTool}
           onDone={say}

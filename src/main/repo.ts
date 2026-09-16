@@ -5,6 +5,7 @@ import type {
   Activity,
   Actor,
   ChatMessage,
+  Constraint,
   DuePrecision,
   ExtractionEntry,
   Hardness,
@@ -495,10 +496,67 @@ export function listPreferences(): { key: string; value: string; source: string 
   return getDb().prepare('SELECT key, value, source FROM preferences').all() as { key: string; value: string; source: string }[]
 }
 
-export function activeConstraints(): { kind: string; label: string; starts_at: string | null; ends_at: string | null; rrule: string | null; source: string }[] {
+/** Constraints still in force: standing (rrule) ones always; one-offs until their window has ended. */
+export function activeConstraints(): Constraint[] {
   return getDb()
-    .prepare(`SELECT kind, label, starts_at, ends_at, rrule, source FROM constraints WHERE ends_at IS NULL OR ends_at >= ? ORDER BY starts_at`)
-    .all(nowIso()) as never
+    .prepare(`SELECT * FROM constraints WHERE rrule IS NOT NULL OR ends_at IS NULL OR ends_at >= ? ORDER BY starts_at`)
+    .all(nowIso()) as Constraint[]
+}
+
+export function insertConstraint(c: { kind: Constraint['kind']; label: string; startsAt: string | null; endsAt: string | null; rrule: string | null; source: Constraint['source'] }): Constraint {
+  const id = randomUUID()
+  getDb()
+    .prepare(`INSERT INTO constraints (id, kind, label, starts_at, ends_at, rrule, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(id, c.kind, c.label.trim(), c.startsAt, c.endsAt, c.rrule, c.source, nowIso())
+  return getConstraint(id)!
+}
+
+export function getConstraint(id: string): Constraint | undefined {
+  return getDb().prepare('SELECT * FROM constraints WHERE id = ?').get(id) as Constraint | undefined
+}
+
+export function resolveConstraintId(ref: string): string {
+  const rows = getDb().prepare('SELECT id FROM constraints WHERE id LIKE ?').all(`${ref.trim()}%`) as { id: string }[]
+  if (rows.length === 1) return rows[0].id
+  if (rows.length === 0) throw new Error(`No constraint with id "${ref}"`)
+  throw new Error(`Ambiguous constraint id "${ref}"`)
+}
+
+export function deleteConstraintRow(id: string): void {
+  getDb().prepare('DELETE FROM constraints WHERE id = ?').run(id)
+}
+
+export function restoreConstraint(c: Constraint): void {
+  getDb()
+    .prepare(`INSERT OR REPLACE INTO constraints (id, kind, label, starts_at, ends_at, rrule, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(c.id, c.kind, c.label, c.starts_at, c.ends_at, c.rrule, c.source, c.created_at)
+}
+
+// ---------- Dependencies (spec §8 3f): blocks links, computed in code ----------
+
+const LIVE_I = "i.status NOT IN ('done','cancelled','archived')"
+
+/** Open items that block this one (from_item blocks to_item). */
+export function blockersOf(itemId: string): Item[] {
+  return getDb()
+    .prepare(`SELECT i.* FROM links l JOIN items i ON i.id = l.from_item WHERE l.to_item = ? AND l.type = 'blocks' AND ${LIVE_I} ORDER BY i.created_at`)
+    .all(itemId) as Item[]
+}
+
+/** Open items this one blocks. */
+export function blockedByThis(itemId: string): Item[] {
+  return getDb()
+    .prepare(`SELECT i.* FROM links l JOIN items i ON i.id = l.to_item WHERE l.from_item = ? AND l.type = 'blocks' AND ${LIVE_I} ORDER BY i.created_at`)
+    .all(itemId) as Item[]
+}
+
+/** Items that were blocked only by `itemId` and are now free because it is done — for "that unblocks X". */
+export function newlyUnblockedBy(itemId: string): Item[] {
+  return blockedByThis(itemId).filter((b) => blockersOf(b.id).length === 0)
+}
+
+export function hasLink(fromItem: string, toItem: string, type: string): boolean {
+  return !!getDb().prepare('SELECT 1 FROM links WHERE from_item = ? AND to_item = ? AND type = ?').get(fromItem, toItem, type)
 }
 
 export function eventsBetween(fromUtc: string, toUtc: string): { id: string; title: string; starts_at_utc: string; ends_at_utc: string | null; all_day: number }[] {

@@ -6,6 +6,7 @@ import { log } from '../log'
 import * as repo from '../repo'
 import { clearOffer, getFocus, pushFocus, setOffer, shortId } from './context'
 import { resolveEntity } from '../entity'
+import { afterConflicts, blockingConflicts, bookingWindowForDue, conflictsFor, describeConflict, describeConstraint } from '../planning'
 import { formatClock, formatDue } from '../../shared/format'
 import type { ToolDefinition } from './provider'
 import type { Actor, AppliedChange, Item, Note, Reminder } from '../../shared/types'
@@ -26,7 +27,9 @@ const DATE_DESC = 'Local date "YYYY-MM-DD", when the user gave a day but no cloc
 const localDateTime = z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/, 'Expected YYYY-MM-DDTHH:MM')
 const localDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD')
 const idRef = z.string().min(6).max(36).describe('The 8-character id shown in square brackets, e.g. "a1b2c3d4".')
-const kind = z.enum(['task', 'deadline', 'project', 'waiting', 'note', 'commitment', 'idea', 'checklist_item'])
+const KINDS = ['task', 'deadline', 'project', 'waiting', 'note', 'commitment', 'idea', 'checklist_item'] as const
+// A wrong kind from the model ("case_study", "appointment") should not sink the whole write: anything unknown is a task.
+const kind = z.preprocess((v) => (typeof v === 'string' && (KINDS as readonly string[]).includes(v) ? v : 'task'), z.enum(KINDS))
 const status = z.enum(['open', 'in_progress', 'done', 'cancelled', 'blocked', 'waiting', 'archived'])
 const hardness = z.enum(['hard', 'soft']).describe('hard = a real deadline ("must submit Monday at 5"); soft = a target ("I\'d like to finish this weekend").')
 const loose = z.enum(['week', 'vague']).describe('Only with a date-only value: "week" for "sometime next week", "vague" for "at some point around then".')
@@ -46,7 +49,8 @@ const dueFields = {
   due_at_local: localDateTime.optional().describe('Due time. ' + DT_DESC),
   due_date_local: localDate.optional().describe('Due day. ' + DATE_DESC),
   due_looseness: loose.optional(),
-  hardness: hardness.optional()
+  hardness: hardness.optional(),
+  override_conflicts: z.boolean().optional().describe('Only after the user, told of a clash with their availability, says to book it anyway.')
 }
 
 const noBothDue = (v: { due_at_local?: string; due_date_local?: string }): boolean => !(v.due_at_local && v.due_date_local)
@@ -80,6 +84,7 @@ export const toolSchemas = {
       due_date_local: localDate.optional().describe('New due day. ' + DATE_DESC),
       due_looseness: loose.optional(),
       clear_due: z.boolean().optional().describe('true to remove the due date entirely.'),
+      override_conflicts: z.boolean().optional().describe('Only after the user, told of a clash with their availability, says to move it anyway.'),
       hardness: hardness.optional(),
       importance: importance.optional().describe('Set when the user overrides ("that is not actually important").'),
       kind: kind.optional(),
@@ -116,6 +121,31 @@ export const toolSchemas = {
       date_local: localDate.optional().describe('Attach to a day instead of an item: "I\'ll be travelling Friday" → that Friday. ' + DATE_DESC)
     })
     .refine((v) => [v.item_id, v.item_title, v.reminder_id, v.date_local].filter(Boolean).length === 1, 'Give exactly one target: item_id, item_title, reminder_id or date_local'),
+  add_link: z
+    .object({
+      from_id: idRef.describe('For type blocks: the item that must be done FIRST (the blocker).'),
+      to_id: idRef.describe('For type blocks: the item that cannot proceed until then.'),
+      type: z.enum(['blocks', 'relates_to']).default('blocks')
+    })
+    .refine((v) => v.from_id !== v.to_id, 'An item cannot depend on itself'),
+  remove_link: z.object({ from_id: idRef, to_id: idRef, type: z.enum(['blocks', 'relates_to']).default('blocks') }),
+  add_constraint: z
+    .object({
+      kind: z.enum(['unavailable', 'prefer', 'avoid']).describe('unavailable = cannot do anything then ("busy", "travelling", "class"); avoid = would rather not ("no mornings"); prefer = good time for work.'),
+      label: z.string().min(1).max(100).describe('Short label in the user\'s words: "busy", "travelling", "class", "no mornings".'),
+      starts_at_local: localDateTime.optional().describe('Start of the (first) window. ' + DT_DESC),
+      ends_at_local: localDateTime.optional().describe('End of the (first) window. Afternoon = 12:00–18:00, morning = 08:00–12:00, evening = 18:00–22:00.'),
+      date_local: localDate.optional().describe('Whole day unavailable ("travelling Friday"). ' + DATE_DESC),
+      rrule: rruleStr.optional().describe('For a standing constraint ("every Tuesday 2–5"): the RRULE; the window repeats.')
+    })
+    .refine((v) => !!v.date_local || (!!v.starts_at_local && !!v.ends_at_local), 'Give date_local, or both starts_at_local and ends_at_local'),
+  remove_constraint: z.object({ id: idRef.optional(), label: z.string().max(100).optional() }).refine((v) => !!v.id || !!v.label, 'Give id or label'),
+  check_conflicts: z
+    .object({
+      starts_at_local: localDateTime.describe(DT_DESC),
+      ends_at_local: localDateTime.optional().describe('Defaults to one hour after the start.')
+    })
+    .describe('Deterministic: what clashes with this time (unavailability, events). Use before proposing or booking a time.'),
   update_note: z.object({ id: idRef.describe('The note id.'), body: z.string().min(1).max(2000) }),
   delete_note: z.object({ id: idRef.describe('The note id.') }),
   add_checklist_item: z.object({
@@ -220,6 +250,11 @@ const descriptions: Record<ToolName, string> = {
   detach_from_project: 'Take an item out of its project.',
   get_project: 'Read one project: its fields, parts and history. Use for "what is left?" / "what have I done for X?".',
   add_note: 'Attach a note to an item, project, reminder or day. "Add a note to the application that the transcript must be a PDF" → item_title "application". "I\'ll be travelling Friday" → date_local. Notes are information, never tasks.',
+  add_link: 'Record a dependency: from_id blocks to_id ("I can\'t send the mailing until the list is cleaned" → the list-cleaning item blocks the mailing item). Blocked status is then computed by the app.',
+  remove_link: 'Remove a dependency.',
+  add_constraint: 'Record when the user is unavailable or prefers/avoids a time ("I\'m busy tomorrow afternoon", "travelling Friday", "no mornings", "class every Tuesday 2–5"). Used to detect conflicts when booking.',
+  remove_constraint: 'Remove an availability constraint ("I\'m free tomorrow afternoon after all").',
+  check_conflicts: 'What clashes with a proposed time. The app computes it; you phrase it.',
   update_note: 'Change the text of an existing note.',
   delete_note: 'Remove a note.',
   add_checklist_item: 'Add one or more checklist items to a project ("add a list: send first email, follow up, attach the document"). Checklist items are steps within the Thing, not standalone tasks.',
@@ -248,6 +283,10 @@ const descriptions: Record<ToolName, string> = {
 }
 
 const WRITE_TOOLS: ReadonlySet<string> = new Set([
+  'add_link',
+  'remove_link',
+  'add_constraint',
+  'remove_constraint',
   'add_note',
   'update_note',
   'delete_note',
@@ -375,6 +414,37 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
     repo.insertActivity({ ...n, projectId, actor: ctx.actor })
   }
   const focusIds = getFocus().map((f) => f.itemId)
+
+  /**
+   * Conflict gate (spec 3f / §6): booking an exact time inside an "unavailable" window or over an event is not done
+   * silently — the round is rolled back with a question unless the caller passed override_conflicts. Softer clashes
+   * (avoid/prefer) are allowed but named. Returns the note to append, or throws NeedsConfirmation via `confirm`.
+   */
+  const conflictGate = (dueAtUtc: string | null, precision: string | null, override: boolean | undefined, what: string, replay: { toolName: string; args: unknown }): { note: string; confirm?: ToolOutcome['confirm'] } => {
+    if (!dueAtUtc) return { note: '' }
+    const win = precision === 'exact' ? bookingWindowForDue(dueAtUtc) : { startUtc: dueAtUtc, endUtc: DateTime.fromISO(dueAtUtc, { zone: 'utc' }).plus({ days: 1 }).toISO()! }
+    const all = conflictsFor(win.startUtc, win.endUtc)
+    if (!all.length) return { note: '' }
+    const hard = blockingConflicts(all)
+    // A day-only due date is compatible with a partial-day unavailability; only whole-day blocks matter then.
+    const relevant = precision === 'exact' ? hard : hard.filter((c) => DateTime.fromISO(c.window.endUtc).diff(DateTime.fromISO(c.window.startUtc), 'hours').hours >= 23)
+    if (relevant.length && !override) {
+      const alt = afterConflicts(relevant)
+      // Remember the refused booking so a plain "yes" / "book it anyway" replays it with the override — deterministically.
+      setOffer({ kind: 'conflict_override', toolName: replay.toolName, args: { ...(replay.args as Record<string, unknown>), override_conflicts: true } })
+      return {
+        note: '',
+        confirm: {
+          question: `${what} clashes with ${relevant.map(describeConflict).join(' and ')}. Book it anyway${alt ? `, or would ${formatClock(alt)} onwards suit better` : ''}?`,
+          wouldAffect: relevant.map((c) => c.label)
+        }
+      }
+    }
+    const soft = all.filter((c) => c.kind === 'avoid' || c.kind === 'prefer')
+    if (relevant.length) return { note: ` (booked over ${relevant.map((c) => `"${c.label}"`).join(', ')} as you asked)` }
+    if (soft.length) return { note: ` — note: that's ${soft.map(describeConflict).join(' and ')}` }
+    return { note: '' }
+  }
 
   /**
    * A waiting item (spec 3c): "Waiting on X — about Y", kind waiting, optionally part of a project, with the expected reply
@@ -506,6 +576,71 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
           history: history.map((h) => `${h.created_at.slice(0, 16).replace('T', ' ')} · ${h.actor}: ${h.summary}`)
         }
       }
+    }
+    case 'add_link': {
+      const x = a as z.infer<typeof toolSchemas.add_link>
+      const from = repo.getItem(repo.resolveItemId(x.from_id))!
+      const to = repo.getItem(repo.resolveItemId(x.to_id))!
+      if (x.type === 'blocks' && repo.hasLink(to.id, from.id, 'blocks')) throw new Error(`"${to.title}" already blocks "${from.title}" — that would be circular`)
+      const added = repo.addLink(from.id, to.id, x.type)
+      if (!added) throw new Error(`That link already exists`)
+      act({ targetType: 'link', targetId: `${from.id}|${to.id}|${x.type}`, projectId: repo.parentProjectOf(to.id)?.id ?? null, verb: 'created', summary: x.type === 'blocks' ? `"${from.title}" blocks "${to.title}"` : `"${from.title}" relates to "${to.title}"`, after: { from: from.id, to: to.id, type: x.type } })
+      pushFocus(to.id, to.title, x.type === 'blocks' ? 'now blocked' : 'linked')
+      const summary = x.type === 'blocks' ? `"${from.title}" blocks "${to.title}"` : `"${from.title}" ↔ "${to.title}"`
+      const phrase = x.type === 'blocks' ? `Got it — "${to.title}" waits on "${from.title}". I'll show it as blocked until that's done.` : `Linked "${from.title}" with "${to.title}".`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase, itemId: to.id } }
+    }
+    case 'remove_link': {
+      const x = a as z.infer<typeof toolSchemas.remove_link>
+      const from = repo.getItem(repo.resolveItemId(x.from_id))!
+      const to = repo.getItem(repo.resolveItemId(x.to_id))!
+      if (!repo.removeLink(from.id, to.id, x.type)) throw new Error('No such link')
+      act({ targetType: 'link', targetId: `${from.id}|${to.id}|${x.type}`, verb: 'deleted', summary: `"${from.title}" no longer ${x.type === 'blocks' ? 'blocks' : 'relates to'} "${to.title}"`, before: { from: from.id, to: to.id, type: x.type } })
+      const summary = `Unlinked "${from.title}" → "${to.title}"`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `"${to.title}" no longer waits on "${from.title}".`, itemId: to.id } }
+    }
+    case 'add_constraint': {
+      const x = a as z.infer<typeof toolSchemas.add_constraint>
+      let startsAt: string
+      let endsAt: string
+      if (x.date_local) {
+        const d = DateTime.fromISO(x.date_local, { zone: DateTime.local().zoneName }).startOf('day')
+        startsAt = d.toUTC().toISO()!
+        endsAt = d.plus({ days: 1 }).toUTC().toISO()!
+      } else {
+        startsAt = repo.localToUtc(x.starts_at_local!)
+        endsAt = repo.localToUtc(x.ends_at_local!)
+        if (endsAt <= startsAt) throw new ToolValidationError('The window ends before it starts')
+      }
+      const rr = validateRRule(x.rrule)
+      const c = repo.insertConstraint({ kind: x.kind, label: x.label, startsAt, endsAt, rrule: rr, source: ctx.actor === 'assistant' ? 'inferred' : 'stated' })
+      act({ targetType: 'constraint', targetId: c.id, verb: 'created', summary: `${x.kind === 'unavailable' ? 'Unavailable' : x.kind === 'avoid' ? 'Avoid' : 'Prefer'}: ${describeConstraint(c)}`, after: c })
+      clearOffer()
+      const summary = `${x.kind}: ${describeConstraint(c)}`
+      const phrase = x.kind === 'unavailable' ? `Noted — you're ${c.label} ${describeConstraint(c).replace(`${c.label} — `, '')}. I won't book anything there without asking.` : `Noted: ${x.kind === 'avoid' ? 'avoid' : 'prefer'} ${describeConstraint(c)}.`
+      return { result: { ok: true, constraint_id: shortId(c.id), summary }, applied: { tool: name, summary, phrase } }
+    }
+    case 'remove_constraint': {
+      const x = a as z.infer<typeof toolSchemas.remove_constraint>
+      let c: import('../../shared/types').Constraint | undefined
+      if (x.id) c = repo.getConstraint(repo.resolveConstraintId(x.id))
+      else {
+        const pool = repo.activeConstraints().filter((k) => k.label.toLowerCase().includes(x.label!.toLowerCase()))
+        if (pool.length === 1) c = pool[0]
+        else if (pool.length > 1) throw new Error(`Several constraints are called "${x.label}" — which one?`)
+      }
+      if (!c) throw new Error(`No constraint like "${x.label ?? x.id}"`)
+      repo.deleteConstraintRow(c.id)
+      act({ targetType: 'constraint', targetId: c.id, verb: 'deleted', summary: `Removed constraint: ${describeConstraint(c)}`, before: c })
+      const summary = `Removed: ${describeConstraint(c)}`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Removed — you're no longer marked ${c.label} then.` } }
+    }
+    case 'check_conflicts': {
+      const x = a as z.infer<typeof toolSchemas.check_conflicts>
+      const s = repo.localToUtc(x.starts_at_local)
+      const e = x.ends_at_local ? repo.localToUtc(x.ends_at_local) : DateTime.fromISO(s, { zone: 'utc' }).plus({ hours: 1 }).toISO()!
+      const cs = conflictsFor(s, e)
+      return { result: { window: `${formatClock(s)} – ${formatClock(e)}`, conflicts: cs.map((c) => ({ kind: c.kind, text: describeConflict(c) })), clear: blockingConflicts(cs).length === 0, next_free_from: afterConflicts(blockingConflicts(cs)) ? formatClock(afterConflicts(blockingConflicts(cs))!) : null } }
     }
     case 'add_note': {
       const x = a as z.infer<typeof toolSchemas.add_note>
@@ -719,6 +854,8 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
     case 'create_item': {
       const x = a as z.infer<typeof toolSchemas.create_item>
       const due = repo.resolveDue(x.due_date_local, x.due_at_local, x.due_looseness)
+      const gate = conflictGate(due.dueAtUtc, due.precision, x.override_conflicts, `"${x.title}" at ${due.dueAtUtc ? formatDue(due.dueAtUtc, due.precision) : ''}`, { toolName: name, args: rawArgs })
+      if (gate.confirm) return { result: { ok: false, needs_confirmation: true, question: gate.confirm.question }, confirm: gate.confirm }
       const item = repo.insertItem({
         kind: x.kind,
         title: x.title,
@@ -780,7 +917,7 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
             ? `Noted — I'll remind you about "${item.title}" ${describeRule(reminder.rrule)}, starting ${formatClock(reminder.fire_at_utc)}${reminderNote}.`
             : `Noted — I'll remind you about "${item.title}" ${formatClock(reminder.fire_at_utc)}${reminderNote}.`
           : item.due_at_utc
-            ? `Noted "${item.title}"${project ? ` under "${project.title}"` : ''}, due ${dueText(item)}${item.due_precision === 'day' ? ' (no time set)' : ''}.${offer}`
+            ? `Noted "${item.title}"${project ? ` under "${project.title}"` : ''}, due ${dueText(item)}${item.due_precision === 'day' ? ' (no time set)' : ''}${gate.note}.${offer}`
             : `Noted "${item.title}"${project ? ` under "${project.title}"` : ''}.`
       return {
         result: {
@@ -808,6 +945,9 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
         changed.push('due removed')
       } else if (x.due_at_local || x.due_date_local) {
         const due = repo.resolveDue(x.due_date_local, x.due_at_local, x.due_looseness)
+        const gate = conflictGate(due.dueAtUtc, due.precision, x.override_conflicts, `Moving "${before.title}" to ${formatDue(due.dueAtUtc, due.precision)}`, { toolName: name, args: rawArgs })
+        if (gate.confirm) return { result: { ok: false, needs_confirmation: true, question: gate.confirm.question }, confirm: gate.confirm }
+        if (gate.note) changed.push(gate.note.trim().replace(/^[—(]\s*/, '').replace(/\)$/, ''))
         patch.dueAtUtc = due.dueAtUtc
         patch.duePrecision = due.precision
         changed.push('due')
@@ -852,11 +992,12 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const before = repo.getItem(id)!
       const { cancelledReminders, stoppedIds } = repo.completeItem(id)
       const item = repo.getItem(id)!
-      act({ targetType: 'item', targetId: id, verb: 'completed', summary: `Completed "${item.title}"${cancelledReminders ? ` (${plural(cancelledReminders, 'reminder')} stopped)` : ''}`, before: { item: before, stopped: stoppedIds }, after: item })
+      const freed = repo.newlyUnblockedBy(id) // computed from links, never asserted
+      act({ targetType: 'item', targetId: id, verb: 'completed', summary: `Completed "${item.title}"${cancelledReminders ? ` (${plural(cancelledReminders, 'reminder')} stopped)` : ''}${freed.length ? ` — unblocks ${freed.map((f) => `"${f.title}"`).join(', ')}` : ''}`, before: { item: before, stopped: stoppedIds }, after: item })
       pushFocus(item.id, item.title, 'completed')
       clearOffer()
-      const summary = `Completed "${item.title}"` + (cancelledReminders ? ` · its ${plural(cancelledReminders, 'reminder')} stopped` : '')
-      const phrase = `Marked "${item.title}" done.${cancelledReminders ? ` Its ${plural(cancelledReminders, 'reminder')} won't fire.` : ''}`
+      const summary = `Completed "${item.title}"` + (cancelledReminders ? ` · its ${plural(cancelledReminders, 'reminder')} stopped` : '') + (freed.length ? ` · unblocks ${freed.map((f) => `"${f.title}"`).join(', ')}` : '')
+      const phrase = `Marked "${item.title}" done.${cancelledReminders ? ` Its ${plural(cancelledReminders, 'reminder')} won't fire.` : ''}${freed.length ? ` That unblocks ${freed.map((f) => `"${f.title}"`).join(' and ')}.` : ''}`
       return { result: { ok: true, summary }, applied: { tool: name, summary, phrase, itemId: id } }
     }
     case 'cancel_item': {
@@ -1137,6 +1278,27 @@ function undoActivity(a: import('../../shared/types').Activity): string {
       return `"${b.title}" is back to how it was${wrapped.stopped?.length ? ` and its ${plural(wrapped.stopped.length, 'reminder')} ${wrapped.stopped.length === 1 ? 'is' : 'are'} live again` : ''}`
     }
   }
+  if (a.target_type === 'link') {
+    const l = (a.verb === 'created' ? after : before) as { from: string; to: string; type: 'blocks' | 'relates_to' }
+    if (a.verb === 'created') {
+      repo.removeLink(l.from, l.to, l.type)
+      return 'removed that dependency again'
+    }
+    if (a.verb === 'deleted') {
+      repo.addLink(l.from, l.to, l.type)
+      return 'restored the dependency'
+    }
+  }
+  if (a.target_type === 'constraint') {
+    if (a.verb === 'created') {
+      repo.deleteConstraintRow(a.target_id)
+      return 'forgot that availability constraint again'
+    }
+    if (a.verb === 'deleted' && before) {
+      repo.restoreConstraint(before as import('../../shared/types').Constraint)
+      return 'restored the availability constraint'
+    }
+  }
   if (a.target_type === 'note') {
     if (a.verb === 'note_added') {
       repo.deleteNoteRow(a.target_id)
@@ -1179,8 +1341,10 @@ function undoActivity(a: import('../../shared/types').Activity): string {
 const lowerFirst = (s: string): string => (s ? s.charAt(0).toLowerCase() + s.slice(1) : s)
 
 function publicItem(i: Item): Record<string, unknown> {
+  const blockers = repo.blockersOf(i.id)
   return {
     id: shortId(i.id),
+    blocked_by: blockers.length ? blockers.map((b) => b.title) : undefined,
     kind: i.kind,
     title: i.title,
     details: i.details,

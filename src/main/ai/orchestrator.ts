@@ -33,6 +33,8 @@ Things (projects) — the life model:
 - If create_project answers with a near-match question, relay it; "yes" → call again with use_existing_id, "no, it's different" → force_new=true.
 - Waiting: "they said they'll get back to me Friday" / "I emailed X and haven't heard back" → create_waiting (waiting_on = who, about = what, expected_date_local if they named a day; project_id when it belongs to a Thing in focus). Never a task. "They replied" / "heard back from X" / "the transcript arrived" → resolve_waiting.
 - Conditional follow-up: "if they haven't replied by Friday afternoon, remind me" → create_reminder on the waiting item with unless_resolved = that waiting item's id and fire_at_local = Friday 14:00 (afternoon → 14:00, morning → 09:00, evening → 18:00 when only a part of day is given). The app decides at fire time whether they replied; you never judge that.
+- Availability: "I'm busy tomorrow afternoon" / "travelling Friday" / "class every Tuesday 2–5" / "no mornings" → add_constraint (unavailable for busy/travel/class; avoid for "no mornings"; prefer for "mornings are best"). Afternoon = 12:00–18:00, morning = 08:00–12:00, evening = 18:00–22:00. "I'm free after all" → remove_constraint. When you book an exact time the app itself checks constraints and events: if it answers with a clash question, relay it; if the user says book it anyway, call again with override_conflicts=true. Use check_conflicts before suggesting a time.
+- Dependencies: "I can't do Y until X is done" / "Y depends on X" / "X first, then Y" → add_link from_id=X to_id=Y type blocks. Never set status=blocked yourself — the app computes "BLOCKED by …" from the links and shows it in the context.
 - Notes: information that is not an obligation. "Add a note to the application that the transcript must be a PDF" → add_note with item_title "application" (the app matches the Thing). "Remember that the TISS contact is Priya" → add_note on the TISS project. "I'll be travelling Friday" / "I'm off on the 20th" → add_note with date_local — it informs planning; it is never a task and never journaling. Do not turn feelings ("I'm exhausted") into notes.
 - Checklists: steps within a Thing are checklist items, not tasks. "Add a list of things to do" → just say you're ready for the steps (no tool). "Add send first email, follow up and attach the document" → add_checklist_item with three titles on that project. "I sent the first email" → complete_checklist_item (by title; the app matches it to the step) — never a new task. "What is left?" → get_project. Only promote_checklist_item when the user wants a step scheduled as its own task.
 
@@ -230,6 +232,10 @@ function phraseReadResults(results: ToolResult[]): string | null {
         if (pnotes.length) lines.push(`Notes: ${pnotes.map((n) => n.body).join(' · ')}.`)
         if (hist.length) lines.push(`Recent history: ${hist.slice(0, 4).map((h) => h.replace(/^.*?· \w+: /, '')).join('; ')}.`)
       }
+    } else if (r.name === 'check_conflicts') {
+      const c = res as unknown as { window: string; conflicts: { kind: string; text: string }[]; clear: boolean; next_free_from: string | null }
+      if (!c.conflicts.length) lines.push(`${c.window} is clear.`)
+      else lines.push(`${c.window} clashes with ${c.conflicts.map((x) => x.text).join(' and ')}.${c.clear ? ' Nothing hard, so it can still be booked.' : c.next_free_from ? ` Free from ${c.next_free_from}.` : ''}`)
     } else if (r.name === 'search_activity') {
       const h = res.history ?? []
       // Entries arrive newest first as "yyyy-mm-dd hh:mm · actor: summary"; tell it oldest first, by day, without the plumbing.
