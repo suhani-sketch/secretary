@@ -352,6 +352,16 @@ export default function App(): React.JSX.Element {
     prevOverdue.current = n
   }, [overdueItems.length])
 
+  // What is happening in the room right now (Phase 5): focus wins, then cooking, then something the user waits on.
+  const runningHappenings = happenings.filter((h) => h.state === 'running')
+  const happeningKind: 'focus' | 'cooking' | 'waiting' | null = runningHappenings.some((h) => h.kind === 'focus' || h.metaphor === 'focus')
+    ? 'focus'
+    : runningHappenings.some((h) => ['egg', 'tea', 'cooking'].includes(h.kind ?? '') || h.metaphor === 'egg' || h.metaphor === 'tea' || h.metaphor === 'plant')
+      ? 'cooking'
+      : runningHappenings.some((h) => ['laundry', 'charging', 'process'].includes(h.kind ?? '') || h.metaphor === 'laundry' || h.metaphor === 'download')
+        ? 'waiting'
+        : null
+
   const companion = useCompanion(
     {
       chat: status,
@@ -363,7 +373,8 @@ export default function App(): React.JSX.Element {
       addressedAt,
       concernedAt,
       waitingOpen: waitingItems.length,
-      hour
+      hour,
+      happening: happeningKind
     },
     forcedState
   )
@@ -375,6 +386,7 @@ export default function App(): React.JSX.Element {
         <Room
           state={companion.state}
           gaze={companion.gaze}
+          happening={happeningKind}
           environment={environment}
           time={timeChoice}
           onChangeEnvironment={(e) => {

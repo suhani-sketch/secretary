@@ -16,15 +16,17 @@ export interface MetaphorDef {
   doneLine: string
   /** Emoji used where a picture is not drawn (toast, rail fallback). */
   glyph: string
+  /** Stage index shown while open-ended: a wash is "washing", tea is "steeping", a session is "focused". */
+  openEnded: number
 }
 
 export const METAPHORS: Record<Metaphor, MetaphorDef> = {
-  egg: { stages: ['raw', 'warming', 'soft', 'medium', 'hard'], doneLine: "Egg's ready.", glyph: '🥚' },
-  tea: { stages: ['dry', 'steeping', 'ready'], doneLine: "Tea's ready.", glyph: '🍵' },
-  laundry: { stages: ['washing', 'rinsing', 'spinning', 'done'], doneLine: "Laundry's done.", glyph: '🧺' },
-  plant: { stages: ['seed', 'sprout', 'growing', 'ready'], doneLine: 'That should be ready now.', glyph: '🌱' },
-  download: { stages: ['starting', 'in progress', 'almost there', 'done'], doneLine: 'That should have finished.', glyph: '⏳' },
-  focus: { stages: ['starting', 'focused', 'complete'], doneLine: 'Focus session complete.', glyph: '🎯' }
+  egg: { stages: ['raw', 'warming', 'soft', 'medium', 'hard'], doneLine: "Egg's ready.", glyph: '🥚', openEnded: 1 },
+  tea: { stages: ['dry', 'steeping', 'ready'], doneLine: "Tea's ready.", glyph: '🍵', openEnded: 1 },
+  laundry: { stages: ['washing', 'rinsing', 'spinning', 'done'], doneLine: "Laundry's done.", glyph: '🧺', openEnded: 0 },
+  plant: { stages: ['seed', 'sprout', 'growing', 'ready'], doneLine: 'That should be ready now.', glyph: '🌱', openEnded: 1 },
+  download: { stages: ['starting', 'in progress', 'almost there', 'done'], doneLine: 'That should have finished.', glyph: '⏳', openEnded: 1 },
+  focus: { stages: ['starting', 'focused', 'complete'], doneLine: 'Focus session complete.', glyph: '🎯', openEnded: 1 }
 }
 
 /**
@@ -34,7 +36,7 @@ export const METAPHORS: Record<Metaphor, MetaphorDef> = {
  */
 export function stageFor(metaphor: Metaphor, startedAtMs: number, endsAtMs: number | null, nowMs: number): string {
   const def = METAPHORS[metaphor]
-  if (endsAtMs === null) return def.stages[Math.min(1, def.stages.length - 1)]
+  if (endsAtMs === null) return def.stages[Math.min(def.openEnded, def.stages.length - 1)]
   if (nowMs >= endsAtMs) return def.stages[def.stages.length - 1]
   const total = Math.max(1, endsAtMs - startedAtMs)
   const frac = Math.max(0, Math.min(0.999, (nowMs - startedAtMs) / total))

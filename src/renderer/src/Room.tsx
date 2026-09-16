@@ -48,11 +48,13 @@ interface Props {
   gaze: Gaze
   environment: EnvironmentId
   time: TimeChoice
+  /** Living activities (Phase 5): 'cooking' puts a small kitchen object in the room and the creature beside it. */
+  happening: 'focus' | 'cooking' | 'waiting' | null
   onChangeEnvironment: (e: EnvironmentId) => void
   onChangeTime: (t: TimeChoice) => void
 }
 
-export function Room({ state, gaze, environment, time, onChangeEnvironment, onChangeTime }: Props): React.JSX.Element {
+export function Room({ state, gaze, environment, time, happening, onChangeEnvironment, onChangeTime }: Props): React.JSX.Element {
   const [hour, setHour] = useState(new Date().getHours())
   useEffect(() => {
     const t = setInterval(() => setHour(new Date().getHours()), 60_000)
@@ -60,12 +62,14 @@ export function Room({ state, gaze, environment, time, onChangeEnvironment, onCh
   }, [])
   const band: Band = time === 'auto' ? bandForHour(hour) : time
   const L = LIGHT[band]
-  const pose = poseFor(state)
+  // While something cooks, an idle or window-gazing creature waits beside the kitchen object instead (spec Phase 5).
+  const basePose = poseFor(state)
+  const pose = happening === 'cooking' && (basePose === 'sit' || basePose === 'window') ? 'kitchen' : basePose
   const [menu, setMenu] = useState(false)
 
   // Where the creature sits for each pose (SVG coordinates of the 120-box's top-left).
   const spot =
-    pose === 'desk' ? { x: 64, y: 672, s: 0.9 } : pose === 'read' ? { x: 140, y: 750, s: 1 } : pose === 'window' ? { x: 22, y: 316, s: 0.85 } : pose === 'curl' ? { x: 150, y: 760, s: 1 } : { x: 132, y: 748, s: 1 }
+    pose === 'desk' ? { x: 64, y: 672, s: 0.9 } : pose === 'read' ? { x: 140, y: 750, s: 1 } : pose === 'window' ? { x: 22, y: 316, s: 0.85 } : pose === 'curl' ? { x: 150, y: 760, s: 1 } : pose === 'kitchen' ? { x: 82, y: 752, s: 0.95 } : { x: 132, y: 748, s: 1 }
 
   return (
     <div className="relative h-full w-full rounded-3xl overflow-hidden shadow-inner" style={{ background: L.wall, transition: 'background 2s ease' }}>
@@ -152,6 +156,9 @@ export function Room({ state, gaze, environment, time, onChangeEnvironment, onCh
         {/* fireplace environment: a small hearth on the left */}
         {environment === 'fireplace' && <Hearth x={14} y={462} />}
 
+        {/* living activities: a small kitchen object appears only while something cooks (spec Phase 5) */}
+        {happening === 'cooking' && <Kitchen x={190} y={474} night={band === 'night'} />}
+
         {/* cushion */}
         <ellipse cx="188" cy="592" rx="40" ry="10" fill="#C9A88F" opacity={band === 'night' ? 0.5 : 0.9} />
         </g>
@@ -171,7 +178,7 @@ export function Room({ state, gaze, environment, time, onChangeEnvironment, onCh
         }}
       >
         <div style={{ width: '100%', aspectRatio: '1 / 1' }}>
-          <Companion state={state} gaze={gaze} dim={L.dim} />
+          <Companion state={state} gaze={gaze} dim={L.dim} pose={pose} />
         </div>
       </div>
 
@@ -339,6 +346,32 @@ function Bookcase({ night }: { night: boolean }): React.JSX.Element {
           ))}
         </g>
       ))}
+    </g>
+  )
+}
+
+/** A small side table with a pot on a single ring — only present while something is cooking. Steam rises gently. */
+function Kitchen({ x, y, night }: { x: number; y: number; night: boolean }): React.JSX.Element {
+  return (
+    <g opacity={night ? 0.85 : 1}>
+      {/* table */}
+      <rect x={x} y={y + 30} width="62" height="6" rx="2" fill="#A87F5C" />
+      <rect x={x + 6} y={y + 36} width="6" height="24" fill="#A87F5C" opacity="0.9" />
+      <rect x={x + 50} y={y + 36} width="6" height="24" fill="#A87F5C" opacity="0.9" />
+      {/* ring */}
+      <ellipse cx={x + 31} cy={y + 30} rx="16" ry="3.5" fill="#5E4636" />
+      <ellipse cx={x + 31} cy={y + 30} rx="10" ry="2" fill="#F2A65A" opacity="0.8" />
+      {/* pot */}
+      <rect x={x + 17} y={y + 10} width="28" height="20" rx="3" fill="#6E6259" />
+      <rect x={x + 15} y={y + 8} width="32" height="4" rx="2" fill="#8A8078" />
+      <path d={`M${x + 15} ${y + 18} h-6 M${x + 47} ${y + 18} h6`} stroke="#8A8078" strokeWidth="3" strokeLinecap="round" />
+      <circle cx={x + 31} cy={y + 6} r="2.5" fill="#8A8078" />
+      {/* steam */}
+      <g stroke="#FFFFFF" strokeWidth="1.3" fill="none" opacity="0.6" className="steam">
+        <path d={`M${x + 25} ${y + 2} q2 -5 0 -10`} />
+        <path d={`M${x + 32} ${y} q-2 -5 0 -10`} />
+        <path d={`M${x + 39} ${y + 2} q2 -5 0 -10`} />
+      </g>
     </g>
   )
 }

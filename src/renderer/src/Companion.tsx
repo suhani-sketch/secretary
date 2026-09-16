@@ -6,7 +6,7 @@ import type { CompanionState, Gaze } from './companionState'
  * whole-body transforms plus a prop, so state changes are a single CSS transition and the rest of the time it breathes.
  */
 
-export type Pose = 'sit' | 'desk' | 'read' | 'window' | 'curl' | 'stand' | 'stretch'
+export type Pose = 'sit' | 'desk' | 'read' | 'window' | 'curl' | 'stand' | 'stretch' | 'kitchen'
 
 export const poseFor = (state: CompanionState): Pose => {
   switch (state) {
@@ -42,16 +42,18 @@ interface Props {
   gaze: Gaze
   /** 0..1 how dark the room is — dims the fur slightly at night so it sits in the scene. */
   dim?: number
+  /** The Room may place the creature somewhere the state alone would not ("kitchen" while something cooks). */
+  pose?: Pose
 }
 
-export function Companion({ state, gaze, dim = 0 }: Props): React.JSX.Element {
-  const pose = poseFor(state)
+export function Companion({ state, gaze, dim = 0, pose: poseOverride }: Props): React.JSX.Element {
+  const pose = poseOverride ?? poseFor(state)
   const eyes = eyeShape(state, gaze)
-  const pupilDx = gaze === 'viewer' ? 0 : gaze === 'window' ? 3 : gaze === 'desk' ? -1 : 2
-  const pupilDy = gaze === 'viewer' ? 0 : gaze === 'desk' ? 2 : gaze === 'window' ? -1 : 0
-  const bodyTilt = pose === 'desk' ? 8 : pose === 'read' ? 4 : pose === 'window' ? -6 : pose === 'stretch' ? 0 : 0
+  const pupilDx = pose === 'kitchen' ? 3 : gaze === 'viewer' ? 0 : gaze === 'window' ? 3 : gaze === 'desk' ? -1 : 2
+  const pupilDy = pose === 'kitchen' ? 1 : gaze === 'viewer' ? 0 : gaze === 'desk' ? 2 : gaze === 'window' ? -1 : 0
+  const bodyTilt = pose === 'desk' ? 8 : pose === 'read' ? 4 : pose === 'window' ? -6 : pose === 'kitchen' ? 4 : pose === 'stretch' ? 0 : 0
   const bodyScaleY = pose === 'curl' ? 0.82 : pose === 'stretch' ? 1.08 : 1
-  const headTilt = state === 'thinking' ? -10 : state === 'concerned' ? 4 : pose === 'window' ? -8 : pose === 'read' || pose === 'desk' ? 8 : 0
+  const headTilt = state === 'thinking' ? -10 : state === 'concerned' ? 4 : pose === 'window' ? -8 : pose === 'kitchen' ? 6 : pose === 'read' || pose === 'desk' ? 8 : 0
 
   return (
     <svg viewBox="0 0 120 120" width="100%" height="100%" className="companion" aria-hidden style={{ filter: dim ? `brightness(${1 - dim * 0.25})` : undefined, overflow: 'visible' }}>

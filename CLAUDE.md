@@ -3,7 +3,7 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 5 — Living activities (slice 5a built 2026-09-16, testable). Phase 4 companion + room built and committed.
+## Current phase: Phase 5 — Living activities (slices 5a + 5b built 2026-09-16, testable; 5c next). Phase 4 companion + room built and committed.
 
 ## Phase 5a — happenings core (2026-09-16)
 - **Migration 5**: `happenings` (spec §3) + a `kind` column (addition: lets micro-rituals remember a "no" per kind). Deliberately
@@ -29,8 +29,16 @@ Update it at the end of every session (spec §11).
 - Verified on a scratch DB: egg 1 min → row, no item; "I need to do laundry tomorrow" → task; "started the washing machine" →
   happening; "remind me to move the laundry in 45 minutes" → task + reminder; laundry's done / never mind the tea / out of the
   shower → finished/dropped; egg expiry via startup sweep → toast; activities table has zero happening rows.
-- Next slices: 5b metaphor pictures + room reaction (creature at desk for focus, beside a kitchen object for cooking, reading while
-  waiting); 5c micro-rituals (offer a timer once, remember "no" per kind) + rationed personality lines (never repeated, never when struggling).
+## Phase 5b — pictures and the room reacting (2026-09-16)
+- `Happenings.tsx` `MetaphorIcon`: small SVG per metaphor whose picture follows the stage (egg yolk sets, tea darkens, drum spins
+  then stops, plant grows, hourglass sand moves, candle burns down); plain stopwatch when there is no metaphor. Illustration only.
+- `Signals.happening` ('focus' | 'cooking' | 'waiting' | null), derived in App.tsx from running happenings (focus wins, then
+  egg/tea/cooking/plant, then laundry/charging/process). `resolveState` step 4: focus → working at the desk; cooking → idle, which
+  the Room turns into the new `kitchen` pose; waiting → reading on the cushion. Ambient rotation resumes when nothing runs.
+- Room: `Kitchen` (side table, ring, pot, steam) is drawn at the right only while something cooks; creature spot beside it, facing
+  it (Companion `pose` override prop, 'kitchen' tilts/pupils to the right). Personal happenings (shower, break) change nothing.
+- `METAPHORS[*].openEnded`: stage shown while open-ended (laundry "washing", others stage two).
+- Next: 5c micro-rituals (offer a timer once per kind, remember "no") + rationed personality lines (never repeated, never when struggling).
 Phase 3 slices 3a–3f built. **§11B TISS run passed end to end 2026-09-16** (steps 1–6, real quit + relaunch, steps 7–10) on a
 scratch database via `SECRETARY_USER_DATA` — one project, no duplicates, conditional follow-up Fri 14:00 with `unless_resolved`.
 Fixes that came out of it: "I haven't sent it yet" is a tier-0 no-op reply (it used to become a waiting item, and step 6 then

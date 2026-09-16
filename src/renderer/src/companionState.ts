@@ -43,6 +43,12 @@ export interface Signals {
   /** Open waiting items — the creature tends to read while you wait on others. */
   waitingOpen: number
   hour: number
+  /**
+   * Living activities (Phase 5): what is happening in the room right now. focus → it works at the desk; cooking → it waits
+   * beside the kitchen object (the Room turns 'idle' into the kitchen pose); waiting (a wash, a charge, a download) → it reads.
+   * null → nothing is happening and it simply exists.
+   */
+  happening: 'focus' | 'cooking' | 'waiting' | null
 }
 
 const DUR = { celebrating: 2600, greeting: 2400, happy: 1400, concerned: 6000 }
@@ -83,7 +89,11 @@ export function resolveState(s: Signals, now: number): { state: CompanionState; 
   if (now - s.concernedAt < DUR.concerned) return { state: 'concerned', gaze: 'desk' }
   // 3. Attention.
   if (s.typing) return { state: 'attentive', gaze: now - s.addressedAt < 15000 ? 'viewer' : 'away' }
-  // 4. Ambient life.
+  // 4. The room reflects what is happening (Phase 5): these replace the ambient rotation while something runs.
+  if (s.happening === 'focus') return { state: 'working', gaze: 'desk' }
+  if (s.happening === 'cooking') return { state: 'idle', gaze: 'away' } // the Room places 'idle' beside the kitchen object
+  if (s.happening === 'waiting') return { state: 'reading', gaze: 'desk' }
+  // 5. Ambient life.
   const pose = ambientPose(now, s.waitingOpen, s.hour)
   const gaze: Gaze = pose === 'sleepy' ? 'closed' : pose === 'reading' || pose === 'working' ? 'desk' : pose === 'waiting' ? 'window' : 'away'
   return { state: pose, gaze }
@@ -117,7 +127,7 @@ export function useCompanion(signals: Signals, force?: CompanionState | null): {
       if (timer) clearTimeout(timer)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signals.chat.kind, signals.typing, signals.lastAppliedAt, signals.celebrateAt, signals.greetAt, signals.addressedAt, signals.concernedAt, signals.waitingOpen, signals.hour, signals.lastToolNames.join(','), force])
+  }, [signals.chat.kind, signals.typing, signals.lastAppliedAt, signals.celebrateAt, signals.greetAt, signals.addressedAt, signals.concernedAt, signals.waitingOpen, signals.hour, signals.happening, signals.lastToolNames.join(','), force])
 
   return out
 }
