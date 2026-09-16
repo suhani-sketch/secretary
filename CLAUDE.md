@@ -20,6 +20,22 @@ Update it at the end of every session (spec §11).
   imports repo and moves to core when 6f touches it.
 - **Migration 7:** `plans` table; `events.plan_id`, `events.session_state`; index on `events.starts_at_utc`.
 
+## Phase 6c — visual grammar and priorities (2026-09-16)
+- `calendar/grammar.tsx` is the one vocabulary for every calendar surface: `IMPORTANCE` (0 critical ‼ rose · 1 high ! amber ·
+  2 normal • stone · 3 low · muted; each with word, glyph, badge and title weight), `TYPE` (event ▪ solid · commitment 🤝 ·
+  work block ▤ lighter · session 📘 · deadline ◆ strong · task ☐ · reminder 🔔 · happening ⏱ dashed · constraint ▨ hatched ·
+  waiting ⏳ · note 📝 · thing ◼ · step ☐ · idea ○), `grammarOf(item)` (hard/deadline → deadline), `<TypeGlyph>` (type first,
+  importance tone on it), `<Marks>` (both axes as badges: "! high" + "◆ hard", plus "⚠ overdue", "🤝 to Priya", "soft target"),
+  `titleClass` (weight by importance), `<PrioritySummary summary priorities compact>` (chips: overdue, critical, hard deadlines,
+  promises, high, clashes, hours booked, due, reminders + "first: …" top titles; built from DaySummary so Month cells reuse it),
+  `<Legend>`. Never colour alone — every tone has a glyph and a word.
+- Calendar surface: the priority summary strip sits under the header before any panel is opened (§11C 8); legend at xl widths.
+  DayView rows use `TypeGlyph` + `Marks`; a markers row above the grid shows hard deadlines (◆, clickable) and reminders (🔔 time).
+  DayPanel rows use the same glyphs and words. Grid entries take their glyph from `TYPE`.
+- Verified by screenshot on scratch c2 Thursday: strip "⚠ 1 overdue · ◆ 1 hard deadline · 🤝 1 promise · ! 5 high · ▪ 3 h booked
+  · ☐ 4 due · 🔔 1 · first: …"; "Application due" shows "! high" AND "◆ hard" (two axes); an overdue task shows "⚠ overdue"; the
+  markers row shows "◆ Application due · 17:00" and "🔔 14:30 Leave for the meeting". §11C 8 and 9 exercised.
+
 ## Phase 6b — day detail panel (2026-09-16)
 - `calendar/DayPanel.tsx` opens on the right of the Calendar surface when the date title, a task, an event or a reminder is
   clicked (`calendar/selection.ts`: date | item | event(+occurrence) | reminder | happening). Header: the date and the summary

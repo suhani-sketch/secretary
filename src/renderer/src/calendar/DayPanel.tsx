@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { DayBundle, EventOccurrence, Item, Reminder } from '../../../shared/types'
 import { formatDue } from '../../../shared/format'
 import type { Selection } from './selection'
+import { IMPORTANCE as IMP, TYPE, grammarOf, importanceOf } from './grammar'
 
 /**
  * Day detail panel (spec §8 6b): the complete context for the selected date, directly editable — complete, reschedule,
@@ -84,17 +85,17 @@ export function DayPanel({ day, selection, onSelect, onQuick, onOpenEditor, onCl
         {/* the rest of the day, selectable */}
         <Group title="Priorities" count={day.priorities.length}>
           {day.priorities.map((p) => (
-            <Row key={p.item.id} active={selection.kind === 'item' && selection.id === p.item.id} glyph={p.overdue ? '⚠' : '!'} title={p.item.title} sub={p.overdue && p.item.due_at_utc ? `was due ${formatDue(p.item.due_at_utc, p.item.due_precision)}` : p.reasons.join(' · ')} onClick={() => onSelect({ kind: 'item', id: p.item.id })} onDone={() => void onQuick('complete_item', { id: p.item.id })} />
+            <Row key={p.item.id} active={selection.kind === 'item' && selection.id === p.item.id} glyph={p.overdue ? '⚠' : TYPE[grammarOf(p.item)].glyph} title={p.item.title} sub={p.overdue && p.item.due_at_utc ? `was due ${formatDue(p.item.due_at_utc, p.item.due_precision)}` : p.reasons.join(' · ')} onClick={() => onSelect({ kind: 'item', id: p.item.id })} onDone={() => void onQuick('complete_item', { id: p.item.id })} />
           ))}
         </Group>
         <Group title="Due today" count={day.unscheduled.length}>
           {day.unscheduled.map((i) => (
-            <Row key={i.id} active={selection.kind === 'item' && selection.id === i.id} glyph={IMPORTANCE.find((x) => x.v === (i.importance ?? 2))?.glyph ?? '•'} title={i.title} sub={i.kind === 'commitment' ? `promised to ${i.committed_to ?? 'someone'}` : i.kind} onClick={() => onSelect({ kind: 'item', id: i.id })} onDone={() => void onQuick('complete_item', { id: i.id })} />
+            <Row key={i.id} active={selection.kind === 'item' && selection.id === i.id} glyph={TYPE[grammarOf(i)].glyph} title={i.title} sub={`${IMP[importanceOf(i)].word}${i.hardness === 'hard' || i.kind === 'deadline' ? ' · hard deadline' : ''}${i.kind === 'commitment' ? ` · promised to ${i.committed_to ?? 'someone'}` : ''}`} onClick={() => onSelect({ kind: 'item', id: i.id })} onDone={() => void onQuick('complete_item', { id: i.id })} />
           ))}
         </Group>
         <Group title="Schedule" count={day.scheduled.length}>
           {day.scheduled.map((o) => (
-            <Row key={`${o.id}:${o.occurrence_start_utc}`} active={selection.kind === 'event' && selection.id === o.id && selection.occurrenceStartUtc === o.occurrence_start_utc} glyph={o.kind === 'commitment' ? '🤝' : o.kind === 'work_block' ? '▤' : o.kind === 'session' ? '📘' : '▪'} title={o.title} sub={o.all_day ? (o.span === 'single' ? 'all day' : o.span) : `${clock(o.occurrence_start_utc)}${o.occurrence_end_utc ? `–${clock(o.occurrence_end_utc)}` : ''}${o.is_recurring_instance ? ' · series' : ''}`} onClick={() => onSelect({ kind: 'event', id: o.id, occurrenceStartUtc: o.occurrence_start_utc })} />
+            <Row key={`${o.id}:${o.occurrence_start_utc}`} active={selection.kind === 'event' && selection.id === o.id && selection.occurrenceStartUtc === o.occurrence_start_utc} glyph={TYPE[o.kind ?? 'event'].glyph} title={o.title} sub={o.all_day ? (o.span === 'single' ? 'all day' : o.span) : `${clock(o.occurrence_start_utc)}${o.occurrence_end_utc ? `–${clock(o.occurrence_end_utc)}` : ''}${o.is_recurring_instance ? ' · series' : ''}`} onClick={() => onSelect({ kind: 'event', id: o.id, occurrenceStartUtc: o.occurrence_start_utc })} />
           ))}
         </Group>
         <Group title="Reminders" count={day.reminders.length}>

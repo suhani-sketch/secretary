@@ -3,6 +3,7 @@ import type { DayBundle, Item, PriorityEntry } from '../../../shared/types'
 import { formatDue } from '../../../shared/format'
 import { CalendarGrid, type GridEntry } from './CalendarAdapter'
 import type { Selection } from './selection'
+import { Marks, TypeGlyph, TYPE, titleClass, isHard } from './grammar'
 
 /**
  * Day view (spec §8 6a): renders the Day View Model directly. Priorities → Due today → Schedule → Reminders and
@@ -26,18 +27,6 @@ interface Props {
 const clock = (iso: string): string => new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
 const hours = (min: number): string => `${Math.round(min / 6) / 10} h`
 
-
-/** Importance + hardness as glyph AND word (spec 6c: never colour alone). */
-export function importanceMark(i: Item): { glyph: string; word: string; tone: string } {
-  const imp = i.importance ?? 2
-  const hard = i.hardness === 'hard' || i.kind === 'deadline'
-  if (i.kind === 'commitment') return { glyph: '🤝', word: `promised to ${i.committed_to ?? 'someone'}`, tone: 'text-rose-900' }
-  if (imp <= 0) return { glyph: '‼', word: hard ? 'critical · hard deadline' : 'critical', tone: 'text-rose-900' }
-  if (imp === 1) return { glyph: '!', word: hard ? 'high · hard deadline' : 'high', tone: 'text-amber-900' }
-  if (hard) return { glyph: '◆', word: 'hard deadline', tone: 'text-stone-800' }
-  if (imp >= 3) return { glyph: '·', word: 'low', tone: 'text-stone-400' }
-  return { glyph: '•', word: 'normal', tone: 'text-stone-600' }
-}
 
 export function DayView({ dateLocal, onSelect, selection, onQuick, refreshKey, weekStart, onLoaded }: Props): React.JSX.Element {
   const onOpenItem = (i: Item): void => onSelect({ kind: 'item', id: i.id })
@@ -195,6 +184,23 @@ export function DayView({ dateLocal, onSelect, selection, onQuick, refreshKey, w
             <h3 className="text-xs font-medium uppercase tracking-wide text-stone-500 mb-2">
               Schedule <span className="normal-case font-normal text-stone-400">· {s.scheduled_minutes ? `${hours(s.scheduled_minutes)} booked` : 'nothing booked'}{s.conflicts ? ` · ${s.conflicts} clash${s.conflicts === 1 ? '' : 'es'}` : ''}</span>
             </h3>
+            {(day.unscheduled.some(isHard) || day.overdue.some(isHard) || day.reminders.length > 0) && (
+              <div className="mb-2 flex items-center gap-1.5 flex-wrap text-[11px]">
+                {[...day.unscheduled, ...day.overdue].filter(isHard).map((i) => (
+                  <button key={i.id} className="inline-flex items-center gap-1 rounded-full bg-[#3A2E28] text-[#FAF6F0] px-2 py-0.5" onClick={() => onSelect({ kind: 'item', id: i.id })} title="hard deadline">
+                    <span aria-hidden>◆</span>
+                    {i.title}
+                    {i.due_at_utc && i.due_precision === 'exact' ? ` · ${clock(i.due_at_utc)}` : ''}
+                  </button>
+                ))}
+                {day.reminders.map((r) => (
+                  <button key={r.id} className="inline-flex items-center gap-1 rounded-full bg-white ring-1 ring-stone-200 text-stone-700 px-2 py-0.5" onClick={() => onSelect({ kind: 'reminder', id: r.id })} title={`reminder · ${r.state}`}>
+                    <span aria-hidden>🔔</span>
+                    {clock(r.fire_at_utc)} {r.item_title ?? ''}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="flex-1 min-h-0 cal-grid">
               <CalendarGrid
                 view="day"
@@ -233,17 +239,17 @@ function Section({ title, count, empty, hint, children }: { title: string; count
 }
 
 function PriorityRow({ p, onOpen, onDone, active }: { p: PriorityEntry; onOpen: (i: Item) => void; onDone: () => void; active?: boolean }): React.JSX.Element {
-  const mark = importanceMark(p.item)
   return (
     <li className={`group text-sm flex items-start gap-2 rounded-lg px-1 py-1 cursor-pointer ${active ? 'bg-white ring-1 ring-[#3A2E28]/30' : 'hover:bg-white/80'}`} onClick={() => onOpen(p.item)}>
-      <span className={`w-4 text-center ${p.overdue ? 'text-amber-800' : mark.tone}`} title={p.reasons.join(', ')} aria-label={p.reasons.join(', ')}>
-        {p.overdue ? '⚠' : mark.glyph}
-      </span>
+      <TypeGlyph item={p.item} overdue={p.overdue} />
       <div className="min-w-0 flex-1">
-        <div className="break-words leading-snug">{p.item.title}</div>
-        <div className={`text-xs break-words ${p.overdue ? 'text-amber-800' : 'text-stone-500'}`}>
-          {p.overdue && p.item.due_at_utc ? `was due ${formatDue(p.item.due_at_utc, p.item.due_precision)}` : p.reasons.filter((r) => r !== 'overdue').join(' · ') || mark.word}
-          {p.blocked ? ' · blocked' : ''}
+        <div className={`break-words leading-snug ${titleClass(p.item)}`}>{p.item.title}</div>
+        <div className="mt-0.5 flex items-center gap-1 flex-wrap">
+          <Marks item={p.item} overdue={p.overdue} />
+          <span className="text-[10px] text-stone-500">
+            {p.overdue && p.item.due_at_utc ? `was due ${formatDue(p.item.due_at_utc, p.item.due_precision)}` : p.reasons.filter((r) => !['overdue', 'critical', 'high importance', 'hard deadline'].includes(r) && !r.startsWith('promised')).join(' · ')}
+            {p.blocked ? ' · blocked' : ''}
+          </span>
         </div>
       </div>
       <button
@@ -261,17 +267,13 @@ function PriorityRow({ p, onOpen, onDone, active }: { p: PriorityEntry; onOpen: 
 }
 
 function ItemRow({ item, onOpen, onDone, active }: { item: Item; onOpen: (i: Item) => void; onDone: () => void; active?: boolean }): React.JSX.Element {
-  const mark = importanceMark(item)
   return (
     <li className={`group text-sm flex items-start gap-2 rounded-lg px-1 py-1 cursor-pointer ${active ? 'bg-white ring-1 ring-[#3A2E28]/30' : 'hover:bg-white/80'}`} onClick={() => onOpen(item)}>
-      <span className={`w-4 text-center ${mark.tone}`} title={mark.word} aria-label={mark.word}>
-        {mark.glyph}
-      </span>
+      <TypeGlyph item={item} />
       <div className="min-w-0 flex-1">
-        <div className="break-words leading-snug">{item.title}</div>
-        <div className="text-xs text-stone-500 break-words">
-          {mark.word}
-          {item.kind !== 'task' && item.kind !== 'commitment' ? ` · ${item.kind}` : ''}
+        <div className={`break-words leading-snug ${titleClass(item)}`}>{item.title}</div>
+        <div className="mt-0.5">
+          <Marks item={item} />
         </div>
       </div>
       <button
@@ -290,7 +292,7 @@ function ItemRow({ item, onOpen, onDone, active }: { item: Item; onOpen: (i: Ite
 
 /** Type grammar inside the grid (spec 6c): solid event, lighter work block, session, ephemeral happening. */
 function GridEntryContent({ entry }: { entry: GridEntry }): React.JSX.Element {
-  const glyph = entry.kind === 'commitment' ? '🤝' : entry.kind === 'work_block' ? '▤' : entry.kind === 'session' ? '📘' : entry.kind === 'happening' ? '⏱' : entry.kind === 'constraint' ? '' : '▪'
+  const glyph = entry.kind === 'constraint' ? '' : entry.kind === 'due' || entry.kind === 'reminder' ? TYPE[entry.kind === 'due' ? 'task' : 'reminder'].glyph : TYPE[entry.kind].glyph
   return (
     <div className="px-1 leading-tight overflow-hidden">
       <div className="text-[11px] opacity-80 tabular-nums">{entry.allDay ? '' : `${clock(entry.startUtc)}${entry.endUtc ? `–${clock(entry.endUtc)}` : ''}`}</div>

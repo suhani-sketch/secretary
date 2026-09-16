@@ -3,6 +3,7 @@ import type { DayBundle, DayStatus, Item } from '../../../shared/types'
 import { DayView } from './DayView'
 import { DayPanel } from './DayPanel'
 import type { Selection } from './selection'
+import { Legend, PrioritySummary } from './grammar'
 
 /**
  * The Calendar surface (spec §7): its own full-width screen, switched to from the navigation — never a column inside the
@@ -104,6 +105,18 @@ export function CalendarSurface(p: Props): React.JSX.Element {
           </div>
         </div>
       </header>
+
+      {/* what matters today, before any panel is opened (spec 6c) — and the grammar, so it is learnable */}
+      {p.mode === 'day' && day && (
+        <div className="flex items-center gap-4 px-5 -mt-1">
+          <div className="min-w-0 flex-1">
+            <PrioritySummary summary={day.summary} priorities={day.priorities} />
+          </div>
+          <div className="hidden xl:block shrink-0">
+            <Legend />
+          </div>
+        </div>
+      )}
 
       {/* body: the view, with the day panel beside it when something is selected */}
       <div className={`flex-1 min-h-0 grid gap-4 ${selection && day ? 'grid-cols-[minmax(0,1fr)_360px]' : 'grid-cols-1'}`}>
