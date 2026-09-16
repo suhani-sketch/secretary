@@ -131,8 +131,24 @@ function parseClock(tail: string, existing: Item): { hour: number; minute: numbe
   return { hour, minute }
 }
 
+/**
+ * Chat shorthand chrono does not know. "tom"/"tmrw"/"tmr" mean tomorrow when they sit where a date would:
+ * at the end, or right before a time or part of day ("call tom at 3"). "email tom about the report" keeps Tom.
+ */
+function expandShorthand(s: string): string {
+  return s
+    .replace(/\b(tom|tmrw|tmr|tomo|2moro|tmw)\b(?=\s*$|\s+(?:at|by|around|before|after|morning|afternoon|evening|night|noon|midday|\d))/g, 'tomorrow')
+    .replace(/\btod\b/g, 'today')
+    .replace(/\btonite\b/g, 'tonight')
+    .replace(/\bnxt\b/g, 'next')
+    .replace(/\b(mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b(?=\s*$|\s+(?:at|by|around|morning|afternoon|evening|night|\d))/g, (_m, d: string) => DAYS[d] ?? d)
+}
+const DAYS: Record<string, string> = {
+  mon: 'monday', tue: 'tuesday', tues: 'tuesday', wed: 'wednesday', thu: 'thursday', thur: 'thursday', thurs: 'thursday', fri: 'friday', sat: 'saturday', sun: 'sunday'
+}
+
 export function routeTier0(rawText: string): ToolCallSpec[] | null {
-  const text = norm(rawText)
+  const text = expandShorthand(norm(rawText))
   if (!text || text.length > 160 || text.includes('\n')) return null
   let m: RegExpExecArray | null
 

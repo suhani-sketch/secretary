@@ -104,7 +104,11 @@ Update it at the end of every session (spec §11).
   1–6 with no am/pm is read as afternoon; "next week"/"sometime" → `week` looseness. Targets resolve via the focus stack
   ("it/that") or a unique title-word match; anything ambiguous returns null and goes to the model. Executes through the
   same `runToolRound` (transaction + extractions).
-- Coming Up rail shows both alarms (🔔) and dated items without alarms (📅 "no reminder") for 7 days — "reflects exactly what exists".
+- Rail: **Overdue** section (amber) for open items past due — precision-aware via `shared/format.ts#isOverdue` (exact: time passed;
+  day: whole day over; week/vague: a week over), same rule in `repo.openItemsOverdue`. **Coming Up** shows alarms (🔔) and
+  alarm-less dated items (📅 "no reminder") for 7 days, excluding overdue ones — "reflects exactly what exists".
+- Tier 0 expands chat shorthand before parsing: tom/tmrw/tmr → tomorrow (only at the end or before a time/part of day, so
+  "email tom about…" keeps Tom), tod → today, mon/tue/… → weekday names (`router.ts#expandShorthand`).
 - Migration 2 adds the `constraints` table (tools for it come in Phase 3).
 
 ## Known quirks

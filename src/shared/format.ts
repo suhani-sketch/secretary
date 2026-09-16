@@ -26,6 +26,25 @@ export function formatDue(dueAtUtc: string | null, precision: DuePrecision | nul
   }
 }
 
+/**
+ * Overdue, honestly: an exact time is overdue once it passes; a day-only item only once that whole
+ * day is over; a week/vague item once a week has passed. "Due today" is never "overdue".
+ */
+export function isOverdue(dueAtUtc: string | null, precision: DuePrecision | null, nowMs = Date.now()): boolean {
+  if (!dueAtUtc) return false
+  const due = new Date(dueAtUtc).getTime()
+  const DAY = 24 * 3600 * 1000
+  switch (precision) {
+    case 'day':
+      return due + DAY <= nowMs
+    case 'week':
+    case 'vague':
+      return due + 7 * DAY <= nowMs
+    default:
+      return due < nowMs
+  }
+}
+
 export function formatClock(utcIso: string | null): string {
   if (!utcIso) return ''
   const d = new Date(utcIso)

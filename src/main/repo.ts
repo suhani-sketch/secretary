@@ -310,12 +310,20 @@ export function itemsDueBetween(fromUtc: string, toUtc: string, limit = 40): Ite
     .all(fromUtc, toUtc, limit) as Item[]
 }
 
+/** Precision-aware: a day-only item is overdue only after that day has ended; week/vague after a week. */
 export function openItemsOverdue(nowUtc: string, limit = 20): Item[] {
+  const now = DateTime.fromISO(nowUtc, { zone: 'utc' })
+  const dayCut = now.minus({ days: 1 }).toISO()!
+  const weekCut = now.minus({ days: 7 }).toISO()!
   return getDb()
     .prepare(
-      `SELECT * FROM items WHERE status NOT IN ('done','cancelled','archived') AND due_at_utc IS NOT NULL AND due_at_utc < ? ORDER BY due_at_utc ASC LIMIT ?`
+      `SELECT * FROM items WHERE status NOT IN ('done','cancelled','archived') AND due_at_utc IS NOT NULL AND (
+         (COALESCE(due_precision,'exact') = 'exact' AND due_at_utc < ?)
+         OR (due_precision = 'day' AND due_at_utc <= ?)
+         OR (due_precision IN ('week','vague') AND due_at_utc <= ?)
+       ) ORDER BY due_at_utc ASC LIMIT ?`
     )
-    .all(nowUtc, limit) as Item[]
+    .all(nowUtc, dayCut, weekCut, limit) as Item[]
 }
 
 export function openWaitingItems(): Item[] {

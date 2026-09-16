@@ -13,7 +13,7 @@ import type {
 } from '../../shared/types'
 import { Companion } from './Companion'
 import { ItemEditor, ReminderEditor } from './Editors'
-import { formatClock, formatDue } from '../../shared/format'
+import { formatClock, formatDue, isOverdue } from '../../shared/format'
 
 const fmtLocal = (utcIso: string | null): string => (utcIso ? formatClock(utcIso) : '—')
 
@@ -148,12 +148,17 @@ export default function App(): React.JSX.Element {
   const pending = reminders.filter((r) => r.state === 'pending' || r.state === 'snoozed' || r.state === 'paused')
   const itemById = new Map(items.map((i) => [i.id, i]))
 
+  // Overdue is its own list (spec §7 Today: "live obligations, blockers"), never mixed into Coming Up.
+  const now = Date.now()
+  const overdueItems = openItems.filter((i) => isOverdue(i.due_at_utc, i.due_precision, now)).sort((a, b) => a.due_at_utc!.localeCompare(b.due_at_utc!))
+  const overdueIds = new Set(overdueItems.map((i) => i.id))
+
   // Coming Up reflects exactly what exists (spec §5): alarms AND dated items, told apart, next 7 days.
-  const horizon = Date.now() + 7 * 24 * 3600 * 1000
+  const horizon = now + 7 * 24 * 3600 * 1000
   type Upcoming = { key: string; at: number; label: string; when: string; kind: 'alarm' | 'due'; suggestion: boolean; open: () => void; item?: Item }
   const upcoming: Upcoming[] = [
     ...pending
-      .filter((r) => new Date(r.fire_at_utc).getTime() <= horizon)
+      .filter((r) => new Date(r.fire_at_utc).getTime() <= horizon && !(r.target_type === 'item' && overdueIds.has(r.target_id)))
       .map((r) => ({
         key: 'r' + r.id,
         at: new Date(r.fire_at_utc).getTime(),
@@ -166,7 +171,7 @@ export default function App(): React.JSX.Element {
       })),
     // A dated item with a live alarm is already represented by its 🔔 row; only alarm-less dates get a 📅 row.
     ...openItems
-      .filter((i) => i.due_at_utc && new Date(i.due_at_utc).getTime() <= horizon)
+      .filter((i) => i.due_at_utc && new Date(i.due_at_utc).getTime() <= horizon && !overdueIds.has(i.id))
       .filter((i) => !pending.some((r) => r.target_type === 'item' && r.target_id === i.id))
       .map((i) => ({
         key: 'i' + i.id,
@@ -252,6 +257,32 @@ export default function App(): React.JSX.Element {
       <aside className="flex flex-col gap-4 min-h-0 overflow-hidden">
         {!showDebug ? (
           <>
+            {overdueItems.length > 0 && (
+              <section className="rounded-2xl bg-amber-50/80 p-4 flex flex-col gap-2 min-h-0">
+                <h2 className="text-xs font-medium uppercase tracking-wide text-amber-800">Overdue ({overdueItems.length})</h2>
+                <ul className="flex flex-col gap-1 overflow-y-auto">
+                  {overdueItems.slice(0, 8).map((it) => (
+                    <li key={it.id} className="group text-sm flex items-start gap-2 rounded-lg px-1 py-1 hover:bg-white/80 cursor-pointer" onClick={() => setEditing({ kind: 'item', item: it })}>
+                      <span className="mt-0.5 text-xs">⚠️</span>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate">{it.title}</div>
+                        <div className="text-xs text-amber-800">was due {formatDue(it.due_at_utc, it.due_precision)}</div>
+                      </div>
+                      <button
+                        className="opacity-0 group-hover:opacity-100 text-xs text-stone-500 hover:text-emerald-700 px-1"
+                        title="Done"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void quick('complete_item', { id: it.id })
+                        }}
+                      >
+                        ✓
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
             <section className="rounded-2xl bg-white/60 p-4 flex flex-col gap-2 min-h-0">
               <h2 className="text-xs font-medium uppercase tracking-wide text-stone-500">Coming up · 7 days</h2>
               {upcoming.length === 0 && <p className="text-sm text-stone-400">Nothing dated, no alarms set.</p>}
