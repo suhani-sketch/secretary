@@ -3,7 +3,9 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 1 — complete against the rewritten SPEC (third pass, 2026-09-15): spine, activities, undo, manual editing, confidence tiers, one-call rule. Phase 0's strict reboot test still not observed (user choice).
+## Current phase: Phase 2 complete (2026-09-16) — Tier 0 router, chrono, Flash-Lite default, wall-clock RRULE recurrence with
+restart + DST tests passing. Phase 1 complete (2026-09-15). Phase 0's strict reboot test still not observed (user choice); a
+real toast-button click is still unconfirmed by the user. Next: Phase 3 (the life model).
 
 ## What works (verified 2026-09-15)
 - Electron 44 + React 19 + Vite 7 + Tailwind 4 + TypeScript, built with `electron-vite`.
@@ -120,6 +122,22 @@ Update it at the end of every session (spec §11).
   "email tom about…" keeps Tom), tod → today, mon/tue/… → weekday names (`router.ts#expandShorthand`).
 - Migration 2 adds the `constraints` table (tools for it come in Phase 3).
 
+## Phase 2 (2026-09-16) — recurrence
+- `src/main/recurrence.ts` (pure, no app imports; unit tests in `tests/recurrence.test.ts`, run with `node tests/recurrence.test.ts`):
+  `nextOccurrenceUtc(series, afterUtc)`, `firstOccurrence(rrule, clock, tz, nowUtc)`, `parseRecurrencePhrase(text)`, `describeRRule`.
+  All arithmetic in the user's wall-clock zone via "fake UTC" dates through the rrule library, so a 09:00 daily alarm stays
+  09:00 across DST (tested London autumn + New York spring). The rrule package's CommonJS bundle has no detectable named
+  exports under Node ESM, hence the `import * as rrulePkg` shim.
+- Migration 4: `reminders.series_anchor_local` ("yyyy-MM-ddTHH:mm") + `series_tz`. Set whenever rrule is set; re-anchored when
+  the fire time changes; cleared when the rule is removed. The scheduler computes the next occurrence from the anchor after
+  max(now, this firing's slot) — so a snoozed firing does not drift the series — and inserts it as a new pending row.
+- `create_item.remind_rrule` (+ `remind_at_local` = first occurrence); `create_reminder.rrule`. Tier 0: "remind me to X every
+  sunday at 5 / every morning / daily / every weekday / on mondays and thursdays / every other week / every 3 days";
+  clock comes from an explicit time, else a part-of-day hint, else `default_reminder_time`.
+- **Tooling gotcha that cost an hour:** the Bash tool un-escapes `\\` before the shell sees it, so a Python heredoc containing
+  `"\\b"` writes a literal BACKSPACE (0x08) into the file — the regex silently never matches. Never patch regexes through
+  Python/heredocs here; use the Edit/Write tools. Scan with `grep -rnP "[\x01-\x08\x0B\x0C\x0E-\x1F]" src` if a regex "can't" fail.
+
 ## Known quirks
 - npm 11.19 blocks package install scripts by default ("allowScripts"). After `npm install`, if
   `node_modules/electron/dist/electron.exe` is missing, run `node node_modules/electron/install.js`.
@@ -146,8 +164,14 @@ Update it at the end of every session (spec §11).
 - `npm run typecheck`
 
 ## Next
-- Phase 2 (revised spec): widen Tier 0 using the `tier` column; timezone review; RRULE for reminders is in but needs the
-  "every Sunday recurs and survives restart" test and a DST-boundary test.
+- Phase 3 — the life model: projects/Things inferred from conversation, checklists (kind=checklist_item + part_of links),
+  notes on anything, activity history surfaced in the UI, waiting items, dependencies (links blocks/part_of/relates_to),
+  constraints + conflict detection, natural-language project updates. Tools still missing from the spec list:
+  create/update/archive_project, add/complete/remove/reorder checklist, add/update/delete_note, add/remove_link,
+  add/remove_constraint, check_conflicts, get_project, search over notes. Done when acceptance test B (TISS) passes across a restart.
+- Phase 2 leftovers, not blocking: recurring alarms can't yet be described with an end ("until December") or count; the
+  `tier` column shows ~40% tier 0 so far — keep widening Tier 0 as real phrasing accumulates; tomorrow/yesterday edge cases
+  around midnight untested.
 - Flash-Lite sometimes creates a duplicate instead of updating an existing Thing (seen once). Phase 3 dedupe by name similarity.
 - Not yet built from the tool list: project/checklist/note/event/link/constraint tools, get_free_slots, check_conflicts,
   propose_plan (Phases 3–6).

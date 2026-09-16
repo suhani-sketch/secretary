@@ -1,5 +1,5 @@
 import { DateTime } from 'luxon'
-import { RRule } from 'rrule'
+import { nextOccurrenceUtc } from './recurrence'
 import { log } from './log'
 import { showToast } from './notifier'
 import * as repo from './repo'
@@ -35,13 +35,27 @@ function localTime(utcIso: string): string {
 function scheduleNextOccurrence(r: Reminder, now: DateTime): void {
   if (!r.rrule) return
   try {
-    const rule = RRule.fromString(`DTSTART:${DateTime.fromISO(r.fire_at_utc, { zone: 'utc' }).toFormat("yyyyLLdd'T'HHmmss'Z'")}\nRRULE:${r.rrule}`)
-    const next = rule.after(now.toJSDate(), false)
+    const tz = r.series_tz ?? DateTime.local().zoneName
+    const series = {
+      rrule: r.rrule,
+      anchorLocal: r.series_anchor_local ?? DateTime.fromISO(r.fire_at_utc, { zone: 'utc' }).setZone(tz).toFormat("yyyy-MM-dd'T'HH:mm"),
+      tz
+    }
+    // Next occurrence after whichever is later: now, or the slot this firing stood for (a snoozed alarm must not
+    // re-queue the occurrence it was snoozed from). Computed in local wall-clock time, so DST does not shift it.
+    const scheduled = DateTime.fromISO(r.fire_at_utc, { zone: 'utc' })
+    const after = (scheduled > now ? scheduled : now).toISO()!
+    const next = nextOccurrenceUtc(series, after, false)
     if (!next) {
       log('info', 'recur.finished', 'no further occurrences', r.id)
       return
     }
-    const nr = repo.insertReminder(r.target_id, next.toISOString(), { rrule: r.rrule, offsetMinutes: r.offset_minutes })
+    const nr = repo.insertReminder(r.target_id, next, {
+      rrule: r.rrule,
+      offsetMinutes: r.offset_minutes,
+      seriesAnchorLocal: series.anchorLocal,
+      seriesTz: series.tz
+    })
     repo.insertActivity({ targetType: 'reminder', targetId: nr.id, verb: 'created', actor: 'system', summary: `Next occurrence of "${r.item_title ?? 'reminder'}" queued for ${localTime(nr.fire_at_utc)}`, after: nr, reversible: false })
     log('info', 'recur.next', `next occurrence at ${localTime(nr.fire_at_utc)}`, nr.id)
   } catch (e) {

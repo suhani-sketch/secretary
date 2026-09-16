@@ -2,6 +2,8 @@ import * as chrono from 'chrono-node'
 import { DateTime } from 'luxon'
 import * as repo from '../repo'
 import { getFocus, getOffer } from './context'
+import { firstOccurrence, parseRecurrencePhrase } from '../recurrence'
+import { log } from '../log'
 import type { Item, Reminder } from '../../shared/types'
 
 /**
@@ -233,6 +235,29 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     const when = parseWhen(tail)
     if (!when || norm(when.text) !== tail) return null // the tail must be purely a date phrase
     return [{ name: 'update_item', args: { id: item.id, ...dueArgs(when) } }]
+  }
+
+  // ---- "remind me to X every <...> [at <time>]" — recurring ----
+  if ((m = /^(?:please )?remind me (?:to |about |that )?(.+)$/.exec(text)) && /\b(every|each|daily|weekly|monthly|nightly|weekdays?|weekends?|(?:mon|tues|wednes|thurs|fri|satur|sun)days)\b/.test(m[1])) {
+    const rec = parseRecurrencePhrase(m[1])
+    if (!rec) return null
+    // An explicit clock in the leftover text ("at 5") wins; then a part-of-day hint; then the default reminder time.
+    let clock: string | null = null
+    let rest = rec.stripped
+    const when = parseWhen(rest)
+    if (when?.exact && when.dateTime) {
+      clock = when.dateTime.slice(11, 16)
+      rest = cleanTitle(rest, when.text)
+    } else if (when && !when.exact) {
+      rest = cleanTitle(rest, when.text) // "every sunday" left "sunday"-like residue; drop it
+    }
+    if (!clock) clock = rec.clockHint ?? repo.getPreference('default_reminder_time', '09:00').value
+    const title = cleanTitle(rest, '')
+    if (!title || words(title).length === 0) return null
+    const first = firstOccurrence(rec.rrule, clock, DateTime.local().zoneName, new Date().toISOString())
+    if (!first) return null
+    log('info', 'router.recur', `${rec.rrule} at ${clock}, first ${first.anchorLocal}, title "${title}"`)
+    return [{ name: 'create_item', args: { kind: 'task', title, remind_at_local: first.anchorLocal, remind_rrule: rec.rrule } }]
   }
 
   // ---- "remind me to X <date>" ----

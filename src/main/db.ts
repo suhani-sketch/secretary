@@ -189,6 +189,15 @@ const MIGRATIONS: { version: number; sql: string }[] = [
       CREATE INDEX idx_activities_target ON activities(target_type, target_id);
       CREATE INDEX idx_activities_created ON activities(created_at);
     `
+  },
+  {
+    // Phase 2: recurring reminders are anchored to a local wall-clock time + zone so occurrences stay at the same
+    // local time across daylight-saving changes and do not drift after a snooze.
+    version: 4,
+    sql: `
+      ALTER TABLE reminders ADD COLUMN series_anchor_local TEXT;
+      ALTER TABLE reminders ADD COLUMN series_tz TEXT;
+    `
   }
 ]
 

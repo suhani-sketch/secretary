@@ -37,6 +37,9 @@ export interface Reminder {
   target_id: string
   fire_at_utc: string
   rrule: string | null
+  /** For recurring reminders: wall-clock anchor "yyyy-MM-ddTHH:mm" and the IANA zone it was stated in. */
+  series_anchor_local: string | null
+  series_tz: string | null
   offset_minutes: number | null
   condition_json: string | null
   state: ReminderState

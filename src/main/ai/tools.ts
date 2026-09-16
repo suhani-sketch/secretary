@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { DateTime } from 'luxon'
-import { RRule } from 'rrule'
+import { describeRRule as describeRule, firstOccurrence, normalizeRRule } from '../recurrence'
 import { getDb } from '../db'
 import { log } from '../log'
 import * as repo from '../repo'
@@ -61,11 +61,13 @@ export const toolSchemas = {
       waiting_on: z.string().max(100).optional().describe('For kind=waiting: who or what is being waited on.'),
       remind_at_local: localDateTime.optional().describe('Only if the user asked to be reminded AND gave a clock time. ' + DT_DESC),
       remind_date_local: localDate.optional().describe('Only if the user asked to be reminded on a day without a clock time; the reminder fires at their default reminder time. ' + DATE_DESC),
+      remind_rrule: rruleStr.optional().describe('For a RECURRING reminder ("every Sunday", "daily at 8"): the RRULE, e.g. "FREQ=WEEKLY;BYDAY=SU". Give remind_at_local as the first occurrence. Leave due fields empty for recurring chores.'),
       is_suggestion: z.boolean().optional().describe('true if YOU are proposing this and the user did not state it. Suggestions are not obligations until confirmed.'),
       confidence: z.number().min(0).max(1).optional().describe('For suggestions: how sure you are the user meant this.')
     })
     .refine(noBothDue, 'Give either due_at_local or due_date_local, not both')
-    .refine((v) => !(v.remind_at_local && v.remind_date_local), 'Give either remind_at_local or remind_date_local, not both'),
+    .refine((v) => !(v.remind_at_local && v.remind_date_local), 'Give either remind_at_local or remind_date_local, not both')
+    .refine((v) => !v.remind_rrule || !!v.remind_at_local || !!v.remind_date_local, 'A recurring reminder needs remind_at_local (its first occurrence)'),
   update_item: z
     .object({
       id: idRef,
@@ -226,21 +228,13 @@ const strip = (r: Reminder): Omit<Reminder, 'item_title'> => {
 function validateRRule(s: string | null | undefined): string | null {
   if (!s) return null
   try {
-    RRule.fromString(s.startsWith('RRULE:') ? s : `RRULE:${s}`)
-    return s.replace(/^RRULE:/, '')
+    return normalizeRRule(s)
   } catch {
     throw new ToolValidationError(`"${s}" is not a valid recurrence rule`)
   }
 }
 
-const describeRRule = (s: string | null): string => {
-  if (!s) return ''
-  try {
-    return ', ' + RRule.fromString(`RRULE:${s}`).toText()
-  } catch {
-    return ''
-  }
-}
+const describeRRule = (s: string | null): string => (s ? ', ' + describeRule(s) : '')
 
 /**
  * Validate and execute one tool call. Throws on validation or execution failure.
@@ -278,11 +272,18 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       })
       let reminder: Reminder | null = null
       let reminderNote = ''
+      const rr = validateRRule(x.remind_rrule)
+      const zone = DateTime.local().zoneName
       if (x.remind_at_local) {
-        reminder = repo.insertReminder(item.id, repo.localToUtc(x.remind_at_local))
+        reminder = repo.insertReminder(item.id, repo.localToUtc(x.remind_at_local), rr ? { rrule: rr, seriesAnchorLocal: x.remind_at_local, seriesTz: zone } : {})
       } else if (x.remind_date_local) {
         const r = reminderFromDate(x.remind_date_local)
-        reminder = repo.insertReminder(item.id, r.fireAtUtc)
+        if (rr) {
+          // Day-only recurring: first occurrence at the default clock, then the rule takes over.
+          const clock = repo.getPreference('default_reminder_time', DEFAULT_REMINDER_CLOCK).value
+          const first = firstOccurrence(rr, clock, zone, new Date().toISOString())
+          reminder = repo.insertReminder(item.id, first?.fireAtUtc ?? r.fireAtUtc, { rrule: rr, seriesAnchorLocal: first?.anchorLocal, seriesTz: zone })
+        } else reminder = repo.insertReminder(item.id, r.fireAtUtc)
         reminderNote = ` ${r.note}`
       }
       act({ targetType: 'item', targetId: item.id, verb: 'created', summary: `Created ${item.kind} "${item.title}"${item.due_at_utc ? `, due ${dueText(item)}` : ''}`, after: item })
@@ -300,11 +301,13 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const summary =
         `${x.is_suggestion ? 'Suggested' : 'Created'} ${item.kind} "${item.title}"` +
         (item.due_at_utc ? ` · due ${dueText(item)}` : '') +
-        (reminder ? ` · reminder ${formatClock(reminder.fire_at_utc)}${reminderNote}` : '')
+        (reminder ? ` · reminder ${formatClock(reminder.fire_at_utc)}${describeRRule(reminder.rrule)}${reminderNote}` : '')
       const phrase = x.is_suggestion
         ? `I've pencilled in "${item.title}" as a suggestion${item.due_at_utc ? ` for ${dueText(item)}` : ''} — say the word and I'll make it real.`
         : reminder
-          ? `Noted — I'll remind you about "${item.title}" ${formatClock(reminder.fire_at_utc)}${reminderNote}.`
+          ? reminder.rrule
+            ? `Noted — I'll remind you about "${item.title}" ${describeRule(reminder.rrule)}, starting ${formatClock(reminder.fire_at_utc)}${reminderNote}.`
+            : `Noted — I'll remind you about "${item.title}" ${formatClock(reminder.fire_at_utc)}${reminderNote}.`
           : item.due_at_utc
             ? `Noted "${item.title}", due ${dueText(item)}${item.due_precision === 'day' ? ' (no time set)' : ''}.${offer}`
             : `Noted "${item.title}".`
@@ -438,7 +441,7 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
         note = ` ${r.note}`
       }
       const rr = validateRRule(x.rrule)
-      const r = repo.insertReminder(itemId, fireAt, { rrule: rr })
+      const r = repo.insertReminder(itemId, fireAt, rr ? { rrule: rr, seriesAnchorLocal: x.fire_at_local ?? undefined, seriesTz: DateTime.local().zoneName } : {})
       const item = repo.getItem(itemId)!
       act({ targetType: 'reminder', targetId: r.id, verb: 'created', summary: `Reminder set for "${item.title}" ${formatClock(r.fire_at_utc)}${describeRRule(rr)}`, after: strip(r) })
       pushFocus(item.id, item.title, 'reminder added')

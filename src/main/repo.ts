@@ -371,14 +371,26 @@ export function eventsBetween(fromUtc: string, toUtc: string): { id: string; tit
 const REMINDER_SELECT = `SELECT r.*, i.title AS item_title
   FROM reminders r LEFT JOIN items i ON r.target_type = 'item' AND i.id = r.target_id`
 
-export function insertReminder(itemId: string, fireAtUtc: string, opts: { rrule?: string | null; offsetMinutes?: number | null } = {}): Reminder {
+export interface ReminderSeriesOpts {
+  rrule?: string | null
+  offsetMinutes?: number | null
+  /** Required with rrule: the local wall-clock anchor and zone the series is stated in. */
+  seriesAnchorLocal?: string | null
+  seriesTz?: string | null
+}
+
+export function insertReminder(itemId: string, fireAtUtc: string, opts: ReminderSeriesOpts = {}): Reminder {
   const rid = randomUUID()
+  const rrule = opts.rrule ?? null
+  // A recurring reminder always carries its anchor; default it to the first fire time in the local zone.
+  const tz = rrule ? (opts.seriesTz ?? DateTime.local().zoneName) : null
+  const anchor = rrule ? (opts.seriesAnchorLocal ?? DateTime.fromISO(fireAtUtc, { zone: 'utc' }).setZone(tz!).toFormat("yyyy-MM-dd'T'HH:mm")) : null
   getDb()
     .prepare(
-      `INSERT INTO reminders (id, target_type, target_id, fire_at_utc, rrule, offset_minutes, state, surfaced_count, created_at)
-       VALUES (?, 'item', ?, ?, ?, ?, 'pending', 0, ?)`
+      `INSERT INTO reminders (id, target_type, target_id, fire_at_utc, rrule, series_anchor_local, series_tz, offset_minutes, state, surfaced_count, created_at)
+       VALUES (?, 'item', ?, ?, ?, ?, ?, ?, 'pending', 0, ?)`
     )
-    .run(rid, itemId, fireAtUtc, opts.rrule ?? null, opts.offsetMinutes ?? null, nowIso())
+    .run(rid, itemId, fireAtUtc, rrule, anchor, tz, opts.offsetMinutes ?? null, nowIso())
   return getReminder(rid)!
 }
 
@@ -404,11 +416,28 @@ export interface ReminderPatch {
   state?: Reminder['state']
 }
 
+/**
+ * Update a reminder. Changing the fire time of a recurring reminder, or making one recurring, re-anchors the
+ * series to that wall-clock time; clearing the rule clears the anchor.
+ */
 export function updateReminder(id: string, p: ReminderPatch): Reminder {
+  const before = getReminder(id)
+  if (!before) throw new Error(`No reminder ${id}`)
   const sets: string[] = []
   const vals: unknown[] = []
   if (p.fireAtUtc !== undefined) (sets.push('fire_at_utc = ?'), vals.push(p.fireAtUtc))
   if (p.rrule !== undefined) (sets.push('rrule = ?'), vals.push(p.rrule))
+  const rruleAfter = p.rrule !== undefined ? p.rrule : before.rrule
+  if (rruleAfter) {
+    if (p.fireAtUtc !== undefined || !before.series_anchor_local || p.rrule !== undefined) {
+      const tz = before.series_tz ?? DateTime.local().zoneName
+      const fire = p.fireAtUtc ?? before.fire_at_utc
+      sets.push('series_anchor_local = ?', 'series_tz = ?')
+      vals.push(DateTime.fromISO(fire, { zone: 'utc' }).setZone(tz).toFormat("yyyy-MM-dd'T'HH:mm"), tz)
+    }
+  } else if (p.rrule === null) {
+    sets.push('series_anchor_local = NULL', 'series_tz = NULL')
+  }
   if (p.state !== undefined) (sets.push('state = ?'), vals.push(p.state))
   if (!sets.length) return getReminder(id)!
   vals.push(id)
