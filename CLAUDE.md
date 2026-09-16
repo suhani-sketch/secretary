@@ -3,7 +3,46 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 5 — Living activities: slices 5a–5d built 2026-09-16; §11F passed. Phase 6 (calendar) next. Phase 4 companion + room built and committed.
+## Current phase: Phase 6 — Calendar and temporal planning. 6a built 2026-09-16 (testable); 6b–6f next. Phase 5 complete (§11F passed).
+
+## Phase 6 — architecture decisions (2026-09-16)
+- **Library: FullCalendar pinned to 6.1.21** (`@fullcalendar/core|react|daygrid|timegrid|list|interaction`, exact versions — they
+  must match). Not v7 (shipped 2026-06/09, plugins re-packaged, too young). MIT; premium (resource/timeline) not used; keep the
+  copyright headers in the bundle. The rrule plugin is NOT used: our own engine expands series.
+- **Adapter:** `src/renderer/src/calendar/CalendarAdapter.tsx` is the ONLY file that imports `@fullcalendar/*`. It speaks
+  `GridEntry`/`GridCallbacks` (our model), exposes `CalendarGrid` (month/week/day/list) and re-exports `ExternalDraggable`.
+  A v7 upgrade or a swap touches this file alone. Theming via `--fc-*` CSS variables in `styles.css` (`.cal-grid`).
+- **Platform-independent core:** `src/core/` (included in both tsconfigs; luxon + rrule only, no Electron, no SQLite, no repo).
+  `core/recurrence.ts` (moved from main; `src/main/recurrence.ts` is a re-export shim), `core/calendar/occurrences.ts`
+  (`expandEvents` — wall-clock rrule expansion with `exdates` exceptions, `scheduledMinutes`), `core/calendar/aggregate.ts`
+  (`assembleDay(DayInputs) → DayBundle`, `dayStatus` light/normal/busy/overloaded, `unavailableMinutes`). A phone client could
+  reuse all of it. `src/main/calendar.ts` is the SQLite glue (`buildDay`, `occurrencesBetween`); `planning.ts` (conflicts) still
+  imports repo and moves to core when 6f touches it.
+- **Migration 7:** `plans` table; `events.plan_id`, `events.session_state`; index on `events.starts_at_utc`.
+
+## Phase 6a — aggregation and the day view (2026-09-16)
+- Types: `CalendarEvent`, `Plan`, `EventOccurrence` (series row + `occurrence_start_utc`/`occurrence_end_utc`), `DayBundle`
+  (date, status, scheduled_minutes, priorities, due, schedule, reminders, waiting, happenings, notes, completed, constraints).
+- Repo: `insertEvent/getEvent/updateEvent/deleteEventRow/restoreEvent/resolveEventId/eventsTouching/itemsForDay/
+  remindersBetween/happeningsBetween`. IPC `events:list` (expanded occurrences) and `calendar:day`.
+- Tools: `create_event {title, starts_at_local|date_local, ends_at_local|duration_minutes, rrule?, kind commitment|work_block,
+  project_id?, override_conflicts?}` — hard clash → refused with an alternative + `conflict_override` Offer ("book it anyway"
+  replays it); `update_event {id, …, occurrence_start_local?}` — a single occurrence of a series becomes an exdate + a standalone
+  event, the series is never rewritten; `delete_event {id, occurrence_start_local?}`; `get_calendar`, `get_day` (read, phrased in
+  code). Events take the focus stack (`FocusEntry.kind='event'`) so "move it to 4" / "cancel it" target the meeting just made.
+- Router: "meeting/call/dentist/class… <day> at <time>" → create_event (kind commitment when people are involved); "move it to 4"
+  on an event focus → update_event; "cancel the dentist" → delete_event by title among the next 60 days; "what am I doing
+  thursday?" → get_day; "note for thursday: …" → date note. `parseWhen`: "3:30" with no am/pm is now afternoon like a bare "3".
+- Context: "Calendar, next 14 days" lists expanded occurrences WITH ids (the model needs them for update/delete).
+- UI: header "calendar" ↔ "chat" toggle swaps the centre pane. `calendar/DayView.tsx`: ‹ today › navigation, descriptive status
+  pill, then Priorities → Due today → Reminders and follow-ups → Notes → Completed (collapsed) on the left and the Schedule time
+  grid (06:00–24:00, no all-day row) on the right; unavailable constraints as hatched background bands, timed happenings dashed.
+  Importance/hardness shown as glyph + word, never colour alone. Clicking an item opens the editor; clicking an event prefills
+  "Move … to " in the chat (event editor arrives with 6b/6e). Dev hook `SECRETARY_VIEW=calendar[:YYYY-MM-DD]`.
+- Verified on a scratch DB across two runs: meeting created → moved to 4 → task due Thursday appears under Due, not in the grid →
+  reminder listed separately → date note under Notes → busy 12–14 shaded → dentist 15:30 refused as a hard clash with an
+  alternative → "book it anyway" books it → cancel by title → persisted across the restart. §11C 1, 2, 4, 5, 6, 18, 22 exercised;
+  3, 7–17, 19–21, 23 are later slices. Phase 4 companion + room built and committed.
 
 ## Phase 5a — happenings core (2026-09-16)
 - **Migration 5**: `happenings` (spec §3) + a `kind` column (addition: lets micro-rituals remember a "no" per kind). Deliberately

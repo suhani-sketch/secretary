@@ -7,6 +7,7 @@ import { clearLog, listLog, log } from './log'
 import { NOTIFICATION_ID_PREFIX, PROTOCOL, dispatchToastAction, setToastActionHandler, showToast } from './notifier'
 import * as repo from './repo'
 import { TICK_MS, startScheduler, startupSweep, stopScheduler, tick } from './scheduler'
+import { buildDay, occurrencesBetween } from './calendar'
 import { createTray, refreshTrayMenu } from './tray'
 import { GeminiProvider } from './ai/gemini'
 import type { Provider } from './ai/provider'
@@ -466,6 +467,12 @@ function registerIpc(): void {
   ipcMain.handle(IPC.activitiesForItem, (_e, itemId: string, limit?: number) => repo.activitiesFor('item', itemId, limit ?? 100))
   ipcMain.handle(IPC.listConstraints, () => repo.activeConstraints())
   ipcMain.handle(IPC.listHappenings, () => repo.happeningsForWindow(new Date(Date.now() - 15 * 60_000).toISOString()))
+  // Calendar (Phase 6): read-only aggregation; every change still goes through tools:run.
+  ipcMain.handle(IPC.listEvents, (_e, fromUtc: string, toUtc: string) => occurrencesBetween(fromUtc, toUtc))
+  ipcMain.handle(IPC.getDay, (_e, dateLocal: string) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateLocal)) throw new Error('Bad date')
+    return buildDay(dateLocal)
+  })
   // UI settings (scene choice). Only whitelisted keys, so the renderer cannot touch anything else in the table.
   const UI_SETTING = /^scene\.(environment|timeOfDay)$|^companion\.[a-z_]+$/
   ipcMain.handle(IPC.getSetting, (_e, key: string) => {

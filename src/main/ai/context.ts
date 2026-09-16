@@ -2,6 +2,7 @@ import { DateTime } from 'luxon'
 import * as repo from '../repo'
 import { formatClock, formatDue } from '../../shared/format'
 import { describeConstraint } from '../planning'
+import { occurrencesBetween } from '../calendar'
 import type { Item, Reminder } from '../../shared/types'
 
 /** Short id the model uses to refer to rows. Resolved back with repo.resolveItemId / resolveReminderId. */
@@ -13,12 +14,14 @@ export interface FocusEntry {
   title: string
   action: string
   at: string
+  /** Items by default; calendar events also take focus so "move it to 4" can mean the meeting just created. */
+  kind?: 'item' | 'event'
 }
 const focus: FocusEntry[] = []
-export function pushFocus(itemId: string, title: string, action: string): void {
+export function pushFocus(itemId: string, title: string, action: string, kind: 'item' | 'event' = 'item'): void {
   const i = focus.findIndex((f) => f.itemId === itemId)
   if (i >= 0) focus.splice(i, 1)
-  focus.unshift({ itemId, title, action, at: new Date().toISOString() })
+  focus.unshift({ itemId, title, action, at: new Date().toISOString(), kind })
   if (focus.length > 5) focus.length = 5
 }
 export function getFocus(): FocusEntry[] {
@@ -107,7 +110,7 @@ export function assembleContext(userText: string): string {
   const todayCtx = repo.todayContext()
   const commitments = repo.openCommitments()
   const dateNotes = repo.dateNotesBetween(now.minus({ days: 1 }).toISODate()!, now.plus({ days: 14 }).toISODate()!)
-  const events = repo.eventsBetween(now.startOf('day').toUTC().toISO()!, now.plus({ days: 1 }).endOf('day').toUTC().toISO()!)
+  const events = occurrencesBetween(now.startOf('day').toUTC().toISO()!, now.plus({ days: 14 }).endOf('day').toUTC().toISO()!)
   const offer = getOffer()
 
   const section = (title: string, items: Item[]): string =>
@@ -148,8 +151,10 @@ export function assembleContext(userText: string): string {
     section('Other items modified in the last 7 days', recent),
     ``,
     events.length
-      ? `Calendar today and tomorrow:\n${events.map((e) => `- "${e.title}" ${e.all_day ? 'all day' : formatClock(e.starts_at_utc)}`).join('\n')}`
-      : `Calendar today and tomorrow: nothing.`,
+      ? `Calendar, next 14 days (events occupy time; refer to them by id for update_event / delete_event):\n${events
+          .map((e) => `- [${shortId(e.id)}] "${e.title}" ${e.all_day ? formatDue(e.occurrence_start_utc, 'day') : `${formatClock(e.occurrence_start_utc)}${e.occurrence_end_utc ? `–${formatClock(e.occurrence_end_utc).replace(/^.*? at /, '')}` : ''}`}${e.kind ? ` (${e.kind})` : ''}${e.is_recurring_instance ? ' ↻ series' : ''}`)
+          .join('\n')}`
+      : `Calendar, next 14 days: nothing.`,
     constraints.length
       ? `Availability constraints (the app checks these when a time is booked; you do not need to):\n${constraints.map((c) => `- [${shortId(c.id)}] ${c.kind}: ${describeConstraint(c)} [${c.source}]`).join('\n')}`
       : `Availability constraints: none recorded.`,

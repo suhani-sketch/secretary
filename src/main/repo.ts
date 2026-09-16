@@ -3,6 +3,7 @@ import { DateTime } from 'luxon'
 import { getDb } from './db'
 import type {
   Happening,
+  CalendarEvent,
   Activity,
   Actor,
   ChatMessage,
@@ -1020,4 +1021,132 @@ export function addContext(kind: ContextEntry['kind'], text: string): ContextEnt
 /** Open commitments (promises to a named person), soonest first. */
 export function openCommitments(): Item[] {
   return getDb().prepare(`SELECT * FROM items WHERE kind = 'commitment' AND status = 'open' ORDER BY COALESCE(due_at_utc, '9'), created_at`).all() as Item[]
+}
+
+// ---- Calendar events (spec §3 `events`, Phase 6) -------------------------------------------------------------------
+
+export interface NewEvent {
+  title: string
+  startsAtUtc: string
+  endsAtUtc: string | null
+  allDay: boolean
+  tz: string
+  rrule?: string | null
+  projectId?: string | null
+  kind?: CalendarEvent['kind']
+  planId?: string | null
+  sessionState?: CalendarEvent['session_state']
+}
+
+export function insertEvent(e: NewEvent): CalendarEvent {
+  const id = randomUUID()
+  const ts = nowIso()
+  getDb()
+    .prepare(
+      `INSERT INTO events (id, title, starts_at_utc, ends_at_utc, all_day, tz, rrule, exdates, project_id, kind, plan_id, session_state, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(id, e.title.trim(), e.startsAtUtc, e.endsAtUtc, e.allDay ? 1 : 0, e.tz, e.rrule ?? null, e.projectId ?? null, e.kind ?? null, e.planId ?? null, e.sessionState ?? null, ts, ts)
+  return getEvent(id)!
+}
+
+export function getEvent(id: string): CalendarEvent | undefined {
+  return getDb().prepare('SELECT * FROM events WHERE id = ?').get(id) as CalendarEvent | undefined
+}
+
+export function resolveEventId(ref: string): string {
+  const rows = getDb().prepare('SELECT id FROM events WHERE id LIKE ?').all(`${ref.trim()}%`) as { id: string }[]
+  if (rows.length === 1) return rows[0].id
+  if (rows.length === 0) throw new Error(`No event with id "${ref}"`)
+  throw new Error(`Ambiguous event id "${ref}"`)
+}
+
+export interface EventPatch {
+  title?: string
+  startsAtUtc?: string
+  endsAtUtc?: string | null
+  allDay?: boolean
+  rrule?: string | null
+  exdates?: string | null
+  projectId?: string | null
+  kind?: CalendarEvent['kind']
+  sessionState?: CalendarEvent['session_state']
+}
+
+export function updateEvent(id: string, p: EventPatch): CalendarEvent {
+  const sets: string[] = []
+  const vals: unknown[] = []
+  const set = (col: string, v: unknown): void => {
+    sets.push(`${col} = ?`)
+    vals.push(v)
+  }
+  if (p.title !== undefined) set('title', p.title.trim())
+  if (p.startsAtUtc !== undefined) set('starts_at_utc', p.startsAtUtc)
+  if (p.endsAtUtc !== undefined) set('ends_at_utc', p.endsAtUtc)
+  if (p.allDay !== undefined) set('all_day', p.allDay ? 1 : 0)
+  if (p.rrule !== undefined) set('rrule', p.rrule)
+  if (p.exdates !== undefined) set('exdates', p.exdates)
+  if (p.projectId !== undefined) set('project_id', p.projectId)
+  if (p.kind !== undefined) set('kind', p.kind)
+  if (p.sessionState !== undefined) set('session_state', p.sessionState)
+  if (!sets.length) return getEvent(id)!
+  set('updated_at', nowIso())
+  vals.push(id)
+  getDb().prepare(`UPDATE events SET ${sets.join(', ')} WHERE id = ?`).run(...vals)
+  return getEvent(id)!
+}
+
+export function deleteEventRow(id: string): void {
+  getDb().prepare(`UPDATE reminders SET state = 'cancelled' WHERE target_type = 'event' AND target_id = ? AND state IN ('pending','paused','snoozed')`).run(id)
+  getDb().prepare('DELETE FROM notes WHERE target_type = ? AND target_id = ?').run('event', id)
+  getDb().prepare('DELETE FROM events WHERE id = ?').run(id)
+}
+
+export function restoreEvent(e: CalendarEvent): void {
+  getDb()
+    .prepare(
+      `INSERT OR REPLACE INTO events (id, title, starts_at_utc, ends_at_utc, all_day, tz, rrule, exdates, project_id, kind, plan_id, session_state, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(e.id, e.title, e.starts_at_utc, e.ends_at_utc, e.all_day, e.tz, e.rrule, e.exdates, e.project_id, e.kind, e.plan_id, e.session_state, e.created_at, e.updated_at)
+}
+
+/** Series that could produce an occurrence in [from, to): one-offs overlapping it, and every recurring series that started before `to`. */
+export function eventsTouching(fromUtc: string, toUtc: string): CalendarEvent[] {
+  return getDb()
+    .prepare(
+      `SELECT * FROM events
+       WHERE (rrule IS NOT NULL AND starts_at_utc < ?)
+          OR (rrule IS NULL AND starts_at_utc < ? AND COALESCE(ends_at_utc, datetime(starts_at_utc, '+1 day')) > ?)
+       ORDER BY starts_at_utc`
+    )
+    .all(toUtc, toUtc, fromUtc) as CalendarEvent[]
+}
+
+export function listEventRows(limit = 300): CalendarEvent[] {
+  return getDb().prepare('SELECT * FROM events ORDER BY starts_at_utc DESC LIMIT ?').all(limit) as CalendarEvent[]
+}
+
+/** Items (any status) whose due date falls in the window, plus open overdue ones before it (for a day's priorities). */
+export function itemsForDay(fromUtc: string, toUtc: string): Item[] {
+  return getDb()
+    .prepare(
+      `SELECT * FROM items WHERE status != 'archived' AND kind != 'checklist_item' AND (
+         (due_at_utc >= ? AND due_at_utc < ?) OR (status = 'open' AND due_at_utc < ?) OR (completed_at >= ? AND completed_at < ?)
+       ) ORDER BY due_at_utc`
+    )
+    .all(fromUtc, toUtc, fromUtc, fromUtc, toUtc) as Item[]
+}
+
+export function remindersBetween(fromUtc: string, toUtc: string): Reminder[] {
+  return getDb()
+    .prepare(
+      `SELECT r.*, i.title AS item_title FROM reminders r LEFT JOIN items i ON i.id = r.target_id AND r.target_type = 'item'
+       WHERE r.fire_at_utc >= ? AND r.fire_at_utc < ? AND r.state != 'cancelled' ORDER BY r.fire_at_utc`
+    )
+    .all(fromUtc, toUtc) as Reminder[]
+}
+
+export function happeningsBetween(fromUtc: string, toUtc: string): Happening[] {
+  return getDb().prepare(`SELECT * FROM happenings WHERE started_at < ? AND (state = 'running' OR COALESCE(ends_at, started_at) >= ?) ORDER BY started_at`).all(toUtc, fromUtc) as Happening[]
 }

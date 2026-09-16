@@ -95,6 +95,41 @@ export interface Happening {
   created_at: string
 }
 
+/** Calendar event (spec §3 `events`). Timed or all-day; recurring via rrule with per-occurrence exceptions in exdates. */
+export interface CalendarEvent {
+  id: string
+  title: string
+  starts_at_utc: string
+  ends_at_utc: string | null
+  all_day: number
+  tz: string
+  rrule: string | null
+  /** JSON array of excluded occurrence starts (UTC ISO). */
+  exdates: string | null
+  project_id: string | null
+  kind: 'commitment' | 'work_block' | 'session' | null
+  plan_id: string | null
+  session_state: 'planned' | 'done' | 'missed' | 'moved' | null
+  created_at: string
+  updated_at: string
+}
+
+/** Multi-day plan (spec §3 `plans`): generates sessions, tracks target effort against done effort. */
+export interface Plan {
+  id: string
+  title: string
+  project_id: string | null
+  target_minutes: number | null
+  starts_on: string
+  ends_on: string | null
+  rrule: string | null
+  session_minutes: number | null
+  deadline_item: string | null
+  status: 'active' | 'paused' | 'done' | 'abandoned'
+  created_at: string
+  updated_at: string
+}
+
 export interface Link {
   from_item: string
   to_item: string
@@ -246,6 +281,33 @@ export interface SecretaryApi {
   setSetting(key: string, value: string): Promise<void>
   /** Living activities: everything running now, plus ones that ended in the last few minutes (so the rail can fade them out). */
   listHappenings(): Promise<Happening[]>
+  /** Calendar (Phase 6): expanded event occurrences in a UTC range (recurring series already unrolled, exceptions applied). */
+  listEvents(fromUtc: string, toUtc: string): Promise<EventOccurrence[]>
+  /** Everything the secretary knows about one local date, aggregated from the existing records (spec 6a). */
+  getDay(dateLocal: string): Promise<DayBundle>
+}
+
+/** One occurrence of an event: the series row plus this instance's start/end. `occurrence_start_utc` identifies it in `exdates`. */
+export interface EventOccurrence extends CalendarEvent {
+  occurrence_start_utc: string
+  occurrence_end_utc: string | null
+  is_recurring_instance: boolean
+}
+
+/** The day view's data (spec 6a). Assembled by src/core/calendar/aggregate.ts from existing records — nothing is copied. */
+export interface DayBundle {
+  date: string
+  status: 'light' | 'normal' | 'busy' | 'overloaded'
+  scheduled_minutes: number
+  priorities: Item[]
+  due: Item[]
+  schedule: EventOccurrence[]
+  reminders: Reminder[]
+  waiting: Item[]
+  happenings: Happening[]
+  notes: Note[]
+  completed: Item[]
+  constraints: Constraint[]
 }
 
 export const IPC = {
@@ -276,5 +338,7 @@ export const IPC = {
   listConstraints: 'constraints:list',
   getSetting: 'settings:get',
   setSetting: 'settings:set',
-  listHappenings: 'happenings:list'
+  listHappenings: 'happenings:list',
+  listEvents: 'events:list',
+  getDay: 'calendar:day'
 } as const

@@ -1,5 +1,6 @@
 import { detectHappeningStart, kindForLabel } from '../happenings'
 import { METAPHORS } from '../../shared/happenings'
+import { occurrencesBetween, buildDay } from '../calendar'
 import { z } from 'zod'
 import { DateTime } from 'luxon'
 import { describeRRule as describeRule, firstOccurrence, normalizeRRule } from '../recurrence'
@@ -167,6 +168,40 @@ export const toolSchemas = {
     text: z.string().min(1).max(200).describe('The statement in a few words, e.g. "exhausted", "at TISS until 17:00".')
   }),
   get_forgetting: z.object({}).describe('Everything that might be slipping: commitments first (with who), then overdue, then waiting, then due soon. Phrased by the app.'),
+  create_event: z
+    .object({
+      title: z.string().min(1).max(200).describe('"Meeting with Professor X", "Dentist", "Econometrics class".'),
+      starts_at_local: localDateTime.optional().describe('Start, when a clock time was given. ' + DT_DESC),
+      ends_at_local: localDateTime.optional().describe('End, if stated. Otherwise duration_minutes or a 60-minute default.'),
+      duration_minutes: z.number().int().min(5).max(24 * 60).optional(),
+      date_local: localDate.optional().describe('For an ALL-DAY event ("conference on Friday"). ' + DATE_DESC),
+      rrule: rruleStr.optional().describe('Recurring series ("every Tuesday"): the RRULE; starts_at_local is the first occurrence.'),
+      kind: z.enum(['commitment', 'work_block']).optional().describe('commitment = an appointment with others; work_block = time set aside for the user\'s own work. Omit for ordinary events.'),
+      project_id: idRef.optional(),
+      override_conflicts: z.boolean().optional().describe('Only after the user, told of a clash, says to book it anyway.')
+    })
+    .refine((v) => !!v.starts_at_local || !!v.date_local, 'Give starts_at_local or date_local'),
+  update_event: z
+    .object({
+      id: idRef,
+      title: z.string().min(1).max(200).optional(),
+      starts_at_local: localDateTime.optional().describe('New start. ' + DT_DESC),
+      ends_at_local: localDateTime.optional(),
+      duration_minutes: z.number().int().min(5).max(24 * 60).optional(),
+      date_local: localDate.optional().describe('Move an all-day event to another day.'),
+      occurrence_start_local: localDateTime.optional().describe('For a RECURRING series: which occurrence to change. Only that occurrence changes; the series is untouched.'),
+      override_conflicts: z.boolean().optional()
+    })
+    .describe('Change one event. For a recurring series pass occurrence_start_local to change a single occurrence.'),
+  delete_event: z.object({
+    id: idRef,
+    occurrence_start_local: localDateTime.optional().describe('For a recurring series: skip only this occurrence (added to exdates). Omit to remove the whole event.')
+  }),
+  get_calendar: z.object({
+    from_date_local: localDate.describe('First day, inclusive.'),
+    to_date_local: localDate.describe('Last day, inclusive.')
+  }),
+  get_day: z.object({ date_local: localDate }).describe('Everything about one day: priorities, due, schedule, reminders, notes, completed. Use for "what am I doing Thursday?".'),
   check_conflicts: z
     .object({
       starts_at_local: localDateTime.describe(DT_DESC),
@@ -287,6 +322,11 @@ const descriptions: Record<ToolName, string> = {
   decline_ritual: 'The user said no to a timer offer for a kind of happening; the app will not offer it for that kind again.',
   note_context: 'Today\'s context — "I\'m exhausted today", "I\'m at TISS until 5", "feeling low". Shapes today\'s recommendations, expires tonight, is NEVER a task, note or memory. Do not use for durable patterns ("I work better in the afternoon" → set_preference).',
   get_forgetting: '"What am I forgetting?" — the app lists commitments (with who they were made to) ahead of everything else, then overdue, waiting and due-soon items.',
+  create_event: 'Put something on the calendar that occupies time: "meeting with Professor X Thursday at 3", "dentist Friday 10:30", "class every Tuesday 2–4". NOT for tasks (a task due Thursday is create_item). The app checks clashes.',
+  update_event: 'Move or change an existing event ("move it to 4", "make it an hour"). For one occurrence of a recurring series pass occurrence_start_local.',
+  delete_event: 'Cancel an event ("cancel the meeting") or skip one occurrence of a series.',
+  get_calendar: 'Events between two days, expanded. Use for "what have I got this week?".',
+  get_day: 'Everything about one day, aggregated: priorities, due, schedule, reminders, notes, completed. Use for "what am I doing Thursday?".',
   check_conflicts: 'What clashes with a proposed time. The app computes it; you phrase it.',
   update_note: 'Change the text of an existing note.',
   delete_note: 'Remove a note.',
@@ -321,6 +361,9 @@ const WRITE_TOOLS: ReadonlySet<string> = new Set([
   'time_happening',
   'decline_ritual',
   'note_context',
+  'create_event',
+  'update_event',
+  'delete_event',
   'add_link',
   'remove_link',
   'add_constraint',
@@ -725,6 +768,147 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const soonEnd = DateTime.utc().plus({ days: 2 }).toISO()!
       const soon = repo.itemsDueBetween(nowIso, soonEnd).filter((i) => i.kind !== 'commitment' && i.kind !== 'waiting' && i.kind !== 'checklist_item').map((i) => ({ title: i.title, due: formatDue(i.due_at_utc!, i.due_precision) }))
       return { result: { commitments, overdue, waiting, due_soon: soon, today_context: repo.todayContext().map((c) => c.text) } }
+    }
+    case 'create_event': {
+      // Phase 6. Events occupy time; they are never tasks and never duplicate one (spec §6). Hard clashes are refused with an
+      // alternative unless the user, told of the clash, said to book anyway (invariant 10: nothing existing is moved).
+      const x = a as z.infer<typeof toolSchemas.create_event>
+      const zone = DateTime.local().zoneName
+      let startsAtUtc: string
+      let endsAtUtc: string | null
+      let allDay = false
+      if (x.starts_at_local) {
+        startsAtUtc = repo.localToUtc(x.starts_at_local)
+        endsAtUtc = x.ends_at_local ? repo.localToUtc(x.ends_at_local) : DateTime.fromISO(startsAtUtc, { zone: 'utc' }).plus({ minutes: x.duration_minutes ?? 60 }).toISO()!
+        if (endsAtUtc <= startsAtUtc) throw new ToolValidationError('The event ends before it starts')
+        const cs = conflictsFor(startsAtUtc, endsAtUtc)
+        const hard = blockingConflicts(cs)
+        if (hard.length && !x.override_conflicts) {
+          setOffer({ kind: 'conflict_override', toolName: name, args: { ...(rawArgs as Record<string, unknown>), override_conflicts: true } })
+          const next = afterConflicts(hard)
+          const question = `"${x.title}" at ${formatClock(startsAtUtc)} clashes with ${hard.map(describeConflict).join(' and ')}. Book it anyway${next ? `, or would ${formatClock(next).replace(/^.*? at /, '')} onwards suit better` : ''}?`
+          return { result: { ok: false, needs_confirmation: true, question }, confirm: { question, wouldAffect: hard.map(describeConflict) } }
+        }
+      } else {
+        const d = DateTime.fromISO(x.date_local!, { zone }).startOf('day')
+        startsAtUtc = d.toUTC().toISO()!
+        endsAtUtc = d.plus({ days: 1 }).toUTC().toISO()!
+        allDay = true
+      }
+      const rr = validateRRule(x.rrule)
+      const projectId = x.project_id ? repo.resolveItemId(x.project_id) : null
+      const ev = repo.insertEvent({ title: x.title, startsAtUtc, endsAtUtc, allDay, tz: zone, rrule: rr, projectId, kind: x.kind ?? null })
+      act({ targetType: 'event', targetId: ev.id, projectId, verb: 'created', summary: `Created event "${ev.title}" ${allDay ? formatDue(startsAtUtc, 'day') : formatClock(startsAtUtc)}${rr ? ` ${describeRRule(rr)}` : ''}`, after: ev })
+      pushFocus(ev.id, ev.title, 'event created', 'event')
+      clearOffer()
+      const when = allDay ? formatDue(startsAtUtc, 'day') : `${formatClock(startsAtUtc)}–${DateTime.fromISO(endsAtUtc!, { zone: 'utc' }).toLocal().toFormat('HH:mm')}`
+      const softNote = x.starts_at_local ? conflictsFor(startsAtUtc, endsAtUtc!).filter((c) => !blockingConflicts([c]).length).map(describeConflict) : []
+      const summary = `Event "${ev.title}" · ${when}${rr ? ` · ${describeRRule(rr)}` : ''}${x.override_conflicts ? ' · booked over a clash as asked' : ''}`
+      const phrase = `${rr ? 'Recurring: ' : ''}"${ev.title}" is on the calendar, ${when}${rr ? ` ${describeRRule(rr)}` : ''}${x.override_conflicts ? ' (booked over the clash as you asked)' : ''}${softNote.length ? `. Note: it sits against ${softNote.join(' and ')}` : ''}.`
+      return { result: { ok: true, event_id: shortId(ev.id), summary }, applied: { tool: name, summary, phrase } }
+    }
+    case 'update_event': {
+      const x = a as z.infer<typeof toolSchemas.update_event>
+      const ev = repo.getEvent(repo.resolveEventId(x.id))
+      if (!ev) throw new Error('No such event')
+      const zone = ev.tz || DateTime.local().zoneName
+      const oldDur = ev.ends_at_utc ? DateTime.fromISO(ev.ends_at_utc).toMillis() - DateTime.fromISO(ev.starts_at_utc).toMillis() : 60 * 60_000
+      let target = ev
+      let occurrenceNote = ''
+      // One occurrence of a series (spec 6e): exclude it from the series and carry on with a standalone copy.
+      if (ev.rrule && x.occurrence_start_local) {
+        const occUtc = repo.localToUtc(x.occurrence_start_local)
+        const ex = new Set<string>(JSON.parse(ev.exdates ?? '[]') as string[])
+        ex.add(occUtc)
+        repo.updateEvent(ev.id, { exdates: JSON.stringify([...ex]) })
+        target = repo.insertEvent({ title: ev.title, startsAtUtc: occUtc, endsAtUtc: DateTime.fromISO(occUtc, { zone: 'utc' }).plus({ milliseconds: oldDur }).toISO()!, allDay: !!ev.all_day, tz: zone, projectId: ev.project_id, kind: ev.kind })
+        occurrenceNote = ' (only this occurrence; the series is unchanged)'
+      } else if (ev.rrule && (x.starts_at_local || x.date_local)) {
+        throw new ToolValidationError('This is a recurring series — say which occurrence to move (occurrence_start_local), or change the series rule')
+      }
+      const patch: repo.EventPatch = {}
+      if (x.title) patch.title = x.title
+      let newStart = target.starts_at_utc
+      let newEnd = target.ends_at_utc
+      if (x.starts_at_local) {
+        newStart = repo.localToUtc(x.starts_at_local)
+        newEnd = x.ends_at_local ? repo.localToUtc(x.ends_at_local) : DateTime.fromISO(newStart, { zone: 'utc' }).plus({ milliseconds: x.duration_minutes ? x.duration_minutes * 60_000 : oldDur }).toISO()!
+        patch.allDay = false
+      } else if (x.date_local) {
+        const d = DateTime.fromISO(x.date_local, { zone }).startOf('day')
+        newStart = d.toUTC().toISO()!
+        newEnd = d.plus({ days: 1 }).toUTC().toISO()!
+        patch.allDay = true
+      } else if (x.ends_at_local) newEnd = repo.localToUtc(x.ends_at_local)
+      else if (x.duration_minutes) newEnd = DateTime.fromISO(newStart, { zone: 'utc' }).plus({ minutes: x.duration_minutes }).toISO()!
+      if (newEnd && newEnd <= newStart) throw new ToolValidationError('The event would end before it starts')
+      if (newStart !== target.starts_at_utc || newEnd !== target.ends_at_utc) {
+        if (!patch.allDay && newEnd) {
+          const hard = blockingConflicts(conflictsFor(newStart, newEnd)).filter((c) => !(c.kind === 'event' && c.eventId === target.id))
+          if (hard.length && !x.override_conflicts) {
+            setOffer({ kind: 'conflict_override', toolName: name, args: { ...(rawArgs as Record<string, unknown>), override_conflicts: true } })
+            const question = `Moving "${target.title}" to ${formatClock(newStart)} clashes with ${hard.map(describeConflict).join(' and ')}. Move it anyway?`
+            return { result: { ok: false, needs_confirmation: true, question }, confirm: { question, wouldAffect: hard.map(describeConflict) } }
+          }
+        }
+        patch.startsAtUtc = newStart
+        patch.endsAtUtc = newEnd
+      }
+      const before = target
+      const after = repo.updateEvent(target.id, patch)
+      const moved = before.starts_at_utc !== after.starts_at_utc || before.ends_at_utc !== after.ends_at_utc
+      act({ targetType: 'event', targetId: after.id, projectId: after.project_id, verb: 'updated', summary: `Event "${after.title}"${moved ? ` moved ${formatClock(before.starts_at_utc)} → ${formatClock(after.starts_at_utc)}` : ' changed'}${occurrenceNote}`, before, after })
+      pushFocus(after.id, after.title, 'event updated', 'event')
+      clearOffer()
+      const when = after.all_day ? formatDue(after.starts_at_utc, 'day') : `${formatClock(after.starts_at_utc)}${after.ends_at_utc ? `–${DateTime.fromISO(after.ends_at_utc, { zone: 'utc' }).toLocal().toFormat('HH:mm')}` : ''}`
+      const summary = `Event "${after.title}" · now ${when}${occurrenceNote}`
+      return { result: { ok: true, event_id: shortId(after.id), summary }, applied: { tool: name, summary, phrase: `"${after.title}" is now ${when}${occurrenceNote}.` } }
+    }
+    case 'delete_event': {
+      const x = a as z.infer<typeof toolSchemas.delete_event>
+      const ev = repo.getEvent(repo.resolveEventId(x.id))
+      if (!ev) throw new Error('No such event')
+      if (ev.rrule && x.occurrence_start_local) {
+        const occUtc = repo.localToUtc(x.occurrence_start_local)
+        const ex = new Set<string>(JSON.parse(ev.exdates ?? '[]') as string[])
+        ex.add(occUtc)
+        const after = repo.updateEvent(ev.id, { exdates: JSON.stringify([...ex]) })
+        act({ targetType: 'event', targetId: ev.id, projectId: ev.project_id, verb: 'updated', summary: `Skipped "${ev.title}" on ${formatClock(occUtc)} (series continues)`, before: ev, after })
+        clearOffer()
+        const summary = `Skipped "${ev.title}" on ${formatClock(occUtc)}`
+        return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Skipped "${ev.title}" on ${formatClock(occUtc)}. The series carries on.` } }
+      }
+      repo.deleteEventRow(ev.id)
+      act({ targetType: 'event', targetId: ev.id, projectId: ev.project_id, verb: 'deleted', summary: `Cancelled event "${ev.title}" (${ev.all_day ? formatDue(ev.starts_at_utc, 'day') : formatClock(ev.starts_at_utc)})`, before: ev })
+      clearOffer()
+      const summary = `Cancelled event "${ev.title}"`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Cancelled "${ev.title}"${ev.rrule ? ' — the whole series' : ''}. Nothing else was touched.` } }
+    }
+    case 'get_calendar': {
+      const x = a as z.infer<typeof toolSchemas.get_calendar>
+      const zone = DateTime.local().zoneName
+      const from = DateTime.fromISO(x.from_date_local, { zone }).startOf('day').toUTC().toISO()!
+      const to = DateTime.fromISO(x.to_date_local, { zone }).startOf('day').plus({ days: 1 }).toUTC().toISO()!
+      const occ = occurrencesBetween(from, to)
+      return { result: { from: x.from_date_local, to: x.to_date_local, events: occ.map((o) => ({ id: shortId(o.id), title: o.title, when: o.all_day ? formatDue(o.occurrence_start_utc, 'day') : formatClock(o.occurrence_start_utc), end: o.occurrence_end_utc && !o.all_day ? DateTime.fromISO(o.occurrence_end_utc, { zone: 'utc' }).toLocal().toFormat('HH:mm') : null, kind: o.kind, recurring: o.is_recurring_instance })) } }
+    }
+    case 'get_day': {
+      const x = a as z.infer<typeof toolSchemas.get_day>
+      const d = buildDay(x.date_local)
+      return {
+        result: {
+          date: d.date,
+          status: d.status,
+          scheduled_minutes: d.scheduled_minutes,
+          priorities: d.priorities.map((i) => ({ id: shortId(i.id), title: i.title, kind: i.kind, hardness: i.hardness, committed_to: i.committed_to ?? undefined })),
+          due: d.due.map((i) => ({ id: shortId(i.id), title: i.title, kind: i.kind })),
+          schedule: d.schedule.map((o) => ({ id: shortId(o.id), title: o.title, when: o.all_day ? 'all day' : `${formatClock(o.occurrence_start_utc).replace(/^.*? at /, '')}${o.occurrence_end_utc ? `–${DateTime.fromISO(o.occurrence_end_utc, { zone: 'utc' }).toLocal().toFormat('HH:mm')}` : ''}`, kind: o.kind })),
+          reminders: d.reminders.map((r) => ({ id: shortId(r.id), for: r.item_title ?? 'reminder', at: formatClock(r.fire_at_utc).replace(/^.*? at /, '') })),
+          waiting: d.waiting.map((w) => ({ who: w.waiting_on, about: w.details })),
+          notes: d.notes.map((n) => n.body),
+          completed: d.completed.map((i) => i.title)
+        }
+      }
     }
     case 'add_constraint': {
       const x = a as z.infer<typeof toolSchemas.add_constraint>

@@ -1,3 +1,4 @@
+import { DateTime } from 'luxon'
 import { log } from '../log'
 import * as repo from '../repo'
 import { assembleContext } from './context'
@@ -53,6 +54,12 @@ Things (projects) — the life model:
 - Dependencies: "I can't do Y until X is done" / "Y depends on X" / "X first, then Y" → add_link from_id=X to_id=Y type blocks. Never set status=blocked yourself — the app computes "BLOCKED by …" from the links and shows it in the context.
 - Notes: information that is not an obligation. "Add a note to the application that the transcript must be a PDF" → add_note with item_title "application" (the app matches the Thing). "Remember that the TISS contact is Priya" → add_note on the TISS project. "I'll be travelling Friday" / "I'm off on the 20th" → add_note with date_local — it informs planning; it is never a task and never journaling. Do not turn feelings ("I'm exhausted") into notes.
 - Checklists: steps within a Thing are checklist items, not tasks. "Add a list of things to do" → just say you're ready for the steps (no tool). "Add send first email, follow up and attach the document" → add_checklist_item with three titles on that project. "I sent the first email" → complete_checklist_item (by title; the app matches it to the step) — never a new task. "What is left?" → get_project. Only promote_checklist_item when the user wants a step scheduled as its own task.
+
+Calendar (Phase 6) — events occupy time; tasks do not:
+- "Meeting with Professor X Thursday at 3" / "dentist Friday 10:30" / "class every Tuesday 2–4" → create_event (kind commitment when other people are involved, work_block when it is the user's own working time). A task due Thursday is create_item, never an event, and it never occupies schedule time.
+- "Move it to 4" after an event → update_event on that event. "Cancel the meeting" → delete_event. For one occurrence of a recurring series pass occurrence_start_local — the series itself is never rewritten.
+- "What am I doing Thursday?" → get_day. "What have I got this week?" → get_calendar. The app phrases both.
+- INVARIANT 10: never move an existing event to make room for something new. If a new booking clashes, the app refuses with an alternative; relay it. Only the user can say "book it anyway".
 
 Reference resolution:
 - "it", "that", "the earlier one" usually mean the most recently touched item listed in the context. When the user gives a new time for something just created ("actually make it 4"), update THAT item — never create a second one. Its reminder moves with it automatically.
@@ -267,6 +274,23 @@ function phraseReadResults(results: ToolResult[]): string | null {
         const rest = hist.filter((h) => !/· \w+: (?:Drafted|Ticked off|Recorded|Sent|Finished|Completed)/.test(h) && !doneSoFar.some((d) => h.includes(d.replace(/ \(\d{4}-\d\d-\d\d\)$/, ''))))
         if (rest.length) lines.push(`Also: ${rest.slice(0, 4).map((h) => h.replace(/^.*?· \w+: /, '')).join('; ')}.`)
       }
+    } else if (r.name === 'get_day') {
+      type D = { date: string; status: string; priorities: { title: string; kind: string; committed_to?: string }[]; due: { title: string }[]; schedule: { title: string; when: string }[]; reminders: { for: string; at: string }[]; waiting: { who: string | null; about: string | null }[]; notes: string[]; completed: string[] }
+      const d = res as unknown as D
+      const day = DateTime.fromISO(d.date).toFormat('cccc d LLL')
+      const bits: string[] = []
+      if (d.schedule.length) bits.push(`Schedule: ${d.schedule.map((s) => `${s.title} ${s.when}`).join('; ')}.`)
+      else bits.push('Nothing scheduled.')
+      if (d.due.length) bits.push(`Due that day: ${d.due.map((x) => x.title).join(', ')}.`)
+      if (d.priorities.length) bits.push(`What matters most: ${d.priorities.map((p) => `${p.title}${p.committed_to ? ` (promised to ${p.committed_to})` : p.kind === 'deadline' ? ' (deadline)' : ''}`).join(', ')}.`)
+      if (d.reminders.length) bits.push(`Reminders: ${d.reminders.map((x) => `${x.for} at ${x.at}`).join(', ')}.`)
+      if (d.waiting.length) bits.push(`Still waiting on ${d.waiting.map((w) => w.who ?? 'someone').join(', ')}.`)
+      if (d.notes.length) bits.push(`Notes: ${d.notes.join(' · ')}.`)
+      if (d.completed.length) bits.push(`Done: ${d.completed.join(', ')}.`)
+      lines.push(`${day} looks ${d.status}. ${bits.join(' ')}`)
+    } else if (r.name === 'get_calendar') {
+      const c = res as unknown as { from: string; to: string; events: { title: string; when: string; end: string | null; recurring: boolean }[] }
+      lines.push(c.events.length ? `On the calendar: ${c.events.map((e) => `${e.title} ${e.when}${e.end ? `–${e.end}` : ''}${e.recurring ? ' ↻' : ''}`).join('; ')}.` : `Nothing on the calendar between ${c.from} and ${c.to}.`)
     } else if (r.name === 'get_forgetting') {
       type F = { commitments: { title: string; to: string | null; due: string | null; overdue: boolean }[]; overdue: { title: string; kind: string; due: string }[]; waiting: { who: string | null; about: string | null; expected: string | null; overdue: boolean }[]; due_soon: { title: string; due: string }[]; today_context: string[] }
       const f = res as unknown as F

@@ -9,6 +9,7 @@ import { log } from '../log'
 import type { Item, Reminder } from '../../shared/types'
 import { detectHappeningEnd, detectHappeningStart } from '../happenings'
 import { RITUALS as RITUAL_OFFERS } from './tools'
+import { occurrencesBetween } from '../calendar'
 
 /** A bare "I'm making dinner": an ordinary reply, nothing created, no offer (invariant 9). */
 function plainAcknowledgement(label: string): string {
@@ -124,7 +125,8 @@ function parseWhen(text: string): ParsedWhen | null {
   if (r.start.isCertain('hour')) {
     // chrono reads a bare "3" as 03:00. Without am/pm, 1–6 means the afternoon for appointments.
     const h = r.start.get('hour') ?? 0
-    if (!r.start.isCertain('meridiem') && h >= 1 && h <= 6 && !/\b\d{1,2}:\d{2}\b/.test(r.text)) {
+    // "3:30" with no am/pm is an afternoon appointment, not half past three in the morning — same rule as a bare "3".
+    if (!r.start.isCertain('meridiem') && h >= 1 && h <= 6) {
       d = new Date(d.getTime() + 12 * 3600 * 1000)
     }
     return { text: r.text, exact: true, dateTime: toLocalDateTime(d) }
@@ -375,6 +377,32 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     return [{ name: 'get_forgetting', args: {} }]
   }
 
+  // ---- "note for thursday: bring the signed copy" → a note on that DATE (information, never a task) ----
+  if ((m = /^(?:add (?:a )?)?note (?:for|on|about) (today|tomorrow|(?:this |next )?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|the \d{1,2}(?:st|nd|rd|th)?(?: of \w+)?|\w+ \d{1,2}(?:st|nd|rd|th)?)\s*[:\-–—,]\s*(.+)$/.exec(text))) {
+    const when = parseWhen(m[1])
+    if (when) return [{ name: 'add_note', args: { date_local: when.exact ? when.dateTime!.slice(0, 10) : when.date, body: restoreCase(m[2]) } }]
+  }
+
+  // ---- calendar (6a): "meeting with Professor X Thursday at 3" → event; "what am I doing thursday?" → get_day ----
+  if ((m = /^(?:so,? )?(?:what(?:'s| is| am i doing| do i have| have i got)(?: on| for)?|anything(?: on)?|show me) (today|tomorrow|(?:this |next )?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|the \d{1,2}(?:st|nd|rd|th)?(?: of \w+)?|\w+ \d{1,2}(?:st|nd|rd|th)?)\??$/.exec(text))) {
+    const when = parseWhen(m[1])
+    if (when && !when.exact) return [{ name: 'get_day', args: { date_local: when.date } }]
+    if (when?.exact) return [{ name: 'get_day', args: { date_local: when.dateTime!.slice(0, 10) } }]
+  }
+  if ((m = /^(?:i(?:'ve| have) (?:got )?|i've got |there'?s |there is |put |add |book )?(?:a |an |my |the )?(meeting|call|appointment|dentist|doctor|gp|class|lecture|tutorial|seminar|workshop|interview|viva|lunch|dinner|coffee|drinks|catch[- ]?up|standup|stand-up|sync|review|presentation|exam|test|flight|train|haircut|gym class|rehearsal|session)\b(.*)$/.exec(text))) {
+    const when = parseWhen(text)
+    if (when && when.exact) {
+      const title = cleanTitle(`${m[1]}${m[2]}`, when.text).replace(/\s+(?:on|at|from)\s*$/i, '')
+      const dur = /\b(\d{1,3}) ?(?:min|mins|minutes)\b/.exec(m[2])
+      const hours = /\b(?:for )?(\d(?:\.5)?) ?(?:h|hr|hrs|hours?)\b/.exec(m[2])
+      const args: Record<string, unknown> = { title, starts_at_local: when.dateTime }
+      if (dur) args.duration_minutes = Number(dur[1])
+      else if (hours) args.duration_minutes = Math.round(Number(hours[1]) * 60)
+      if (/\b(?:with|w\/)\b/.test(m[2]) || /meeting|call|appointment|dentist|doctor|gp|interview|viva|lunch|dinner|coffee|drinks|catch/.test(m[1])) args.kind = 'commitment'
+      if (title && words(title).length) return [{ name: 'create_event', args }]
+    }
+  }
+
   // ---- availability (3f): "I'm busy tomorrow afternoon" / "I'm travelling on Friday" / "I'm out on the 20th" ----
   if ((m = /^(?:i(?:'m| am| will be|'ll be)|i have|i've got) (busy|unavailable|out|away|travelling|traveling|off|in class|in a meeting|at the gym|at work|on leave|on holiday|a class|a meeting|an exam|a flight)(?: (.+))?$/.exec(text))) {
     const label = m[1].replace(/^(?:a|an) /, '')
@@ -517,8 +545,18 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     return rem ? [{ name: 'cancel_reminder', args: { id: rem.id } }] : null
   }
 
-  // ---- cancel one item ----
+  // ---- cancel one item (or an upcoming event: "cancel the dentist", "cancel the meeting with X") ----
   if ((m = /^(?:cancel|scrap|drop|never ?mind|forget(?: about)?) (?:the |that |this |my )?(.+)$/.exec(text))) {
+    const ref = m[1].replace(/ (?:meeting|appointment|event)$/, '').trim()
+    const top = getFocus()[0]
+    if (top?.kind === 'event' && REF_WORDS.test(norm(m[1]))) return [{ name: 'delete_event', args: { id: top.itemId } }]
+    const upcoming = occurrencesBetween(new Date().toISOString(), DateTime.local().plus({ days: 60 }).toUTC().toISO()!)
+    const evWords = words(ref)
+    if (evWords.length) {
+      const hits = upcoming.filter((o) => evWords.every((w) => o.title.toLowerCase().includes(w)))
+      const distinct = new Set(hits.map((o) => o.id))
+      if (distinct.size === 1 && !findItemByWords(ref)) return [{ name: 'delete_event', args: { id: hits[0].id } }]
+    }
     const item = resolveTarget(m[1])
     // Projects may have parts: the spec says ask first, so let the model handle it.
     return item && item.kind !== 'project' ? [{ name: 'cancel_item', args: { id: item.id } }] : null
@@ -542,9 +580,30 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
   // ---- move / make it <time> ----
   if ((m = /^(?:actually,? )?(?:move|push|shift|change|reschedule) (.+?) to (.+)$/.exec(text)) ||
       (m = /^(?:actually,? )?(?:make|let'?s make) (it|that|this) (.+)$/.exec(text))) {
+    const tail = m[2].trim()
+    // "Move it to 4" right after a meeting was created → the event, not an item (Phase 6, §11C 2).
+    const top = getFocus()[0]
+    if (top?.kind === 'event' && REF_WORDS.test(norm(m[1]))) {
+      const ev = repo.getEvent(top.itemId)
+      if (!ev) return null
+      const base = DateTime.fromISO(ev.starts_at_utc, { zone: 'utc' }).toLocal()
+      const cm = /^(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/.exec(tail)
+      if (cm) {
+        let hour = Number(cm[1])
+        const minute = cm[2] ? Number(cm[2]) : 0
+        if (cm[3] === 'pm' && hour < 12) hour += 12
+        else if (cm[3] === 'am' && hour === 12) hour = 0
+        else if (!cm[3] && !cm[2] && hour <= 12 && (hour <= 6 || (hour < 12 && base.hour >= 12))) hour += 12
+        return [{ name: 'update_event', args: { id: ev.id, starts_at_local: base.set({ hour, minute }).toFormat("yyyy-MM-dd'T'HH:mm") } }]
+      }
+      const when = parseWhen(tail)
+      if (!when || norm(when.text) !== tail) return null
+      return when.exact
+        ? [{ name: 'update_event', args: { id: ev.id, starts_at_local: when.dateTime } }]
+        : [{ name: 'update_event', args: { id: ev.id, starts_at_local: DateTime.fromISO(when.date!).set({ hour: base.hour, minute: base.minute }).toFormat("yyyy-MM-dd'T'HH:mm") } }]
+    }
     const item = resolveTarget(m[1])
     if (!item) return null
-    const tail = m[2].trim()
     const clock = parseClock(tail, item)
     if (clock) {
       if (!item.due_at_utc) return null // no date to attach a bare clock time to — let the model ask

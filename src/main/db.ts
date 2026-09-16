@@ -224,6 +224,29 @@ const MIGRATIONS: { version: number; sql: string }[] = [
     // People stay a plain text here; the `people` table is unused until after V1 (spec).
     version: 6,
     sql: `ALTER TABLE items ADD COLUMN committed_to TEXT;`
+  },
+  {
+    // Phase 6: multi-day plans generate sessions; sessions are events with kind='session' and a plan_id (spec §3).
+    version: 7,
+    sql: `
+      CREATE TABLE plans (
+        id              TEXT PRIMARY KEY,
+        title           TEXT NOT NULL,
+        project_id      TEXT REFERENCES items(id) ON DELETE SET NULL,
+        target_minutes  INTEGER,
+        starts_on       TEXT NOT NULL,
+        ends_on         TEXT,
+        rrule           TEXT,
+        session_minutes INTEGER,
+        deadline_item   TEXT REFERENCES items(id) ON DELETE SET NULL,
+        status          TEXT NOT NULL DEFAULT 'active',
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL
+      );
+      ALTER TABLE events ADD COLUMN plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL;
+      ALTER TABLE events ADD COLUMN session_state TEXT;
+      CREATE INDEX idx_events_start ON events(starts_at_utc);
+    `
   }
 ]
 

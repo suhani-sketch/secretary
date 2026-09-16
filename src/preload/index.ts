@@ -44,7 +44,9 @@ const api: SecretaryApi = {
   listConstraints: () => ipcRenderer.invoke(IPC.listConstraints),
   getSetting: (key) => ipcRenderer.invoke(IPC.getSetting, key),
   setSetting: (key, value) => ipcRenderer.invoke(IPC.setSetting, key, value),
-  listHappenings: () => ipcRenderer.invoke(IPC.listHappenings)
+  listHappenings: () => ipcRenderer.invoke(IPC.listHappenings),
+  listEvents: (fromUtc, toUtc) => ipcRenderer.invoke(IPC.listEvents, fromUtc, toUtc),
+  getDay: (dateLocal) => ipcRenderer.invoke(IPC.getDay, dateLocal)
 }
 
 contextBridge.exposeInMainWorld('api', api)

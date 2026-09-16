@@ -40,6 +40,7 @@ The user should never have to think "what category is this", "should this be a p
 - Manual editing of everything (§7)
 - A companion and room
 - Living activities — real-world happenings that never become tasks
+- Multi-day plans that generate sessions and know when they fall behind
 
 ### Invariants
 
@@ -54,7 +55,8 @@ Not features. These hold in every phase and are never deferred or simplified.
 7. **One data model.** Manual edits and AI edits write to the same rows. Never two parallel systems.
 8. **Actionability threshold.** "I need to get my life together" does not become a task called *Get life together*. See §4.
 9. **Never convert an ordinary statement into an unwanted timer, task, reminder or interaction.** Saying what you are doing is not a request. The assistant may offer; it never imposes.
-10. **Nothing is duplicated.** One "IIM application" Thing, referenced everywhere, not re-created on each mention.
+10. **Never silently rewrite the user's calendar.** A new plan may propose moving things; it never moves an existing commitment without approval.
+11. **Nothing is duplicated.** One "IIM application" Thing, referenced everywhere, not re-created on each mention.
 
 ### The standard
 
@@ -172,7 +174,9 @@ CREATE TABLE events (                      -- calendar
   rrule         TEXT,
   exdates       TEXT,          -- JSON array of excluded occurrence dates
   project_id    TEXT REFERENCES items(id),
-  kind          TEXT,          -- commitment|work_block
+  kind          TEXT,          -- commitment|work_block|session
+  plan_id       TEXT REFERENCES plans(id),
+  session_state TEXT,          -- planned|done|missed|moved  (sessions only)
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL
 );
@@ -189,6 +193,21 @@ CREATE TABLE reminders (
   delivered_at    TEXT,
   surfaced_count  INTEGER DEFAULT 0,
   created_at      TEXT NOT NULL
+);
+
+CREATE TABLE plans (                       -- multi-day plans: study, training, preparation
+  id              TEXT PRIMARY KEY,
+  title           TEXT NOT NULL,
+  project_id      TEXT REFERENCES items(id),
+  target_minutes  INTEGER,          -- total intended effort, e.g. 30h
+  starts_on       TEXT NOT NULL,
+  ends_on         TEXT,
+  rrule           TEXT,             -- preferred cadence, e.g. Mon/Wed/Fri
+  session_minutes INTEGER,          -- preferred session length
+  deadline_item   TEXT REFERENCES items(id),   -- the exam or submission it serves
+  status          TEXT NOT NULL,    -- active|paused|done|abandoned
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL
 );
 
 CREATE TABLE notes (                       -- attachable to anything
@@ -323,15 +342,18 @@ create_event, update_event, delete_event
 add_note, update_note, delete_note
 add_link, remove_link
 add_constraint, remove_constraint
+start_happening, finish_happening, offer_timer
+set_context, resolve_commitment
+create_plan, update_plan, pause_plan, mark_session, replan_sessions
 set_preference
 record_activity
 search_memory, search_activity, get_today, get_upcoming, get_project, get_calendar,
-  get_free_slots, check_conflicts, get_current_context
-propose_plan
+  get_free_slots, check_conflicts, get_current_context, get_day, get_plan
+propose_changes
 undo_last
 ```
 
-`propose_plan` returns a plan for approval; replanning never happens silently.
+`propose_changes` returns a proposal for approval; replanning never happens silently, and existing commitments are never moved without it (invariant 10). Note it is deliberately not called `propose_plan` — `plans` are the multi-day objects in §3, a different thing entirely.
 
 ### Action confidence — enforced in the tool layer, not the prompt
 
@@ -488,11 +510,22 @@ The largest phase. Build it in slices, each independently testable, in this orde
 
 **Done when:** the TISS acceptance test in §11B passes end to end, across an app restart, with one project and no duplicates.
 
-### Phase 4 — Companion and room
+### Phase 4 — Companion and room ✅ complete
 
 The companion is not decoration and not a mascot. It is the physical embodiment of the secretary. It is being built here, before the calendar, because it is self-contained, it does not touch the data model, and it is the thing that makes this product different from a very good organiser.
 
 **The creature.** Original. Emotionally in the territory of products like Finch, but never copying Finch's character, art, terminology, progression or interface. It should read as: cute, calm, competent, slightly playful, emotionally expressive. Not childish, not hyperactive, not overly enthusiastic. A little creature quietly keeping your life together.
+
+**Decided, and settled.** These are not open questions — they were chosen and built.
+
+- **The creature is a dormouse-quokka.** Soft, slightly unusual, observant, sleepy, companion-like. Deliberately not a fox (too mascot) and not a tortoise (too slow-coded).
+- **One scarf, and nothing else.** Its signature accessory. No wardrobe, no accessories to collect — that would make it a dress-up game.
+- **Eye contact is rare and meaningful.** On greeting, on genuine happiness, when directly addressed, and occasionally where it's emotionally right. It does not stare at the user. Most of the time it is doing its own thing.
+- **It stays unnamed.** Nobody should be made to name their companion during onboarding. Later, the creature itself may say something like "I think I should have a name", and then the user names it. Deferred, but the reason it has no name is deliberate.
+- **The creature is constant; the world changes.** Window scenes are chosen by the user: trees and sky, fireplace, rainy window, sunset, night, bright morning, library, coastal, winter. Light band follows the clock by default and can be set by hand. Both persist.
+- **It has a life of its own.** Reading, sleeping, sitting by the fire, working at the desk, looking out of the window, simply existing. It does not perform for the user.
+
+**Deferred to Phase 9:** favourite scenes and rotation, weather-driven scenes, the naming moment, and objects accumulating in the room so it gradually becomes theirs.
 
 **States.** `idle · attentive · thinking · working · reading · writing · waiting · happy · concerned · sleepy · celebrating · greeting`
 
@@ -516,7 +549,7 @@ Driven by what the app is actually doing, not by a timer:
 
 **Done when:** the creature's state reflects what the app is really doing, the room changes convincingly between morning, afternoon, evening and night, nothing animates distractingly during ordinary use, and the window is one you would leave open on your desktop because you like looking at it.
 
-### Phase 5 — Living activities
+### Phase 5 — Living activities ✅ complete
 
 The layer that makes this a secretary you live with rather than one that manages your deadlines. Built with the companion because it depends on the creature being expressive.
 
@@ -562,10 +595,39 @@ A happening never enters `items`, never appears in Open, and never becomes an ob
 
 **Done when:** the ambiguity test in §11F passes.
 
-### Phase 6 — Calendar
-Month / week / day / agenda. Events, recurrence, exceptions. Drag, resize, edit, delete. Two-way with the assistant. Obligations displayed alongside events. Conflict detection and free-slot finding.
+### Phase 6 — Calendar and temporal planning
 
-**Done when:** the calendar acceptance test in §11C passes, including manual drag updating what the assistant knows.
+**The principle:** the calendar shows not merely what has been scheduled, but everything the secretary understands about the user's time. It is an aggregation layer over the existing data model — it never creates duplicate copies of anything.
+
+Build in slices.
+
+**6a — Aggregation and the day view.** For any date, assemble: timed events, all-day events, tasks and deadlines due, checklist items due, reminders, work blocks, commitments, waiting items needing attention, happenings, date-attached notes, and completed items. All from their existing records.
+
+**Tasks can appear on a day without occupying time.** A task due Thursday shows on Thursday; it does not silently consume thirty minutes of the schedule. Time-bound and date-bound are different things, and the day view needs a **Due today** area distinct from **Schedule**, or dateless obligations get lost.
+
+Day view structure: *Priorities → Due today → Schedule → Reminders and follow-ups → Notes → Completed (collapsed)*.
+
+**6b — Day detail panel.** Clicking a day, event or task opens a side panel with the complete context for that date, directly editable. Complete, reschedule, cancel, snooze, add a note, change importance — all from here, all through the same tool layer. This is functional architecture, not decoration, which is why it is here rather than in Phase 9.
+
+**6c — Visual grammar and priorities.** Every day carries a compact priority summary visible *before* the panel is opened, so the calendar answers "what actually matters on this day?" at a glance.
+
+Importance is encoded by colour — critical, high, normal, low — but **never by colour alone**: colour plus icon, label or weight, always. Importance and `hardness` are different axes and both are shown: a hard deadline of normal importance is not a high-importance soft target.
+
+Types are visually distinct so the calendar is not a pile of identical rectangles: event as a solid block, work block lighter, deadline as a strong marker, due task in the Due area, reminder as a bell, commitment with its own marker, happening as ephemeral.
+
+**6d — Views with distinct jobs.** Month is overview. Week is planning. Day is execution. Agenda is a chronological list. If all four become the same thing rendered differently, the phase has failed.
+
+Month shows **workload, not just appointments** — where deadlines fall, where load clusters, where the gaps are. Day status is descriptive (light, normal, busy, overloaded), derived deterministically from scheduled hours, due obligations and constraints. Never a productivity score.
+
+**6e — Manipulation.** Drag to move, resize to change duration, edit and delete. An **unscheduled area** holds obligations that have a deadline but no allocated time; dragging one onto the calendar creates a work block. Recurring series are expressed in natural language, never RRULE — and a single occurrence can be changed or skipped without destroying the series, via `exdates`. Every manual change lands in `activities`, so the day panel can show what changed and when.
+
+**6f — Plans.** A plan generates sessions; sessions are `events` with `kind='session'` and a `plan_id`. Plans track target effort against completed effort, know which sessions were missed, and expose the remaining shortfall. Progress shows as hours done against target — planning information, never a streak or a score.
+
+Conflict detection gains **levels** rather than being binary: *hard conflict* (genuine overlap), *tight* (technically fits, no buffer), *poor fit* (works but violates a stated constraint or preference). Transition buffers — "thirty minutes to get home from TISS", "nothing straight after class" — use the existing `constraints` table.
+
+**What stays in Phase 7:** reasoning over all this. Replanning a fallen-behind plan, "what can I fit here?", feasibility checks on an over-ambitious plan, and natural-language scheduling across a week. Phase 6 makes the structures capable of being reasoned over; Phase 7 does the reasoning.
+
+**Done when:** the calendar acceptance test in §11C passes.
 
 ### Phase 7 — Intelligence
 Brain dump. Voice notes. Deadline intelligence and component bottlenecks. "What should I do right now?" "What am I forgetting?" Time estimates. Smart scheduling.
@@ -594,7 +656,9 @@ Use it daily for two weeks. Fix what actually annoys you. Add nothing.
 Carried forward deliberately. Not bugs — decisions deferred or work not yet done.
 
 - **Recurring reminders cannot end.** No "until December", no "five times". RRULE supports `UNTIL` and `COUNT`; the editor and parser do not yet. Add when it bites.
-- **Reboot test still unobserved.** Phase 0's strict test — quit, restart Windows, reminder fires unaided — has never been watched. All pieces are in place.
+- **Windows does not auto-start the app, and the fix is unverified.** The reboot test was run and failed: Windows skipped the Run-key entry at sign-in (shell log confirms it started other entries and not this one). Recovery works — once launched, missed reminders are delivered correctly. A per-user Task Scheduler logon task has been registered as a second mechanism but has **never been observed working**. Best guess for the original failure is the unsigned Electron binary running from the Downloads folder; packaging (electron-builder) may fix it properly. Until a reboot is watched, "starts with Windows" is a claim, not a fact. Deferred at the user's request.
+- **The project lives in `Downloads`.** Suspected contributor to the startup failure, and a poor home for months of work. Moving it needs absolute paths updated, including the scheduled task.
+- **Not packaged.** Runs in dev mode via Electron from `node_modules`, launched by `Start Secretary.cmd`. Packaging is Phase 10 work unless it turns out to fix startup, in which case it moves earlier.
 - **Due date without a reminder is still the default.** §5 says decide this deliberately. It has not been decided. A dated item currently notifies nobody.
 - **Wrong-year guard is narrow.** Past times are refused and obvious year slips corrected. Other date misreadings are not caught.
 
@@ -644,11 +708,40 @@ Each must pass **across an app restart**, and at no point may the assistant clai
 10. "What is left?" → outstanding items and waiting states
 
 ### C. Calendar (Phase 6)
-1. "I have a meeting with Professor X Thursday at 3." → event
-2. "Move it to 4." → same event updated
-3. Drag it manually to 5. → same row; assistant now knows it is at 5
-4. "When can I work on the case study?" → a real free slot
-5. "Schedule it." → work block created, not overlapping anything
+Run across a restart.
+
+**Aggregation and display**
+1. "Meeting with Professor X Thursday at 3" → event.
+2. "Move it to 4" → same event updated.
+3. Drag it manually to 5 → same row; the assistant knows it is at 5.
+4. Create a task due Thursday with no time → appears under Due today, **not** occupying a slot in Schedule.
+5. Create a reminder Thursday → appears separately from the task.
+6. Attach a note to Thursday → appears under Notes, never becomes a task.
+7. Thursday's priority summary is visible without opening the panel.
+8. Importance is distinguishable without relying on colour alone.
+
+**Panel and manipulation**
+9. Click Thursday → the full day panel: priorities, due, schedule, reminders, notes, completed.
+10. Complete a task from the panel → gone from Open, still in history.
+11. Drag an item from the unscheduled area onto a slot → becomes a work block.
+12. Change one occurrence of a recurring series → only that occurrence changes.
+13. Cancel an event → the assistant knows it was cancelled.
+
+**Plans**
+14. "Study econometrics two hours every Monday, Wednesday and Friday until October 15" → one plan, with sessions on the calendar.
+15. Skip a session → the plan records it missed and remains active; the shortfall is visible.
+16. Move one session → only that session moves; the plan is intact.
+17. Progress shows hours done against target, with no streak or score.
+
+**Conflicts and load**
+18. Book over an existing commitment → hard conflict, refused with an alternative.
+19. Book with no gap after something → flagged tight, not refused.
+20. Add "thirty minutes to get home from TISS" → later scheduling respects it.
+21. A heavy day reads as busy or overloaded in month view, descriptively.
+22. Nothing existing was moved at any point without approval.
+
+**Persistence**
+23. Restart. The whole calendar, plan and session states persist.
 
 ### D. The application (Phase 8)
 1. "I need to submit my IIM application Monday at 5." → project + hard deadline
