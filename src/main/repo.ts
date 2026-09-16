@@ -954,8 +954,11 @@ export function matchHappening(running: Happening[], ref: string, preferFirstOnT
   if (!refWords.length) return running.length === 1 ? running[0] : null
   const scored = running
     .map((h) => {
-      const hw = `${h.label} ${h.kind ?? ''} ${h.metaphor ?? ''}`.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).map(stem)
-      const hits = refWords.filter((w) => hw.some((x) => x === w || x.startsWith(w) || w.startsWith(x))).length
+      // A word from the label itself outranks a kind/metaphor match, so "tea" picks the tea over a coffee of kind tea.
+      const lw = h.label.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).map(stem)
+      const kw = `${h.kind ?? ''} ${h.metaphor ?? ''}`.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).map(stem)
+      const near = (x: string, w: string): boolean => x === w || x.startsWith(w) || w.startsWith(x)
+      const hits = refWords.reduce((n, w) => n + (lw.some((x) => near(x, w)) ? 2 : kw.some((x) => near(x, w)) ? 1 : 0), 0)
       return { h, hits }
     })
     .filter((s) => s.hits > 0)
@@ -963,4 +966,20 @@ export function matchHappening(running: Happening[], ref: string, preferFirstOnT
   if (scored.length === 1 || (scored.length > 1 && scored[0].hits > scored[1].hits)) return scored[0].h
   if (scored.length > 1 && preferFirstOnTie) return scored[0].h
   return null
+}
+
+// ---- Small settings + recent user text (used by micro-rituals and the personality layer) ----------------------------
+
+export function getSettingValue(key: string): string | null {
+  const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined
+  return row?.value ?? null
+}
+
+export function setSettingValue(key: string, value: string): void {
+  getDb().prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, value)
+}
+
+/** The last N things the user typed, newest first. */
+export function recentUserTexts(limit = 4): string[] {
+  return (getDb().prepare(`SELECT content FROM messages WHERE role = 'user' ORDER BY created_at DESC, rowid DESC LIMIT ?`).all(limit) as { content: string }[]).map((r) => r.content)
 }

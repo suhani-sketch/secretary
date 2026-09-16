@@ -1,7 +1,7 @@
 import * as chrono from 'chrono-node'
 import { DateTime } from 'luxon'
 import * as repo from '../repo'
-import { getFocus, getOffer, setOffer } from './context'
+import { clearOffer, getFocus, getOffer, setOffer } from './context'
 import { firstOccurrence, parseRecurrencePhrase } from '../recurrence'
 import { resolveEntity } from '../entity'
 import { PART_OF_DAY } from '../planning'
@@ -223,6 +223,9 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     if (offer.kind === 'project_match') {
       return [{ name: 'create_project', args: { title: offer.proposedTitle, use_existing_id: offer.existingId } }]
     }
+    if (offer.kind === 'ritual') {
+      return [{ name: 'time_happening', args: { id: offer.happeningId, minutes: offer.minutes } }]
+    }
     if (offer.kind !== 'reminder') return null
     const item = repo.getItem(offer.itemId)
     if (!item || !item.due_at_utc || item.status !== 'open') return null
@@ -232,9 +235,26 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
       : [{ name: 'create_reminder', args: { item_id: item.id, fire_date_local: due.toFormat('yyyy-MM-dd') } }]
   }
 
+  // "yes, 4 minutes" / "make it 6 minutes" / "4 min please" while a timer offer stands → time it with THAT length.
+  if ((m = /^(?:yes,? |yeah,? |sure,? |ok,? |okay,? |make it |let'?s say |say )?(\d{1,3}) ?(?:m|min|mins|minutes?)(?: please| then| is good| works)?$/.exec(text))) {
+    const offer = getOffer()
+    if (offer?.kind === 'ritual') return [{ name: 'time_happening', args: { id: offer.happeningId, minutes: Number(m[1]) } }]
+  }
+
   if (/^(?:no|nope|no,? (?:it'?s |that'?s )?(?:a )?(?:new|different|separate)(?: project| thing| one)?|(?:a )?(?:new|different|separate) (?:project|thing|one)|it'?s (?:a )?(?:new|different) (?:one|project|thing))$/.test(text)) {
     const offer = getOffer()
     if (offer?.kind === 'project_match') return [{ name: 'create_project', args: { title: offer.proposedTitle, force_new: true } }]
+    if (offer?.kind === 'ritual') return [{ name: 'decline_ritual', args: { kind: offer.happeningKind } }]
+    return null
+  }
+  // A softer no to a timer offer: "no thanks", "nah", "not this time", "no timer", "I'm fine".
+  if (/^(?:no thanks|no thank you|nah|nope thanks|not this time|no timer|no need|i'?m (?:fine|good|ok|okay)|it'?s fine|don'?t bother|no,? (?:i'?m )?(?:fine|good))$/.test(text)) {
+    const offer = getOffer()
+    if (offer?.kind === 'ritual') return [{ name: 'decline_ritual', args: { kind: offer.happeningKind } }]
+    if (offer?.kind === 'reminder') {
+      clearOffer()
+      return [{ name: REPLY, args: { text: 'Okay, no reminder.' } }]
+    }
     return null
   }
 

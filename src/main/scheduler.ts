@@ -4,7 +4,7 @@ import { log } from './log'
 import { showToast } from './notifier'
 import * as repo from './repo'
 import type { Reminder } from '../shared/types'
-import { METAPHORS } from '../shared/happenings'
+import { doneLineFor } from './ai/tools'
 
 export const TICK_MS = 30_000
 
@@ -157,11 +157,10 @@ function endDueHappenings(now: DateTime, late: boolean): number {
   for (const h of due) {
     const ended = repo.finishHappening(h.id, 'done')
     if (!ended) continue
-    const def = h.metaphor ? METAPHORS[h.metaphor] : null
     const endedAt = DateTime.fromISO(h.ends_at ?? now.toISO()!, { zone: 'utc' }).toLocal().toFormat('HH:mm')
     const lateBy = now.toMillis() - DateTime.fromISO(h.ends_at ?? now.toISO()!, { zone: 'utc' }).toMillis()
     const wasLate = late || lateBy > TICK_MS * 2
-    const title = def ? def.doneLine : `${capital(h.label)} — time's up.`
+    const title = h.metaphor ? doneLineFor(h.label, h.metaphor) : `${capital(h.label)} — time's up.`
     const body = wasLate ? `Finished at ${endedAt}, while I wasn't running.` : `${capital(h.label)} · started ${DateTime.fromISO(h.started_at, { zone: 'utc' }).toLocal().toFormat('HH:mm')}`
     log('info', 'happening.ended', `"${h.label}"${wasLate ? ` (ended ${endedAt}, noticed late)` : ''}`)
     showToast({ title, body, persistent: false })

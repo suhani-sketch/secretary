@@ -3,7 +3,7 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 5 — Living activities (slices 5a + 5b built 2026-09-16, testable; 5c next). Phase 4 companion + room built and committed.
+## Current phase: Phase 5 — Living activities: slices 5a, 5b, 5c all built 2026-09-16 and testable. Phase 6 (calendar) next. Phase 4 companion + room built and committed.
 
 ## Phase 5a — happenings core (2026-09-16)
 - **Migration 5**: `happenings` (spec §3) + a `kind` column (addition: lets micro-rituals remember a "no" per kind). Deliberately
@@ -38,7 +38,26 @@ Update it at the end of every session (spec §11).
 - Room: `Kitchen` (side table, ring, pot, steam) is drawn at the right only while something cooks; creature spot beside it, facing
   it (Companion `pose` override prop, 'kitchen' tilts/pupils to the right). Personal happenings (shower, break) change nothing.
 - `METAPHORS[*].openEnded`: stage shown while open-ended (laundry "washing", others stage two).
-- Next: 5c micro-rituals (offer a timer once per kind, remember "no") + rationed personality lines (never repeated, never when struggling).
+## Phase 5c — micro-rituals and rationed personality (2026-09-16)
+- **Micro-rituals**: `RITUALS` in tools.ts (tea 5 min, egg 7, focus 25, break 10 — only kinds with a sensible default). An
+  open-ended `start_happening` of such a kind sets Offer `{kind:'ritual', happeningId, happeningKind, minutes, label}` and asks once
+  ("Want a 5-minute steep timer?"), unless setting `ritual.declined.<kind>` = '1'. Tier 0: "yes" → `time_happening {id, minutes}`;
+  "yes, 4 minutes" / "6 min" → that length; "no" / "no thanks" / "nah" / "I'm fine" → `decline_ritual {kind}` which writes the
+  setting and says it won't offer again. Both are write tools with no activity row. A declined kind covers its whole kind
+  (declining tea also silences coffee/chai). The model is told offers are the app's business.
+- **Personality** (`src/main/personality.ts`, `personalityLine(applied, userText)` called once in the orchestrator after a clean
+  change): pools per event (start:egg/tea/laundry/focus/cooking/charging/process/break, happening_done, item_done, step_done,
+  project_done). Rule 1 never twice: used lines stored for good in setting `personality.used`; exhausted pool = silence. Rule 2
+  occasionally: ≥90 min gap (`personality.last_at`) and ≤3 per day (`personality.count.<date>`). Rule 3 never when struggling:
+  strain words in this or the last 4 user messages, ≥3 overdue items, or the finished item itself overdue → silence. Never after
+  undo/cancel/delete/snooze or an error. A trailing question (timer offer, "Want a reminder?") stays last; the line slips in before it.
+  `AppliedChange.tag` carries the happening kind / 'project' for the classifier.
+- Finishing lines follow the label (`doneLineFor`): "Tea's ready." only for tea/chai, "Coffee — ready." otherwise; scheduler toasts too.
+- Verified on scratch DBs: offer → yes → 5-min timer; no thanks → declined and never re-offered for that kind; "6 minutes" custom
+  length; one line on the first change then silence for 90 min; "I'm exhausted today, everything is behind" → the next changes get
+  no line at all; "tea's ready" with tea and coffee both running picks the tea (label outranks kind).
+- Phase 5 done-when check: "I've put an egg on for 8 minutes" → visible egg that progresses and resolves, no task; "I need to do
+  laundry tomorrow" → task; room reacts. "A week of use has produced no clutter in Open" is for the user to observe.
 Phase 3 slices 3a–3f built. **§11B TISS run passed end to end 2026-09-16** (steps 1–6, real quit + relaunch, steps 7–10) on a
 scratch database via `SECRETARY_USER_DATA` — one project, no duplicates, conditional follow-up Fri 14:00 with `unless_resolved`.
 Fixes that came out of it: "I haven't sent it yet" is a tier-0 no-op reply (it used to become a waiting item, and step 6 then

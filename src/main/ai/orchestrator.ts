@@ -5,6 +5,7 @@ import { ProviderUnavailableError, type Provider, type ProviderMessage, type Too
 import { REPLY, routeTier0 } from './router'
 import { executeTool, inTransaction, isWriteTool, toolDefinitions, type ExecContext } from './tools'
 import { formatDue } from '../../shared/format'
+import { personalityLine } from '../personality'
 import type { Actor, AppliedChange, ChatResponse, ChatStatus, ToolRunResult } from '../../shared/types'
 
 /** Spec §4: one user message costs at most one API call. Asserted, not hoped for. */
@@ -33,6 +34,7 @@ Living activities (happenings) — four different things, keep them apart:
 - "remind me to move the laundry in 45 minutes" → create_reminder / create_item with a reminder (an alarm), not a happening.
 - "laundry's done" / "egg's ready" / "I'm out of the shower" / "never mind the egg" → finish_happening on the running happening listed in the context (outcome done, or abandoned for never-mind). Nothing is recorded anywhere else.
 - Metaphors are the app's business (egg, tea, laundry, plant, download, focus). Pass metaphor only when obvious; leave it out otherwise and the app shows a plain timer.
+- Timer offers are the app's business too: it offers once ("Want a 5-minute steep timer?") and the user's yes/no is handled for you (time_happening / decline_ritual). Never offer a timer yourself, never nag, and never add cheerful commentary — the app adds the occasional observation itself.
 
 Things (projects) — the life model:
 - When the user names something they are dealing with that has, or will have, parts ("TISS mailing is something I need to deal with", "my IIM application", "the wedding"), call create_project with the name they used. The context lists every project you already track with its id: if the Thing is there, DO NOT create it again — use its id.
@@ -188,6 +190,20 @@ async function handleChat(deps: OrchestratorDeps, rawText: string): Promise<Chat
     log('error', 'ai.call_budget_exceeded', `${modelCalls} calls for one message (budget ${MAX_MODEL_CALLS_PER_MESSAGE})`)
   }
   log('info', 'chat.done', `tier ${tier}, ${modelCalls} model call(s), ${applied.length} change(s), ${Date.now() - started}ms`)
+  // Personality, rationed (spec Phase 5): at most one quiet line, only after a clean change, never when things are hard.
+  if (!error && applied.length) {
+    try {
+      const line = personalityLine(applied, text)
+      if (line) {
+        // A trailing question (a timer offer, "Want a reminder?") stays last; the observation slips in before it.
+        const q = /^(.*?[.!])\s+([^.!?]*\?)$/.exec(replyText!.trim())
+        replyText = q ? `${q[1]} ${line} ${q[2]}` : `${replyText} ${line}`
+        log('info', 'personality.line', line)
+      }
+    } catch (e) {
+      log('warn', 'personality.failed', (e as Error).message)
+    }
+  }
   const assistantMessage = repo.insertMessage('assistant', replyText!, tier)
   deps.onChanged()
   return { userMessage, assistantMessage, applied, error }

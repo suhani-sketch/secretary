@@ -153,6 +153,13 @@ export const toolSchemas = {
     label: z.string().max(80).optional().describe('Words from the running happening ("egg", "the wash"). Omit only when exactly one thing is running.'),
     outcome: z.enum(['done', 'abandoned']).default('done').describe('done = it finished / the user is done with it; abandoned = never mind.')
   }),
+  time_happening: z.object({
+    id: idRef.describe('The running happening.'),
+    minutes: z.number().int().min(1).max(24 * 60).describe('How long from now it should end.')
+  }),
+  decline_ritual: z.object({
+    kind: z.string().min(1).max(30).describe('The kind of happening the user does not want timer offers for: tea, egg, focus, break.')
+  }),
   check_conflicts: z
     .object({
       starts_at_local: localDateTime.describe(DT_DESC),
@@ -269,6 +276,8 @@ const descriptions: Record<ToolName, string> = {
   remove_constraint: 'Remove an availability constraint ("I\'m free tomorrow afternoon after all").',
   start_happening: 'Something is happening in the real world right now: "I\'ve put an egg on for 8 minutes", "started the washing machine", "making tea", "starting a focus session", "charging my phone", "I\'m showering". NOT a task, NOT an obligation, NOT history — it expires on its own. Minutes only if stated.',
   finish_happening: 'A running happening ended: "laundry\'s done", "egg\'s ready", "I\'m out of the shower" (done) or "never mind the egg" (abandoned).',
+  time_happening: 'Put a timer on a running open-ended happening ("yes" to a timer offer, "make the tea 4 minutes").',
+  decline_ritual: 'The user said no to a timer offer for a kind of happening; the app will not offer it for that kind again.',
   check_conflicts: 'What clashes with a proposed time. The app computes it; you phrase it.',
   update_note: 'Change the text of an existing note.',
   delete_note: 'Remove a note.',
@@ -300,6 +309,8 @@ const descriptions: Record<ToolName, string> = {
 const WRITE_TOOLS: ReadonlySet<string> = new Set([
   'start_happening',
   'finish_happening',
+  'time_happening',
+  'decline_ritual',
   'add_link',
   'remove_link',
   'add_constraint',
@@ -637,8 +648,14 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       clearOffer()
       const untilClock = endsAt ? DateTime.fromISO(endsAt, { zone: 'utc' }).toLocal().toFormat('HH:mm') : null
       const summary = `Happening: ${label}${x.minutes ? ` · ${x.minutes} min (until ${untilClock})` : ' · open-ended'}`
-      const phrase = x.minutes ? `${capital(label)} — ${x.minutes} min, I'll say when it's ${metaphor === 'egg' || metaphor === 'tea' || kind === 'cooking' ? 'ready' : 'done'} (${untilClock}).` : `${capital(label)} — noted. Say when it's done.`
-      return { result: { ok: true, happening_id: shortId(h.id), summary, ends_at: endsAt }, applied: { tool: name, summary, phrase } }
+      let phrase = x.minutes ? `${capital(label)} — ${x.minutes} min, I'll say when it's ${metaphor === 'egg' || metaphor === 'tea' || kind === 'cooking' ? 'ready' : 'done'} (${untilClock}).` : `${capital(label)} — noted. Say when it's done.`
+      // Micro-ritual (spec Phase 5): offer a timer once, only for kinds with a sensible default, never if this kind was declined.
+      const ritual = !x.minutes && kind ? RITUALS[kind] : undefined
+      if (ritual && repo.getSettingValue(`ritual.declined.${kind}`) !== '1') {
+        setOffer({ kind: 'ritual', happeningId: h.id, happeningKind: kind!, minutes: ritual.minutes, label })
+        phrase = `${capital(label)} — noted. ${ritual.question}`
+      }
+      return { result: { ok: true, happening_id: shortId(h.id), summary, ends_at: endsAt, offered_timer_minutes: ritual ? ritual.minutes : undefined }, applied: { tool: name, summary, phrase, tag: kind ?? undefined } }
     }
     case 'finish_happening': {
       const x = a as z.infer<typeof toolSchemas.finish_happening>
@@ -653,8 +670,28 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const ended = repo.finishHappening(h.id, x.outcome)!
       const mins = Math.max(0, Math.round((new Date(ended.ends_at!).getTime() - new Date(h.started_at).getTime()) / 60_000))
       const summary = x.outcome === 'done' ? `Finished: ${h.label}${mins ? ` (${mins} min)` : ''}` : `Dropped: ${h.label}`
-      const phrase = x.outcome === 'done' ? (h.metaphor && METAPHORS[h.metaphor] ? `${METAPHORS[h.metaphor].doneLine}` : `${capital(h.label)} — done.`) : `Okay, forgetting the ${h.label}.`
-      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase } }
+      const phrase = x.outcome === 'done' ? doneLineFor(h.label, h.metaphor) : `Okay, forgetting the ${h.label}.`
+      clearOffer()
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase, tag: x.outcome } }
+    }
+    case 'time_happening': {
+      const x = a as z.infer<typeof toolSchemas.time_happening>
+      const h = repo.resolveRunningHappening(x.id)
+      if (!h) throw new Error('that is no longer running')
+      const endsAt = new Date(Date.now() + x.minutes * 60_000).toISOString()
+      getDb().prepare('UPDATE happenings SET ends_at = ? WHERE id = ?').run(endsAt, h.id)
+      clearOffer()
+      const until = DateTime.fromISO(endsAt, { zone: 'utc' }).toLocal().toFormat('HH:mm')
+      const summary = `Timer: ${h.label} · ${x.minutes} min (until ${until})`
+      return { result: { ok: true, summary, ends_at: endsAt }, applied: { tool: name, summary, phrase: `${x.minutes} minutes on the ${h.label} — I'll say at ${until}.` } }
+    }
+    case 'decline_ritual': {
+      const x = a as z.infer<typeof toolSchemas.decline_ritual>
+      const kind = x.kind.toLowerCase().trim()
+      repo.setSettingValue(`ritual.declined.${kind}`, '1')
+      clearOffer()
+      const summary = `No more timer offers for ${kind}`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Okay — I won't offer a timer for ${kind} again.` } }
     }
     case 'add_constraint': {
       const x = a as z.infer<typeof toolSchemas.add_constraint>
@@ -1055,7 +1092,7 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       clearOffer()
       const summary = `Completed "${item.title}"` + (cancelledReminders ? ` · its ${plural(cancelledReminders, 'reminder')} stopped` : '') + (freed.length ? ` · unblocks ${freed.map((f) => `"${f.title}"`).join(', ')}` : '')
       const phrase = `Marked "${item.title}" done.${cancelledReminders ? ` Its ${plural(cancelledReminders, 'reminder')} won't fire.` : ''}${freed.length ? ` That unblocks ${freed.map((f) => `"${f.title}"`).join(' and ')}.` : ''}`
-      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase, itemId: id } }
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase, itemId: id, tag: item.kind === 'project' ? 'project' : item.kind } }
     }
     case 'cancel_item': {
       const x = a as z.infer<typeof toolSchemas.cancel_item>
@@ -1432,3 +1469,22 @@ export function inTransaction<T>(fn: () => T): T {
 }
 
 const capital = (s: string): string => (s ? s[0].toUpperCase() + s.slice(1) : s)
+
+/** Micro-rituals (spec Phase 5): one gentle offer per open-ended happening, only where a default timer makes sense. */
+const RITUALS: Record<string, { minutes: number; question: string }> = {
+  tea: { minutes: 5, question: 'Want a 5-minute steep timer?' },
+  egg: { minutes: 7, question: 'Want a 7-minute timer? That is about soft-medium.' },
+  focus: { minutes: 25, question: 'Want a 25-minute timer for it?' },
+  break: { minutes: 10, question: 'Want me to say when 10 minutes are up?' }
+}
+
+/** The metaphor's finishing line only when the label really is that thing; otherwise the label itself ("Coffee — ready."). */
+export function doneLineFor(label: string, metaphor: string | null): string {
+  const l = label.toLowerCase()
+  if (metaphor === 'tea' && /\btea\b|\bchai\b/.test(l)) return METAPHORS.tea.doneLine
+  if (metaphor === 'egg' && /\begg/.test(l)) return METAPHORS.egg.doneLine
+  if (metaphor === 'laundry' && /laundry|wash/.test(l)) return METAPHORS.laundry.doneLine
+  if (metaphor === 'focus') return METAPHORS.focus.doneLine
+  if (metaphor === 'tea' || metaphor === 'egg' || metaphor === 'plant') return `${capital(label)} — ready.`
+  return `${capital(label)} — done.`
+}

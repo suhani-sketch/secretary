@@ -144,6 +144,8 @@ export interface ChatMessage {
 
 /** Ground truth of what the tool executor committed. Shown under the reply. */
 export interface AppliedChange {
+  /** Small classifier for the personality layer (e.g. a happening's kind, "project" for a finished Thing). Never shown. */
+  tag?: string
   tool: string
   /** Terse ground-truth line, e.g. `Created task "Call the bank" · reminder Thu 17 Sep 15:00` */
   summary: string

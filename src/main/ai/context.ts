@@ -34,6 +34,8 @@ export type Offer =
   | { kind: 'checklist_target'; projectId: string }
   /** A booking refused for clashing with availability; "yes" / "book it anyway" replays it with override_conflicts. */
   | { kind: 'conflict_override'; toolName: string; args: Record<string, unknown> }
+  /** Micro-ritual (Phase 5): "Want a 5-minute steep timer?" for an open-ended happening. "yes" times it; "no" is remembered per kind. */
+  | { kind: 'ritual'; happeningId: string; happeningKind: string; minutes: number; label: string }
 let offer: Offer | null = null
 export const setOffer = (o: Offer): void => {
   offer = o
@@ -163,7 +165,9 @@ export function assembleContext(userText: string): string {
           ? `Standing question: you asked whether "${offer.proposedTitle}" is the same Thing as project [${shortId(offer.existingId)}]. "yes" → create_project with use_existing_id; "no"/"different" → create_project with force_new=true.`
           : offer.kind === 'checklist_target'
             ? `Standing context: the user just asked for a checklist on project [${shortId(offer.projectId)}]; items they list next belong on it (add_checklist_item).`
-            : `Standing question: a booking was refused because it clashes with the user's availability. If they say to book it anyway, call ${offer.toolName} again with the same arguments plus override_conflicts=true; if they pick another time, book that instead.`
+            : offer.kind === 'ritual'
+              ? `Standing offer: you offered a ${offer.minutes}-minute timer for the running "${offer.label}" [${shortId(offer.happeningId)}]. "yes" → time_happening with that id and minutes (or the minutes they name); "no" → decline_ritual with kind "${offer.happeningKind}" (the app then never offers it for that kind again).`
+              : `Standing question: a booking was refused because it clashes with the user's availability. If they say to book it anyway, call ${offer.toolName} again with the same arguments plus override_conflicts=true; if they pick another time, book that instead.`
       : '',
     ``,
     prefs.length
