@@ -43,9 +43,12 @@ no `app.start` in `scheduler_log` after the reboot, no crash in the Windows Appl
 `com.suhani.secretary` — the entry is present and correct, and the identical command works when run by hand (takes ~20 s to reach
 4 processes on this machine). Cause of the skip unknown (no StartupApproved entry, no policy, no mark-of-the-web; electron.exe is
 unsigned). Missed-reminder recovery DID work: launching the app at 20:31 showed "Missed reminder (4 min late)" and the user snoozed it.
-Proposed fix, awaiting the user's go-ahead (blocked by the harness as a persistence change): register a per-user Task Scheduler
-logon task (`Secretary`, at log on, 20 s delay, `electron.exe <dir> --hidden`, start-in <dir>) alongside the Run entry; the
-single-instance lock makes a double start harmless. Diagnostic added: `<userData>/startup.log` gets one line per launch before anything else.
+Fix in place: the user registered a per-user Task Scheduler logon task `Secretary` (at log on, 20 s delay, `electron.exe <dir>
+--hidden`, start-in <dir>, allowed on battery, no time limit) alongside the Run entry; the single-instance lock makes a double start
+harmless. Diagnostic: `<userData>/startup.log` gets one line per launch before anything else.
+**Restart test DEFERRED by the user (2026-09-16 21:00) — do not raise it again; they will say when.** When they do: quit, restart,
+don't open the app, then read (1) `Get-ScheduledTaskInfo Secretary` LastRunTime/LastTaskResult, (2) startup.log, (3) the
+Microsoft-Windows-Shell-Core/Operational log events 9705–9708. A test reminder "Check the reboot test three" (21:09) was left pending.
 
 ## Phase 4 — design decisions (see SPEC §8 Phase 4 "Design decisions")
 - Dormouse-quokka, scarf only, unnamed, rare eye contact, a life of its own (pose changes every few minutes, never performs).
