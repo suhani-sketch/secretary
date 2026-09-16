@@ -222,6 +222,9 @@ export function restoreItem(row: Item): void {
 export function deleteItemRow(id: string): void {
   const db = getDb()
   db.prepare(`DELETE FROM reminders WHERE target_type = 'item' AND target_id = ?`).run(id)
+  // History keeps its rows; only the denormalised project pointer must be released before the row can go.
+  db.prepare(`UPDATE activities SET project_id = NULL WHERE project_id = ?`).run(id)
+  db.prepare(`DELETE FROM links WHERE from_item = ? OR to_item = ?`).run(id, id)
   db.prepare(`DELETE FROM items WHERE id = ?`).run(id)
 }
 
