@@ -67,13 +67,14 @@ function ensureStartMenuShortcut(): void {
   try {
     const dir = join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs')
     const link = join(dir, 'Secretary.lnk')
-    const ok = shell.writeShortcutLink(link, 'replace', {
+    // 'create' overwrites if present; 'replace' fails when the file does not exist yet. Icon must be .ico/.exe, so use the exe's own.
+    const ok = shell.writeShortcutLink(link, 'create', {
       target: process.execPath,
       args: app.isPackaged ? '' : `"${app.getAppPath()}"`,
       cwd: app.getAppPath(),
       description: 'Secretary — conversational personal secretary',
       appUserModelId: APP_USER_MODEL_ID,
-      icon: join(app.getAppPath(), 'resources', 'tray.png'),
+      icon: process.execPath,
       iconIndex: 0
     })
     log(ok ? 'info' : 'warn', 'aumid.shortcut', `${link} → ${ok ? 'written' : 'FAILED'} (AppUserModelId ${APP_USER_MODEL_ID})`)
