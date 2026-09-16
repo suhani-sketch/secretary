@@ -448,6 +448,18 @@ function registerIpc(): void {
   ipcMain.handle(IPC.activitiesForProject, (_e, projectId: string, limit?: number) => repo.activitiesForProject(projectId, limit ?? 200))
   ipcMain.handle(IPC.activitiesForItem, (_e, itemId: string, limit?: number) => repo.activitiesFor('item', itemId, limit ?? 100))
   ipcMain.handle(IPC.listConstraints, () => repo.activeConstraints())
+  // UI settings (scene choice). Only whitelisted keys, so the renderer cannot touch anything else in the table.
+  const UI_SETTING = /^scene\.(environment|timeOfDay)$|^companion\.[a-z_]+$/
+  ipcMain.handle(IPC.getSetting, (_e, key: string) => {
+    if (!UI_SETTING.test(key)) return null
+    const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined
+    return row?.value ?? null
+  })
+  ipcMain.handle(IPC.setSetting, (_e, key: string, value: string) => {
+    if (!UI_SETTING.test(key) || typeof value !== 'string' || value.length > 100) throw new Error('Not a UI setting')
+    getDb().prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, value)
+    log('info', 'ui.setting', `${key} = ${value}`)
+  })
 
   // Conversation (Phase 1)
   ipcMain.handle(IPC.sendChat, (_e, text: string) => {

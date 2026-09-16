@@ -220,6 +220,9 @@ export interface SecretaryApi {
   activitiesForItem(itemId: string, limit?: number): Promise<Activity[]>
   /** Availability constraints still in force (one-off ones that have ended are omitted). */
   listConstraints(): Promise<Constraint[]>
+  /** Small persistent UI settings (scene choice etc.), stored in the settings table. */
+  getSetting(key: string): Promise<string | null>
+  setSetting(key: string, value: string): Promise<void>
 }
 
 export const IPC = {
@@ -247,5 +250,7 @@ export const IPC = {
   listNotes: 'notes:list',
   activitiesForProject: 'activities:project',
   activitiesForItem: 'activities:item',
-  listConstraints: 'constraints:list'
+  listConstraints: 'constraints:list',
+  getSetting: 'settings:get',
+  setSetting: 'settings:set'
 } as const

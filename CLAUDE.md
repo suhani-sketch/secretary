@@ -3,7 +3,30 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 3 — all six slices built (3a–3f, 2026-09-16). Remaining for "Phase 3 complete": run §11B end to end across a restart with one project and no duplicates, then re-offer the Phase 0 reboot test.
+## Current phase: Phase 4 — Companion and room (spec renumbered 2026-09-16: 4 companion, 5 living activities, 6 calendar).
+Phase 3 slices 3a–3f built; the formal §11B end-to-end run across a restart is still owed. Phase 0 reboot test unobserved.
+
+## Phase 4 — design decisions (see SPEC §8 Phase 4 "Design decisions")
+- Dormouse-quokka, scarf only, unnamed, rare eye contact, a life of its own (pose changes every few minutes, never performs).
+- Environments in this phase: trees, rain, coast, winter, library, fireplace; time of day layered over each (auto or pinned).
+  Settings keys `scene.environment` / `scene.timeOfDay` in the `settings` table via `settings:get/set` IPC.
+- Deferred: favourites/rotation, weather/season, room growth, naming moment.
+- `happenings` (§3) is a Phase 5 table for ephemeral real-world activities; it is deliberately separate from `activities`
+  (permanent history + undo). Nothing about a happening is ever written to `activities`.
+
+## Phase 4 — what exists (built 2026-09-16, testable)
+- `src/renderer/src/companionState.ts`: 12 states, `Gaze`, `Signals`, `resolveState` (process > momentary > attentive > ambient),
+  `useCompanion` (700 ms min dwell, 1 s heartbeat). Ambient pose changes once per 4-min slot (deterministic hash), sleepy 22:00–06:00.
+  Momentary durations: celebrating 2.6 s, greeting 2.4 s, happy 1.4 s, concerned 6 s. Eye contact only for greeting, celebrating,
+  and happy/attentive within 15 s of being addressed directly.
+- `src/renderer/src/Companion.tsx`: layered SVG 120×120, `poseFor(state)` → sit/desk/read/window/curl/stand/stretch; props (book,
+  pencil), thinking dots, sparkles, "z"; CSS breathe/blink/tail only. `src/renderer/src/Room.tsx`: viewBox 260×900 bottom-anchored,
+  window (or bookcase for library), shelf, desk with laptop that opens while working, mug steam in the morning, lamp glow evening/
+  night, hearth for fireplace, rug + cushion; creature placed by pose. "scene" button → Window env chips + Light chips.
+- `App.tsx` drives the signals from real activity: chat status, typing, last tool names, applied changes, celebration on completing
+  a Thing / last checklist step / archive, greeting once per day (localStorage `companion.greeted`), concerned on errors or a rising
+  overdue count, direct address by regex. Dev hook: `SECRETARY_VIEW="state:<state>,light:<band>,env:<env>"` (URL hash).
+- Not done in this phase: favourites/rotation, weather/season, room growth, naming.
 
 ## Phase 3f — Dependencies and constraints (2026-09-16)
 - Dependencies: `links` type `blocks` (from = blocker, to = blocked). **Blocked is computed, never stored**: `repo.blockersOf`

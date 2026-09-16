@@ -14,7 +14,8 @@ import type {
   SchedulerLogEntry,
   ToolRunResult
 } from '../../shared/types'
-import { Companion } from './Companion'
+import { Room, type EnvironmentId, type TimeChoice } from './Room'
+import { useCompanion, type CompanionState } from './companionState'
 import { ItemEditor, NoteEditor, ReminderEditor } from './Editors'
 import { ItemHistory, ProjectView } from './ProjectView'
 import { formatClock, formatDue, isOverdue } from '../../shared/format'
@@ -58,6 +59,51 @@ export default function App(): React.JSX.Element {
   const [editing, setEditing] = useState<Editing>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+
+  // ---- Companion signals (Phase 4): derived from what the app is really doing ----
+  const [lastToolNames, setLastToolNames] = useState<string[]>([])
+  const [lastAppliedAt, setLastAppliedAt] = useState(0)
+  const [celebrateAt, setCelebrateAt] = useState(0)
+  const [greetAt, setGreetAt] = useState(0)
+  const [addressedAt, setAddressedAt] = useState(0)
+  const [concernedAt, setConcernedAt] = useState(0)
+  const [typingAt, setTypingAt] = useState(0)
+  const [hour, setHour] = useState(new Date().getHours())
+  const [environment, setEnvironment] = useState<EnvironmentId>('trees')
+  const [timeChoice, setTimeChoice] = useState<TimeChoice>('auto')
+  const prevOverdue = useRef<number | null>(null)
+  useEffect(() => {
+    const t = setInterval(() => setHour(new Date().getHours()), 30_000)
+    return () => clearInterval(t)
+  }, [])
+  useEffect(() => {
+    // First open of the day → greeting. Remembered per day in this browser profile only; nothing is scored.
+    const today = new Date().toDateString()
+    let last: string | null = null
+    try {
+      last = localStorage.getItem('companion.greeted')
+    } catch {
+      /* no storage */
+    }
+    if (last !== today) {
+      setGreetAt(Date.now())
+      try {
+        localStorage.setItem('companion.greeted', today)
+      } catch {
+        /* ignore */
+      }
+    }
+    void window.api.getSetting('scene.environment').then((v) => v && setEnvironment(v as EnvironmentId))
+    void window.api.getSetting('scene.timeOfDay').then((v) => v && setTimeChoice(v as TimeChoice))
+  }, [])
+  // Dev hook: "#state:working,light:night,env:rain" forces creature state / light band / environment for screenshots.
+  const hashParts = Object.fromEntries(window.location.hash.replace('#', '').split(',').map((p) => p.split(':') as [string, string]))
+  const forcedState = (hashParts['state'] as CompanionState | undefined) ?? null
+  useEffect(() => {
+    if (hashParts['light']) setTimeChoice(hashParts['light'] as TimeChoice)
+    if (hashParts['env']) setEnvironment(hashParts['env'] as EnvironmentId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const refresh = useCallback(async () => {
     try {
@@ -115,6 +161,8 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     if (autoOpened || items.length === 0) return
     const hash = window.location.hash.replace('#', '')
+    const light = /^light:(\w+)$/.exec(hash)
+    if (light) setTimeChoice(light[1] as TimeChoice)
     if (hash === 'project' || hash === 'timeline') {
       const p = items.find((i) => i.kind === 'project' && i.status !== 'archived')
       if (p) setEditing({ kind: 'project', project: p, tab: hash === 'timeline' ? 'timeline' : 'overview' })
@@ -156,10 +204,23 @@ export default function App(): React.JSX.Element {
     setDraft('')
     const tempId = `tmp-${Date.now()}`
     setMessages((m) => [...m, { id: tempId, role: 'user', content: text, tier: null, created_at: new Date().toISOString(), pending: true }])
+    if (/\b(you|your|thanks|thank you|hey|hello|hi|good morning|good night|please)\b/i.test(text)) setAddressedAt(Date.now())
     try {
       const res = await window.api.sendChat(text)
       setMessages((m) => [...m.filter((x) => x.id !== tempId), res.userMessage, { ...res.assistantMessage, applied: res.applied, error: res.error }])
+      // Feed the creature: what happened, and whether it deserves a small celebration.
+      setLastToolNames(res.applied.map((a) => a.tool))
+      if (res.applied.length) setLastAppliedAt(Date.now())
+      if (res.error) setConcernedAt(Date.now())
+      const big = res.applied.some(
+        (a) =>
+          (a.tool === 'complete_item' && a.itemId && itemById.get(a.itemId)?.kind === 'project') ||
+          (a.tool === 'complete_checklist_item' && /last step/.test(a.phrase)) ||
+          a.tool === 'archive_project'
+      )
+      if (big) setCelebrateAt(Date.now())
     } catch (e) {
+      setConcernedAt(Date.now())
       setMessages((m) => [
         ...m.filter((x) => x.id !== tempId),
         { id: tempId, role: 'user', content: text, tier: null, created_at: new Date().toISOString() },
@@ -279,22 +340,52 @@ export default function App(): React.JSX.Element {
     }))
   ].sort((a, b) => a.at - b.at)
 
-  const companionState =
-    status.kind === 'thinking' ? 'thinking' : status.kind === 'tools' ? 'working' : status.kind === 'throttled' ? 'waiting' : 'idle'
+  // Overdue count rising is a moment of concern, not a permanent frown.
+  useEffect(() => {
+    const n = overdueItems.length
+    if (prevOverdue.current !== null && n > prevOverdue.current) setConcernedAt(Date.now())
+    prevOverdue.current = n
+  }, [overdueItems.length])
+
+  const companion = useCompanion(
+    {
+      chat: status,
+      typing: draft.trim().length > 0 && Date.now() - typingAt < 8000,
+      lastToolNames,
+      lastAppliedAt,
+      celebrateAt,
+      greetAt,
+      addressedAt,
+      concernedAt,
+      waitingOpen: waitingItems.length,
+      hour
+    },
+    forcedState
+  )
 
   return (
     <div className="h-full grid grid-cols-[260px_minmax(0,1fr)_300px] gap-5 p-5 overflow-hidden">
       {/* ROOM + COMPANION */}
-      <aside className="rounded-3xl bg-[#F1E9DF] shadow-inner flex flex-col items-center justify-end p-5 overflow-hidden relative">
-        <div className="absolute top-5 left-5 right-5 text-xs text-stone-500">
+      <aside className="relative overflow-hidden rounded-3xl">
+        <Room
+          state={companion.state}
+          gaze={companion.gaze}
+          environment={environment}
+          time={timeChoice}
+          onChangeEnvironment={(e) => {
+            setEnvironment(e)
+            void window.api.setSetting('scene.environment', e)
+          }}
+          onChangeTime={(t) => {
+            setTimeChoice(t)
+            void window.api.setSetting('scene.timeOfDay', t)
+          }}
+        />
+        <div className="absolute top-3 left-4 text-[11px] text-stone-600/80 pointer-events-none">
           {new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}
         </div>
-        <Companion state={companionState} />
-        <p className="mt-4 text-xs text-stone-500 text-center min-h-[1.5em]">
-          {status.kind === 'thinking' && 'thinking…'}
-          {status.kind === 'tools' && 'writing it down…'}
-          {status.kind === 'throttled' && `one moment — busy, retrying in ${status.retryInSeconds}s`}
-          {status.kind === 'idle' && ' '}
+        <p className="absolute bottom-2 left-0 right-0 text-[11px] text-stone-500 text-center pointer-events-none">
+          {status.kind === 'throttled' ? `one moment — retrying in ${status.retryInSeconds}s` : ''}
         </p>
       </aside>
 
@@ -334,7 +425,10 @@ export default function App(): React.JSX.Element {
           <textarea
             ref={inputRef}
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => {
+              setDraft(e.target.value)
+              setTypingAt(Date.now())
+            }}
             onKeyDown={onKey}
             rows={Math.min(6, Math.max(1, draft.split('\n').length))}
             placeholder="type or dump here — Enter to send, Shift+Enter for a new line"

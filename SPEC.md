@@ -39,6 +39,7 @@ The user should never have to think "what category is this", "should this be a p
 - Brain dump, by text or voice note
 - Manual editing of everything (§7)
 - A companion and room
+- Living activities — real-world happenings that never become tasks
 
 ### Invariants
 
@@ -212,6 +213,17 @@ CREATE TABLE activities (                  -- history and the basis for undo
   before_json  TEXT,            -- prior state, for undo
   after_json   TEXT,
   reversible   INTEGER DEFAULT 1,
+  created_at   TEXT NOT NULL
+);
+
+CREATE TABLE happenings (                  -- ephemeral real-world activities (§8 Phase 5)
+  id           TEXT PRIMARY KEY,
+  label        TEXT NOT NULL,        -- "egg", "laundry", "focus session"
+  metaphor     TEXT,                 -- egg|tea|laundry|plant|download|focus|null
+  started_at   TEXT NOT NULL,
+  ends_at      TEXT,                 -- null for open-ended ("I'm showering")
+  state        TEXT NOT NULL,        -- running|done|abandoned
+  project_id   TEXT REFERENCES items(id),   -- only if genuinely work-related
   created_at   TEXT NOT NULL
 );
 
@@ -428,7 +440,9 @@ Inline quick actions where they save a click (✓ Done, ↻ Snooze, ⋯ More), a
 
 **Manual changes record activities** exactly as AI changes do — "Reminder moved Tue 9am → Wed 5pm" — which is what makes undo and "what changed?" possible.
 
-Visual direction stays as-is for now: warm cream `#FAF6F0`, cocoa `#3A2E28`, one muted accent, generous whitespace. **The aesthetic pass is deliberately late.** Do not spend time on illustration, animation or typography systems during the functional phases.
+Visual direction: warm cream `#FAF6F0`, cocoa `#3A2E28`, one muted accent, generous whitespace. The full language is in §8, Phase 4.
+
+**The companion and room are Phase 4** — they are a feature, not polish, and are built before the calendar. **The broader visual pass is Phase 9**, deliberately after the calendar so it covers the month/week/day/agenda surfaces rather than being redone once they land.
 
 ---
 
@@ -452,7 +466,7 @@ Tier 0 router. `chrono-node`. Timezone-correct storage. RRULE for reminders. `ge
 
 **Done when:** simple messages respond instantly with no API call; "every Sunday" recurs and survives restart; "in two hours" lands correctly; and normal testing no longer trips the rate limit.
 
-### Phase 3 — The life model
+### Phase 3 — The life model ✅ complete
 The largest phase. Build it in slices, each independently testable, in this order:
 
 **3a — Projects/Things.** `items` with `kind='project'`. Inferred from conversation, never created by hand. Tasks and deadlines attach via `links` (`part_of`).
@@ -473,29 +487,90 @@ The largest phase. Build it in slices, each independently testable, in this orde
 
 **Done when:** the TISS acceptance test in §11B passes end to end, across an app restart, with one project and no duplicates.
 
-### Phase 4 — Calendar
+### Phase 4 — Companion and room
+
+The companion is not decoration and not a mascot. It is the physical embodiment of the secretary. It is being built here, before the calendar, because it is self-contained, it does not touch the data model, and it is the thing that makes this product different from a very good organiser.
+
+**The creature.** Original. Emotionally in the territory of products like Finch, but never copying Finch's character, art, terminology, progression or interface. It should read as: cute, calm, competent, slightly playful, emotionally expressive. Not childish, not hyperactive, not overly enthusiastic. A little creature quietly keeping your life together.
+
+**States.** `idle · attentive · thinking · working · reading · writing · waiting · happy · concerned · sleepy · celebrating · greeting`
+
+Driven by what the app is actually doing, not by a timer:
+- processing a brain dump → at the desk, reading or writing
+- model call in flight → thinking, subtly
+- something important completed → a small celebration
+- late at night → sleepy
+- an open waiting item → reading or waiting
+- first open of the day → greeting
+
+**Subtlety is the whole discipline.** The creature animates on state change and otherwise mostly breathes. This window is open all day; anything more is a distraction, and constant motion is what makes companions feel cheap.
+
+**The room.** A persistent cozy environment — a place, not a decorative background. Desk, laptop, notebook, mug, books, plant, lamp, window, small storage, stationery. Time of day drives lighting, the view through the window, ambient detail and the creature's default state. Not a game map. No collectibles, no clutter, no childish gamification.
+
+**No gamification, ever.** No streaks, points, coins, rewards, energy, punishments or artificial scarcity. The companion never depends on the user completing tasks to stay well — its state reflects the work, never judges the user. The emotional relationship is the point, and the product must work perfectly without any of it. Optional customization can come much later.
+
+**Emotional UX.** Supportive without being infantilizing. Never "You failed", "You broke your streak", "You should have done this". Instead: "This didn't get done today. We still have time — let's figure out where it fits." Tone is cute but competent: observant, concise, calm, slightly playful, practical, reassuring without being saccharine. Not OMG-bestie. Not productivity guru. Not corporate coach.
+
+**Visual language** (also the standing direction for §8): warm cream backgrounds, muted pastel accents, dark cocoa/charcoal text, rounded forms, soft shadows, subtle paper or illustration texture, restrained borders, generous whitespace. Warm, cozy, soft, premium, illustrated, minimal, calm. Avoid corporate SaaS, Notion clones, generic AI chat interfaces, neon AI aesthetics, heavy glassmorphism, dark futuristic dashboards, and childish cartoon clutter.
+
+**Design decisions (agreed 2026-09-16).** The creature is an original dormouse-quokka: round pear body, round ears, small dark nose, calm half-lidded eyes, tiny paws that hold one prop at a time, short curling tail; cocoa/oat/cream palette; one signature accessory, a small knitted scarf in the accent colour, and never a wardrobe. Unnamed at first — later it may say "I think I should have a name", and the user names it then; never during onboarding. Eye contact is rare and meaningful: greeting, genuine happiness, being directly addressed, the occasional emotionally apt moment; otherwise it does its own thing. It has a little life of its own — reading, sitting by the window, at the desk, dozing — changing pose only every few minutes, never performing. The creature stays the same while its world changes: the room offers several cozy environments (trees and sky, rainy window, coastal, winter, library, fireplace room) with time of day layered over any of them; the user can pick one or leave it to the clock.
+
+**In this phase:** the creature, its twelve states driven by real app state, the room, time of day, and a manual environment choice with an automatic default. **Deferred (Phase 9 or later):** favourites and rotation, weather- and season-driven scenes, the room gradually acquiring objects, and the naming moment. They are recorded here so they are not forgotten and not built early.
+
+**Done when:** the creature's state reflects what the app is really doing, the room changes convincingly between morning, afternoon, evening and night, nothing animates distractingly during ordinary use, and the window is one you would leave open on your desktop because you like looking at it.
+
+### Phase 5 — Living activities
+
+The layer that makes this a secretary you live with rather than one that manages your deadlines. Built with the companion because it depends on the creature being expressive.
+
+**Not everything said is a task.** The system must separate four things:
+
+| The user says | What it is |
+|---|---|
+| "I need to do laundry tomorrow" | task |
+| "I've started the washing machine" | happening |
+| "remind me to move the laundry in 45 minutes" | reminder |
+| "laundry's done" | happening resolved, into history |
+
+A happening never enters `items`, never appears in Open, and never becomes an obligation. It expires on its own.
+
+**Recognised happenings.** Cooking (boiling, baking, soaking, steeping, defrosting), household (washing machine, drying, charging, chilling), personal (shower, getting ready, leaving, short break), work (focus session, reading, waiting on a download or process).
+
+**Metaphorical progress, used selectively.** Where a physical metaphor exists, progress shows as the thing itself rather than a bar: egg raw → warming → soft → medium → hard; tea dry → steeping → ready; laundry washing → rinsing → spinning → done; plant seed → sprout → growing; focus starting → focused → complete. The timer underneath stays exact. Build it as a general metaphor system, not one hard-coded egg. Where no natural metaphor exists, a plain timer is correct — do not invent one.
+
+**Micro-rituals.** The assistant offers, never imposes. "I'm making tea" → "Want a 5-minute steep timer?" One offer, and a no is remembered for that kind of happening.
+
+**The room reflects it.** Focus session → the creature works at the desk. Cooking timer → it waits beside a small kitchen object. Waiting → it reads. Nothing happening → it simply exists in the room.
+
+**Personality, tightly rationed.** Small observations are allowed — "Egg watch has begun", "That's one thing out of your head" — under three rules: never the same line twice, never more than occasionally, and never on anything the user is struggling with. The register is quietly observant, not performative. A line that would read as smug if you were having a bad day does not ship.
+
+**No gamification here either.** Happenings earn nothing, track no streak, and their metaphors are illustration, not score.
+
+**Done when:** "I've put an egg on for 8 minutes" starts a visible egg that progresses and resolves without creating a task; "I need to do laundry tomorrow" still creates a task; the room reacts; and a week of use has produced no clutter in Open.
+
+### Phase 6 — Calendar
 Month / week / day / agenda. Events, recurrence, exceptions. Drag, resize, edit, delete. Two-way with the assistant. Obligations displayed alongside events. Conflict detection and free-slot finding.
 
 **Done when:** the calendar acceptance test in §11C passes, including manual drag updating what the assistant knows.
 
-### Phase 5 — Intelligence
+### Phase 7 — Intelligence
 Brain dump. Voice notes. Deadline intelligence and component bottlenecks. "What should I do right now?" "What am I forgetting?" Time estimates. Smart scheduling.
 
 *Voice belongs here because Gemini accepts audio directly — record in the renderer, send to the same key with the same tool schema. It is a record button plus an audio branch, not a subsystem. And a chaotic ramble is exactly what voice is for; a microphone that only creates one flat task is not worth having.*
 
 **Done when:** a messy multi-clause dump — typed or spoken — produces sensible structure with at most one clarifying question, and the two signature questions give real answers rather than list dumps.
 
-### Phase 6 — Proactivity
+### Phase 8 — Proactivity
 Daily briefing. Deadline preparation. Missed-task and waiting-item follow-up. Adaptive intensity, quiet hours. Conversational replanning.
 
 **Done when:** the application acceptance test in §11D passes end to end.
 
-### Phase 7 — Aesthetic pass
-Companion redesign and state machine. Room and time-of-day lighting. Typography, visual hierarchy, calendar and project aesthetics, notification personality.
+### Phase 9 — Visual pass
+Typography, visual hierarchy, calendar and project aesthetics, notification personality. Deliberately after the calendar, so the pass covers the month/week/day/agenda surfaces rather than being redone once they land.
 
 **Done when:** you want to leave it open on your desktop.
 
-### Phase 8 — Living with it
+### Phase 10 — Living with it
 Use it daily for two weeks. Fix what actually annoys you. Add nothing.
 
 ---
