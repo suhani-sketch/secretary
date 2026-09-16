@@ -19,7 +19,7 @@ const dayLabel = (iso: string): string => {
   if (same(d, y)) return 'Yesterday'
   return d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
 }
-const clock = (iso: string): string => new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+const clock = (iso: string): string => new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
 
 const actorStyle: Record<string, string> = {
   user: 'bg-emerald-100 text-emerald-900',
