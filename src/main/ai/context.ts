@@ -3,6 +3,7 @@ import * as repo from '../repo'
 import { formatClock, formatDue } from '../../shared/format'
 import { describeConstraint } from '../planning'
 import { occurrencesBetween } from '../calendar'
+import { atRiskLines } from '../deadlines'
 import { describeProgress, planProgress } from '../../core/plans'
 import type { Item, Reminder } from '../../shared/types'
 
@@ -152,6 +153,12 @@ export function assembleContext(userText: string): string {
       : `Recently touched in this conversation: nothing yet.`,
     ``,
     projects.length ? `Projects / Things you are tracking (use these ids; never create a second one for the same Thing):\n${projectLines.join('\n')}` : `Projects / Things you are tracking: none yet.`,
+    ``,
+    // 7b: computed deadline assessments for the next two weeks — the model relays, never re-derives.
+    (() => {
+      const risk = atRiskLines(14)
+      return risk.length ? `Deadlines to watch (computed by the app — relay, do not re-rank):\n${risk.map((r) => `- [${shortId(r.id)}] ${r.text}`).join('\n')}` : ''
+    })(),
     ``,
     section('Items just touched (full detail)', focused),
     section('Overdue open items', overdue),

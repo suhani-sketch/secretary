@@ -107,6 +107,8 @@ export function resolveReminderId(ref: string): string {
 }
 
 export interface NewItem {
+  /** The user's stated effort, in minutes. Never an assistant estimate. */
+  effortMinutes?: number | null
   kind: ItemKind
   title: string
   details?: string | null
@@ -129,8 +131,8 @@ export function insertItem(n: NewItem): Item {
   const title = n.title.trim()
   if (!title) throw new Error('Title is required')
   db.prepare(
-    `INSERT INTO items (id, kind, title, details, status, due_at_utc, due_tz, due_precision, hardness, importance, is_suggestion, confidence, waiting_on, committed_to, source_msg_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO items (id, kind, title, details, status, due_at_utc, due_tz, due_precision, hardness, importance, is_suggestion, confidence, waiting_on, committed_to, effort_minutes, source_msg_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     n.kind,
@@ -145,6 +147,7 @@ export function insertItem(n: NewItem): Item {
     n.confidence ?? null,
     n.waitingOn ?? null,
     n.committedTo ?? null,
+    n.effortMinutes ?? null,
     n.sourceMsgId ?? null,
     ts,
     ts
@@ -153,6 +156,7 @@ export function insertItem(n: NewItem): Item {
 }
 
 export interface ItemPatch {
+  effortMinutes?: number | null
   title?: string
   details?: string | null
   dueAtUtc?: string | null
@@ -191,6 +195,7 @@ export function updateItem(id: string, p: ItemPatch): { item: Item; movedReminde
   } else if (p.duePrecision !== undefined) set('due_precision', p.duePrecision)
   if (p.hardness !== undefined) set('hardness', p.hardness)
   if (p.importance !== undefined) set('importance', p.importance)
+  if (p.effortMinutes !== undefined) set('effort_minutes', p.effortMinutes)
   if (p.waitingOn !== undefined) set('waiting_on', p.waitingOn)
   if (p.committedTo !== undefined) set('committed_to', p.committedTo)
   if (p.kind !== undefined) set('kind', p.kind)
@@ -419,6 +424,16 @@ export function listLinks(): { from_item: string; to_item: string; type: string 
 
 export function linksFor(itemId: string): { from_item: string; to_item: string; type: string }[] {
   return getDb().prepare(`SELECT from_item, to_item, type FROM links WHERE from_item = ? OR to_item = ?`).all(itemId, itemId) as never
+}
+
+// ---------- Deadline intelligence (Phase 7b) ----------
+
+/** Minutes of future work blocks / sessions that serve this item (time already set aside for it). */
+export function futureWorkMinutesFor(itemId: string, nowUtc = nowIso()): number {
+  const rows = getDb()
+    .prepare(`SELECT starts_at_utc, ends_at_utc FROM events WHERE item_id = ? AND ends_at_utc IS NOT NULL AND ends_at_utc > ? AND (session_state IS NULL OR session_state = 'planned')`)
+    .all(itemId, nowUtc) as { starts_at_utc: string; ends_at_utc: string }[]
+  return rows.reduce((sum, r) => sum + Math.max(0, (new Date(r.ends_at_utc).getTime() - new Date(Math.max(new Date(r.starts_at_utc).getTime(), new Date(nowUtc).getTime())).getTime()) / 60_000), 0)
 }
 
 // ---------- Context queries (spec §4 "Context assembly") ----------

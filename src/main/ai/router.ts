@@ -669,6 +669,25 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     return [{ name: 'resolve_waiting', args: { id: target.id, outcome: /arriv|came/.test(text) ? 'received' : 'replied' } }]
   }
 
+  // ---- deadline intelligence (7b): "is X on track?" / "what's the bottleneck for X?" / "can I still make X?" → assess_deadline ----
+  if (
+    (m = /^(?:so |ok |okay |honestly |realistically )?(?:(?:is|are) (?:the |my )?(.+?) (?:still )?(?:on track|feasible|doable|realistic|going to happen|achievable|in good shape|ok|okay|fine)|(?:can|will|could) i (?:still |realistically )?(?:make|hit|meet|finish|do) (?:the |my )?(.+?)(?: deadline| in time| on time| by then)?|what'?s (?:the )?(?:bottleneck|holding (?:up|back)|blocking|slowing (?:down|things)|in the way|the critical path)(?: (?:for|on|with|in|of) (?:the |my )?(.+?))?|how'?s (?:the |my )?(.+?) (?:looking|shaping up|coming along|tracking)|am i (?:going to|gonna|on course to|on track to) (?:make|finish|hit|meet) (?:the |my )?(.+?)(?: in time| on time| deadline)?|where (?:am i|are we|do i stand) (?:on|with) (?:the |my )?(.+?) deadline)\??$/.exec(text))
+  ) {
+    const name = m.slice(1).find((g) => g) ?? null
+    const pool = [...repo.openProjects(), ...repo.openItems(500).filter((i) => i.due_at_utc && (i.kind === 'deadline' || i.hardness === 'hard'))]
+    let target: Item | null = null
+    if (name) {
+      const r = resolveEntity(name.replace(/ (?:project|thing|deadline|application)$/, ''), pool, getFocus().map((f) => f.itemId))
+      if (r.kind === 'match') target = r.entity
+      else return null // unknown or a near-miss — the model asks
+    } else {
+      const focusProject = getFocus().map((f) => repo.getItem(f.itemId)).find((i) => i && i.kind === 'project' && i.due_at_utc) ?? null
+      target = focusProject ?? pool.filter((i) => i.due_at_utc).sort((a, b) => a.due_at_utc!.localeCompare(b.due_at_utc!))[0] ?? null
+    }
+    if (!target) return null
+    return [{ name: 'assess_deadline', args: { id: target.id } }]
+  }
+
   // ---- project questions (§11B 9–10): "what is left?" / "what have I done for X?" → get_project, phrased in code ----
   // Deterministic so the answer always carries steps, waiting states and history together, never a from-memory summary.
   if ((m = /^(?:so |ok |okay )?(?:what(?:'s| is| else is)? (?:still )?(?:left|remaining|outstanding|to do|still to do)|what remains|what have i done|what did i do|what'?s done|where (?:am i|are we))(?: (?:on|for|with|of) (.+?))?\??$/.exec(text))) {

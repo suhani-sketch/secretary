@@ -3,7 +3,7 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 7 — Intelligence. 7a (brain dump) built 2026-09-17, testable; 7b–7g not started. Governing rule: compute in
+## Current phase: Phase 7 — Intelligence. 7a (brain dump) and 7b (deadline intelligence) built 2026-09-17, testable; 7c–7g not started. Governing rule: compute in
 code, the model only phrases — every answer costs at most ONE model call (§11G 14). Phase 6: 6a–6f built. **§11C run 2026-09-17 on scratch DB c7 across
 several real quit + relaunch cycles: 24 of 27 steps pass outright; 4 and 12 pass on the tool path the drag calls but the mouse gesture itself
 was not performed; 25 passes against planted history (see below).** Phase 5 complete (§11F passed).
@@ -24,6 +24,41 @@ was not performed; 25 passes against planted history (see below).** Phase 5 comp
   reuse all of it. `src/main/calendar.ts` is the SQLite glue (`buildDay`, `occurrencesBetween`); `planning.ts` (conflicts) still
   imports repo and moves to core when 6f touches it.
 - **Migration 7:** `plans` table; `events.plan_id`, `events.session_state`; index on `events.starts_at_utc`.
+
+## Phase 7b — deadline intelligence (2026-09-17)
+- **Compute, then phrase — literally.** `src/core/deadline.ts` (`assessDeadline(input) → DeadlineAssessment`, `describeAssessment`)
+  is platform-independent and produces the whole answer as prose; `src/main/deadlines.ts` is the SQLite glue
+  (`assessTarget(id)`, `capacityUntil(due)`, `upcomingDeadlineTargets(14)`, `atRiskLines(14)`). Asking "is X on track?" costs
+  ZERO model calls (tier 0 → `assess_deadline`, phrased from `result.text`).
+- **Components** = a project's parts (open + done, not cancelled) plus its open waits; for a dated standalone item, the item plus
+  everything that transitively blocks it. Never anything else — the text ends "That is everything you have listed — tell me if
+  there are more parts" instead of inventing steps (§11G 5).
+- **What is computed:** remaining / done (steps only — waits are not counted as parts), blocked (open blockers among the
+  components), startable, unscheduled (no future work block via `events.item_id`), downstream reach per component over the
+  `blocks` graph, critical path (longest effort chain), needed minutes (stated + assumed), capacity, feasibility.
+- **Bottleneck rule (in order):** a WAIT that gates steps ("the reply from Priya — it gates one step and has no expected date") →
+  the step with the largest downstream reach → the largest remaining piece if the user gave figures. Waits are spoken of by who
+  owes the reply, never by their row title.
+- **Feasibility:** `no_deadline` · `complete` · `passed` · `unknown` (only waits left) · needed > capacity → `infeasible` ·
+  critical path > 80 % of capacity with blocks, or needed/capacity > 0.6 → `tight` · else `comfortable`. Capacity = per day
+  min(6 h workable, `available_minutes`) − `scheduled_minutes` via `buildSummaries`, today only the part before 22:00 — "roughly".
+- **Estimates (invariant 2):** `items.effort_minutes` (column existed, now written) via `create_item/update_item.effort_minutes`,
+  ONLY for the user's own figure ("attaching the document will take about two hours" → 120). Missing figures are assumed at
+  60 min and the text says so ("1 h of that is assumed at 60 min a piece — give me your own figures").
+- **Surfacing before it is urgent:** `atRiskLines(14)` (tight / infeasible / passed / gated by a wait) feeds (1) the context as
+  "Deadlines to watch (computed — relay, do not re-rank)", (2) `get_forgetting` → "Deadlines to watch: …", (3) `get_project` on a
+  dated Thing appends the bare assessment (bottleneck + verdict) so "what is left for X?" names the bottleneck unasked (§11G 4).
+- Router: "is X on track / feasible / doable", "can I still make X", "what's the bottleneck (for X)", "how's X looking",
+  "am I going to make X", "where do I stand on the X deadline" → `assess_deadline` (name resolved over dated projects + hard/
+  deadline items; no name → focused project, else the soonest). Prompt: a "Deadlines (7b)" section — relay, never re-rank, never
+  add a component, pass effort_minutes only for stated figures.
+- **Verified on scratch c8** (TISS mailing due Wed 23, parts: Send first email ✓, Attach the document 2 h stated, Follow up
+  blocked by the wait on Priya): "is the TISS mailing on track?" → 1 of 3 parts done · bottleneck the reply from Priya (gates one
+  step, no expected date) · can start now / blocked lists · comfortably feasible, ~3 h against ~42 h · assumption labelled · 0
+  model calls. "what is left for TISS mailing?" carries the bottleneck line. "what am I forgetting?" adds "Deadlines to watch".
+  Set-up sentences (due date, effort, "can't follow up until Priya replies") each cost one model call.
+- Not exercised yet: an `infeasible` verdict on real data; multi-level block chains beyond one edge; `tests/` has no unit test
+  for core/deadline.ts yet (worth adding: chain, wait-gated, passed).
 
 ## Phase 7a — brain dump and messy input (2026-09-17)
 - **Routing:** `router.looksLikeDump(text)` (newline, > 220 chars, or ≥ 3 clauses split on sentence ends / "also" / "and then" /

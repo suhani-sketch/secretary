@@ -10,6 +10,7 @@ import { log } from '../log'
 import * as repo from '../repo'
 import { clearOffer, getFocus, pushFocus, setOffer, shortId } from './context'
 import { resolveEntity, tokens } from '../entity'
+import { assessTarget, assessmentText, atRiskLines } from '../deadlines'
 import { afterConflicts, blockingConflicts, bookingWindowForDue, conflictsFor, describeConflict, describeConstraint } from '../planning'
 import { formatClock, formatDue, isOverdue } from '../../shared/format'
 import { assessSlot, bufferRules, describeBuffer } from '../planning'
@@ -67,6 +68,7 @@ export const toolSchemas = {
       kind: kind.describe('task = something to do; deadline = must be done by a time; waiting = waiting on someone; note/idea = information only; commitment = promised to someone; project = a Thing with parts.'),
       title: z.string().min(1).max(200).describe('Short imperative title, e.g. "Call the bank".'),
       details: z.string().max(2000).optional().describe('Extra context from the user, if any.'),
+      effort_minutes: z.number().int().min(5).max(6000).optional().describe('ONLY when the user stated the effort ("about three hours" → 180). Never your own estimate — the app labels its assumptions itself.'),
       ...dueFields,
       importance: importance.optional(),
       waiting_on: z.string().max(100).optional().describe('For kind=waiting: who or what is being waited on.'),
@@ -93,6 +95,7 @@ export const toolSchemas = {
       clear_due: z.boolean().optional().describe('true to remove the due date entirely.'),
       override_conflicts: z.boolean().optional().describe('Only after the user, told of a clash with their availability, says to move it anyway.'),
       hardness: hardness.optional(),
+      effort_minutes: z.number().int().min(5).max(6000).nullable().optional().describe('ONLY when the user stated the effort ("that will take two hours" → 120); null to clear. Never your own estimate.'),
       importance: importance.optional().describe('Set when the user overrides ("that is not actually important").'),
       kind: kind.optional(),
       status: status.optional().describe('Use for in_progress / blocked / waiting / open. For done use complete_item; for cancelled use cancel_item.'),
@@ -203,6 +206,10 @@ export const toolSchemas = {
     id: idRef,
     occurrence_start_local: localDateTime.optional().describe('For a recurring series: skip only this occurrence (added to exdates). Omit to remove the whole event.'),
     confirmed: z.boolean().optional().describe('Cancelling a recurring series (or an event that has moved occurrences) is consequential: the first call returns a confirmation question; call again with confirmed=true after the user says yes.')
+  }),
+  assess_deadline: z.object({
+    id: idRef.optional().describe('The project (Thing) or dated item to reason back from.'),
+    title: z.string().max(200).optional().describe('Its name, if you do not have the id.')
   }),
   ask_clarification: z.object({
     question: z.string().min(3).max(300).describe('The one short question, in the user\'s words where possible.'),
@@ -369,6 +376,7 @@ const descriptions: Record<ToolName, string> = {
   create_event: 'Put something on the calendar that occupies time: "meeting with Professor X Thursday at 3", "dentist Friday 10:30", "class every Tuesday 2–4". NOT for tasks (a task due Thursday is create_item). The app checks clashes.',
   update_event: 'Move or change an existing event ("move it to 4", "make it an hour"). For one occurrence of a recurring series pass occurrence_start_local.',
   delete_event: 'Cancel an event ("cancel the meeting") or skip one occurrence of a series.',
+  assess_deadline: 'Deadline intelligence (7b): "is the TISS mailing on track?", "what\'s the bottleneck?", "can I still make Friday?". The APP computes what remains, what blocks what, the bottleneck and feasibility from the user\'s own parts and links — you only relay its text. Never add a component the user did not state.',
   ask_clarification: 'Brain dumps (7a): ask the ONE clarifying question that would change an action, alongside the tool calls for every clear part of the message. Only one per message is ever asked; never use it instead of acting, never for wording or priority.',
   get_calendar: 'Events between two days, expanded. Use for "what have I got this week?".',
   get_day: 'Everything about one day, aggregated: priorities, due, schedule, reminders, notes, completed. Use for "what am I doing Thursday?".',
@@ -722,9 +730,12 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const parts = repo.projectParts(id).filter((c) => c.status !== 'cancelled' && c.status !== 'archived')
       const history = repo.activitiesForProject(id, 30).filter((h) => h.verb !== 'note_added')
       const notes = [...repo.notesFor('item', id), ...parts.flatMap((c) => repo.notesFor('item', c.id).map((n) => ({ ...n, body: `${c.title}: ${n.body}` })))]
+      // 7b: a dated Thing carries its deadline assessment (bottleneck, feasibility) — computed, never asked for.
+      const assessment = p.due_at_utc ? assessTarget(p.id) : null
       return {
         result: {
           project: publicItem(p),
+          assessment_text: assessment ? assessmentText(assessment, 'bare') : undefined,
           parts: parts.map(publicItem),
           notes: notes.map((n) => ({ id: shortId(n.id), body: n.body })),
           history: history.map((h) => `${h.created_at.slice(0, 16).replace('T', ' ')} · ${h.actor}: ${h.summary}`),
@@ -840,7 +851,9 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const waiting = repo.openWaitingItems().map((w) => ({ who: w.waiting_on, about: w.details, expected: w.due_at_utc ? formatDue(w.due_at_utc, w.due_precision) : null, overdue: !!w.due_at_utc && isOverdue(w.due_at_utc, w.due_precision) }))
       const soonEnd = DateTime.utc().plus({ days: 2 }).toISO()!
       const soon = repo.itemsDueBetween(nowIso, soonEnd).filter((i) => i.kind !== 'commitment' && i.kind !== 'waiting' && i.kind !== 'checklist_item').map((i) => ({ title: i.title, due: formatDue(i.due_at_utc!, i.due_precision) }))
-      return { result: { commitments, overdue, waiting, due_soon: soon, today_context: repo.todayContext().map((c) => c.text) } }
+      // 7b: deadlines within two weeks that are not comfortably on track — surfaced before they are urgent.
+      const atRisk = atRiskLines(14).map((r) => r.text)
+      return { result: { commitments, overdue, waiting, due_soon: soon, at_risk: atRisk, today_context: repo.todayContext().map((c) => c.text) } }
     }
     case 'create_event': {
       // Phase 6. Events occupy time; they are never tasks and never duplicate one (spec §6). Hard clashes are refused with an
@@ -991,6 +1004,19 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const movedGone = doomed.filter((e) => !e.rrule).length
       const detail = seriesInvolved ? ` — the whole series${movedGone ? ` and ${plural(movedGone, 'moved occurrence')}` : ''}` : ''
       return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Cancelled "${ev.title}"${detail}. Nothing else was touched.` } }
+    }
+    case 'assess_deadline': {
+      const x = a as z.infer<typeof toolSchemas.assess_deadline>
+      let id: string | null = x.id ? repo.resolveItemId(x.id) : null
+      if (!id && x.title) {
+        const pool = [...repo.openProjects(), ...repo.openItems(500).filter((i) => i.due_at_utc && (i.kind === 'deadline' || i.hardness === 'hard' || i.kind === 'task'))]
+        const r = resolveEntity(x.title, pool, getFocus().map((f) => f.itemId))
+        if (r.kind !== 'none') id = r.entity.id
+      }
+      if (!id) throw new ToolValidationError(`I don't know which deadline you mean${x.title ? ` by "${x.title}"` : ''}`)
+      const assessment = assessTarget(id)
+      if (!assessment) throw new Error('No such item')
+      return { result: { assessment: { ...assessment, remaining: assessment.remaining.map((c) => c.title), startable: assessment.startable.map((c) => c.title), blocked: assessment.blocked.map((b) => ({ component: b.component.title, blockers: b.blockers.map((x) => x.title) })), waits: assessment.waits.map((w) => w.waiting_on), unscheduled: assessment.unscheduled.map((c) => c.title), bottleneck: assessment.bottleneck ? { component: assessment.bottleneck.component.title, why: assessment.bottleneck.why } : null }, text: assessmentText(assessment) } }
     }
     case 'ask_clarification': {
       // The orchestrator lifts this out of the round and appends the question to the reply; nothing is stored.
@@ -1462,6 +1488,7 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
         dueAtUtc: due.dueAtUtc,
         duePrecision: due.precision,
         hardness: x.hardness ?? (x.kind === 'deadline' ? 'hard' : null),
+        effortMinutes: x.effort_minutes ?? null,
         // Priority is inferred, never asked (spec §4): from the words, the kind, hardness and how soon it is due.
         importance:
           (hasLowSignal(`${x.title} ${x.details ?? ''}`) && x.kind !== 'commitment' && x.kind !== 'deadline' ? 3 : x.importance) ??
@@ -1567,6 +1594,7 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
         changed.push('due')
       }
       if (x.hardness !== undefined) (patch.hardness = x.hardness), changed.push('hardness')
+      if (x.effort_minutes !== undefined) (patch.effortMinutes = x.effort_minutes), changed.push('effort')
       if (x.importance !== undefined) (patch.importance = x.importance), changed.push('importance')
       if (x.kind !== undefined) (patch.kind = x.kind), changed.push('kind')
       if (x.status !== undefined) (patch.status = x.status), changed.push('status')

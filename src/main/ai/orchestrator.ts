@@ -49,6 +49,11 @@ Brain dumps (7a) — one messy message, everything handled in this ONE response:
 - Ambiguous but harmless → pick the plain reading and act. Ambiguous and consequential → the one question.
 - Time estimates: keep the user's figure as theirs; never invent one and present it as what they said.
 
+Deadlines (7b) — computed, never weighed by you:
+- "Is X on track?", "what's the bottleneck?", "can I still make Friday?", "how is X looking?" → assess_deadline (or get_project for a dated Thing). The app reasons back from the deadline over the user's OWN parts and blocks links: what remains, what is blocked by what, the bottleneck, whether it is still feasible given the free time left. Relay its text; do not re-rank or second-guess it.
+- Never invent a component. If the parts listed seem incomplete, the app already says "that is everything you have listed — tell me if there are more parts"; do not add steps the user never mentioned.
+- Effort: when the user gives a figure ("the report is about three hours") pass effort_minutes on the item. Never make one up as theirs — the app labels its own assumptions as assumed.
+
 Things (projects) — the life model:
 - When the user names something they are dealing with that has, or will have, parts ("TISS mailing is something I need to deal with", "my IIM application", "the wedding"), call create_project with the name they used. The context lists every project you already track with its id: if the Thing is there, DO NOT create it again — use its id.
 - A task that belongs to a Thing gets project_id (or project_title if the Thing is not in the context yet). "I need to email TISS about the mailing" → create_item with project_id of the TISS mailing.
@@ -277,6 +282,7 @@ function phraseReadResults(results: ToolResult[]): string | null {
       if (res.history?.length) lines.push(`Recently: ${res.history.slice(0, 3).join('; ')}.`)
     } else if (r.name === 'get_project') {
       const p = (res as { project?: { title: string; due: string | null; status: string }; parts?: { title: string; status: string; due: string | null }[]; history?: string[] }).project
+      const assessmentText = (res as { assessment_text?: string }).assessment_text
       const parts = (res as { parts?: { title: string; status: string; due: string | null }[] }).parts ?? []
       const hist = (res as { history?: string[] }).history ?? []
       if (p) {
@@ -294,6 +300,8 @@ function phraseReadResults(results: ToolResult[]): string | null {
               : 'no parts yet') +
             '.'
         )
+        // 7b: the computed deadline picture — bottleneck and feasibility — without being asked which part matters.
+        if (assessmentText) lines.push(assessmentText)
         const pnotes = (res as { notes?: { body: string }[] }).notes ?? []
         if (pnotes.length) lines.push(`Notes: ${pnotes.map((n) => n.body).join(' · ')}.`)
         const doneSoFar = (res as { done?: string[] }).done ?? []
@@ -337,11 +345,16 @@ function phraseReadResults(results: ToolResult[]): string | null {
       if (f.overdue.length) parts.push(`Overdue: ${f.overdue.map((o) => `${o.title} (was ${o.due})`).join('; ')}.`)
       if (f.waiting.length) parts.push(`Waiting on: ${f.waiting.map((w) => `${w.who ?? 'someone'}${w.about ? ` about ${w.about}` : ''}${w.expected ? `, expected ${w.expected}` : ''}${w.overdue ? ' — past due' : ''}`).join('; ')}.`)
       if (f.due_soon.length) parts.push(`Coming up: ${f.due_soon.map((s) => `${s.title} (${s.due})`).join('; ')}.`)
+      const atRisk = (res as unknown as { at_risk?: string[] }).at_risk ?? []
+      if (atRisk.length) parts.push(`Deadlines to watch: ${atRisk.join(' ')}`)
       if (!parts.length) lines.push("Nothing I can see slipping. No open promises, nothing overdue, nothing waiting.")
       else {
         if (f.today_context.some((t) => /exhaust|tired|wiped|drained|knackered|shattered|burnt|burned|worn|low|down|flat|anxious|stressed|overwhelmed|unwell|sick|ill/i.test(t))) parts.push(`You said you're ${f.today_context[0]} today — this is for the record, not a push. Nothing here needs to happen tonight unless it's a promise.`)
         lines.push(parts.join(' '))
       }
+    } else if (r.name === 'assess_deadline') {
+      const t = (res as { text?: string }).text
+      if (t) lines.push(t)
     } else if (r.name === 'get_plan') {
       const g = res as unknown as { ok?: boolean; plan?: { title: string; status: string; cadence: string | null; ends_on: string | null }; description?: string; next?: string | null; progress?: { sessions: { missed: number; done: number; planned: number } } }
       if (!g.plan) lines.push('No plans yet. Say something like "study econometrics two hours every Monday, Wednesday and Friday until October 15" to start one.')
