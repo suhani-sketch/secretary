@@ -1,6 +1,6 @@
 import { BrowserWindow, Notification, app, ipcMain, powerMonitor, shell } from 'electron'
 import { join } from 'path'
-import { writeFileSync } from 'fs'
+import { appendFileSync, mkdirSync, writeFileSync } from 'fs'
 import { config as loadDotenv } from 'dotenv'
 import { closeDatabase, dbPath, getDb, openDatabase } from './db'
 import { clearLog, listLog, log } from './log'
@@ -25,6 +25,16 @@ const startedHidden = process.argv.includes('--hidden')
 // lock, so it can run beside the real copy) and never touches Windows startup, the Start Menu shortcut or the protocol.
 const scratchUserData = process.env['SECRETARY_USER_DATA']
 if (scratchUserData) app.setPath('userData', scratchUserData)
+
+// Diagnostic: one line per launch in <userData>/startup.log, written before the database or anything else that can fail,
+// so "the app was never launched" can be told apart from "the app launched and died".
+try {
+  const dir = app.getPath('userData')
+  mkdirSync(dir, { recursive: true })
+  appendFileSync(join(dir, 'startup.log'), `${new Date().toISOString()} launched argv=${JSON.stringify(process.argv.slice(1))} cwd=${process.cwd()}\n`)
+} catch {
+  /* a diagnostic must never block the launch */
+}
 
 let mainWindow: BrowserWindow | null = null
 let quitting = false

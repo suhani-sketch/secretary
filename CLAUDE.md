@@ -10,7 +10,15 @@ Fixes that came out of it: "I haven't sent it yet" is a tier-0 no-op reply (it u
 falsely "resolved" it); `record_activity` now goes through `act()` so `activities.project_id` is filled (it was null, so "what have
 I done for X" missed recorded progress — backfilled in the real DB too); "what is left / what have I done for X" are tier-0 →
 `get_project` phrased in code (steps, waiting, "Done so far", history) instead of a from-memory model answer that skipped the wait.
-Phase 0 reboot test: reminder "Check the reboot test" set for 2026-09-16 18:21 local; user to quit, restart Windows, not open the app.
+**Phase 0 reboot test run 2026-09-16 20:20 — FAILED.** Reminder for 20:27, app quit, Windows restarted, nothing appeared. Evidence:
+no `app.start` in `scheduler_log` after the reboot, no crash in the Windows Application log, and the Shell-Core operational log
+(events 9705–9708) shows Explorer enumerating HKCU\...\Run at 20:21 and starting HP, BlueStacks and Proton Drive but NOT
+`com.suhani.secretary` — the entry is present and correct, and the identical command works when run by hand (takes ~20 s to reach
+4 processes on this machine). Cause of the skip unknown (no StartupApproved entry, no policy, no mark-of-the-web; electron.exe is
+unsigned). Missed-reminder recovery DID work: launching the app at 20:31 showed "Missed reminder (4 min late)" and the user snoozed it.
+Proposed fix, awaiting the user's go-ahead (blocked by the harness as a persistence change): register a per-user Task Scheduler
+logon task (`Secretary`, at log on, 20 s delay, `electron.exe <dir> --hidden`, start-in <dir>) alongside the Run entry; the
+single-instance lock makes a double start harmless. Diagnostic added: `<userData>/startup.log` gets one line per launch before anything else.
 
 ## Phase 4 — design decisions (see SPEC §8 Phase 4 "Design decisions")
 - Dormouse-quokka, scarf only, unnamed, rare eye contact, a life of its own (pose changes every few minutes, never performs).
