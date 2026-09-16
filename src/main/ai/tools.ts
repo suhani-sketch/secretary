@@ -107,6 +107,26 @@ export const toolSchemas = {
   }),
   detach_from_project: z.object({ item_id: idRef }),
   get_project: z.object({ id: idRef }).describe('A project with its parts and history.'),
+  add_checklist_item: z.object({
+    project_id: idRef.describe('The project the checklist belongs to.'),
+    titles: z.array(z.string().min(1).max(200)).min(1).max(20).describe('One title per checklist item, in order. "Add send first email, follow up, and attach the document" → three titles.')
+  }),
+  complete_checklist_item: z
+    .object({
+      id: idRef.optional().describe('The checklist item id, if you can see it in the context.'),
+      title: z.string().max(200).optional().describe('Otherwise the item as the user referred to it ("the first email"); matched against the project\'s checklist.'),
+      project_id: idRef.optional().describe('The project, when known — narrows the match.')
+    })
+    .refine((v) => !!v.id || !!v.title, 'Give id or title'),
+  remove_checklist_item: z.object({ id: idRef }).describe('Strike a checklist item off the list (status cancelled, nothing deleted).'),
+  reorder_checklist: z.object({
+    project_id: idRef,
+    ordered_ids: z.array(idRef).min(1).max(50).describe('All of the project\'s open checklist item ids in the new order.')
+  }),
+  promote_checklist_item: z
+    .object({ id: idRef, ...dueFields })
+    .refine(noBothDue, 'Give either due_at_local or due_date_local, not both')
+    .describe('Turn a checklist item into a standalone task (it stays part of the project), optionally with a due day/time.'),
   complete_item: z.object({ id: idRef }),
   cancel_item: z.object({
     id: idRef,
@@ -168,7 +188,12 @@ const descriptions: Record<ToolName, string> = {
   archive_project: 'Put a finished or abandoned project away (status archived). Asks first, naming its parts.',
   attach_to_project: 'Make an existing item part of a project ("that belongs to the TISS mailing").',
   detach_from_project: 'Take an item out of its project.',
-  get_project: 'Read one project: its fields, parts and history.',
+  get_project: 'Read one project: its fields, parts and history. Use for "what is left?" / "what have I done for X?".',
+  add_checklist_item: 'Add one or more checklist items to a project ("add a list: send first email, follow up, attach the document"). Checklist items are steps within the Thing, not standalone tasks.',
+  complete_checklist_item: 'Tick off a checklist item when the user reports doing it ("I sent the first email", "attached the doc").',
+  remove_checklist_item: 'Strike a checklist item off the list.',
+  reorder_checklist: 'Change the order of a project\'s checklist.',
+  promote_checklist_item: 'Make a checklist item a proper task with its own due date, when the user wants it scheduled ("make the follow-up a task for Friday").',
   complete_item: 'Mark an item done ("done", "finished the CV"). Its own pending reminders stop.',
   cancel_item: 'Cancel ONE item the user no longer wants (status becomes cancelled, nothing is deleted). Its own reminders stop. Projects with parts require confirmation first.',
   delete_item: 'Permanently delete an item. Always requires confirmation. Prefer cancel_item.',
@@ -188,6 +213,11 @@ const descriptions: Record<ToolName, string> = {
 }
 
 const WRITE_TOOLS: ReadonlySet<string> = new Set([
+  'add_checklist_item',
+  'complete_checklist_item',
+  'remove_checklist_item',
+  'reorder_checklist',
+  'promote_checklist_item',
   'create_project',
   'archive_project',
   'attach_to_project',
@@ -394,9 +424,115 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const x = a as z.infer<typeof toolSchemas.get_project>
       const id = repo.resolveItemId(x.id)
       const p = repo.getItem(id)!
-      const parts = repo.projectParts(id)
+      const parts = repo.projectParts(id).filter((c) => c.status !== 'cancelled' && c.status !== 'archived')
       const history = repo.activitiesForProject(id, 30)
       return { result: { project: publicItem(p), parts: parts.map(publicItem), history: history.map((h) => `${h.created_at.slice(0, 16).replace('T', ' ')} · ${h.actor}: ${h.summary}`) } }
+    }
+    case 'add_checklist_item': {
+      const x = a as z.infer<typeof toolSchemas.add_checklist_item>
+      const projectId = repo.resolveItemId(x.project_id)
+      const project = repo.getItem(projectId)!
+      if (project.kind !== 'project') throw new ToolValidationError(`"${project.title}" is not a project`)
+      const existing = repo.checklistItems(projectId, false)
+      let order = repo.nextSortOrder(projectId)
+      const created: Item[] = []
+      for (const raw of x.titles) {
+        const title = raw.trim().replace(/^[-•*\d.)\s]+/, '')
+        if (!title) continue
+        // Nothing is duplicated: an identical open step is reused, not re-added.
+        const dup = existing.find((e) => e.title.toLowerCase() === title.toLowerCase())
+        if (dup) continue
+        const it = repo.insertItem({ kind: 'checklist_item', title: title.charAt(0).toUpperCase() + title.slice(1), sourceMsgId: ctx.sourceMsgId })
+        repo.setSortOrder(it.id, order++)
+        repo.addLink(it.id, projectId, 'part_of')
+        created.push(repo.getItem(it.id)!)
+      }
+      if (!created.length) throw new Error('Those steps are already on the list')
+      // One activity for the batch so a single "undo" removes all of them.
+      act({
+        targetType: 'checklist',
+        targetId: projectId,
+        projectId,
+        verb: 'created',
+        summary: `Added ${plural(created.length, 'step')} to "${project.title}": ${created.map((c) => c.title).join(', ')}`,
+        after: { ids: created.map((c) => c.id), titles: created.map((c) => c.title) }
+      })
+      pushFocus(project.id, project.title, 'checklist added')
+      clearOffer()
+      const summary = `Checklist for "${project.title}": +${created.map((c) => `"${c.title}"`).join(', ')}`
+      const total = existing.length + created.length
+      return {
+        result: { ok: true, items: created.map((c) => ({ id: shortId(c.id), title: c.title })), open_total: total, summary },
+        applied: { tool: name, summary, phrase: `Added to "${project.title}": ${created.map((c) => c.title).join(', ')}. ${plural(total, 'step')} on the list.`, itemId: projectId }
+      }
+    }
+    case 'complete_checklist_item': {
+      const x = a as z.infer<typeof toolSchemas.complete_checklist_item>
+      let target: Item | undefined
+      if (x.id) target = repo.getItem(repo.resolveItemId(x.id))
+      else {
+        const projectId = x.project_id ? repo.resolveItemId(x.project_id) : undefined
+        const pool = projectId ? repo.checklistItems(projectId, false) : repo.openChecklistItems()
+        const res = resolveEntity(x.title!, pool, focusIds)
+        if (res.kind === 'none') throw new Error(`I couldn't find a checklist step like "${x.title}"`)
+        target = res.entity
+      }
+      if (!target) throw new Error('No such checklist item')
+      if (target.status === 'done') {
+        return { result: { ok: true, already_done: true, summary: `"${target.title}" was already ticked off` }, applied: { tool: name, summary: `"${target.title}" already done`, phrase: `"${target.title}" was already ticked off.`, itemId: target.id } }
+      }
+      const before = target
+      const { cancelledReminders, stoppedIds } = repo.completeItem(target.id)
+      const after = repo.getItem(target.id)!
+      const project = repo.parentProjectOf(target.id)
+      const remaining = project ? repo.checklistItems(project.id, false) : []
+      act({ targetType: 'item', targetId: target.id, projectId: project?.id ?? null, verb: 'completed', summary: `Ticked off "${after.title}"${project ? ` on "${project.title}"` : ''}${cancelledReminders ? ` (${plural(cancelledReminders, 'reminder')} stopped)` : ''}`, before: { item: before, stopped: stoppedIds }, after })
+      if (project) pushFocus(project.id, project.title, 'step completed')
+      pushFocus(after.id, after.title, 'completed')
+      clearOffer()
+      const summary = `Ticked off "${after.title}"${project ? ` · ${remaining.length} left on "${project.title}"` : ''}`
+      const phrase = `Ticked off "${after.title}"${project ? ` — ${remaining.length ? `${plural(remaining.length, 'step')} left on "${project.title}": ${remaining.map((r) => r.title).join(', ')}` : `that was the last step on "${project.title}"`}` : ''}.`
+      return { result: { ok: true, summary, remaining: remaining.map((r) => ({ id: shortId(r.id), title: r.title })) }, applied: { tool: name, summary, phrase, itemId: after.id } }
+    }
+    case 'remove_checklist_item': {
+      const x = a as z.infer<typeof toolSchemas.remove_checklist_item>
+      const id = repo.resolveItemId(x.id)
+      const before = repo.getItem(id)!
+      const { stoppedIds } = repo.cancelItem(id)
+      const project = repo.parentProjectOf(id)
+      act({ targetType: 'item', targetId: id, projectId: project?.id ?? null, verb: 'cancelled', summary: `Struck "${before.title}" off "${project?.title ?? 'the list'}"`, before: { item: before, stopped: stoppedIds }, after: repo.getItem(id) })
+      const summary = `Struck off "${before.title}"`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Struck "${before.title}" off the list.`, itemId: id } }
+    }
+    case 'reorder_checklist': {
+      const x = a as z.infer<typeof toolSchemas.reorder_checklist>
+      const projectId = repo.resolveItemId(x.project_id)
+      const project = repo.getItem(projectId)!
+      const ids = x.ordered_ids.map((r) => repo.resolveItemId(r))
+      const current = repo.checklistItems(projectId, false)
+      const known = new Set(current.map((c) => c.id))
+      for (const id of ids) if (!known.has(id)) throw new ToolValidationError(`${shortId(id)} is not an open step of "${project.title}"`)
+      const before = current.map((c) => ({ id: c.id, sort_order: c.sort_order }))
+      let order = 1
+      for (const id of ids) repo.setSortOrder(id, order++)
+      for (const c of current) if (!ids.includes(c.id)) repo.setSortOrder(c.id, order++) // anything omitted keeps relative order at the end
+      const afterList = repo.checklistItems(projectId, false)
+      act({ targetType: 'checklist', targetId: projectId, projectId, verb: 'updated', summary: `Reordered the checklist on "${project.title}"`, before: { orders: before }, after: { orders: afterList.map((c) => ({ id: c.id, sort_order: c.sort_order })) } })
+      const summary = `Reordered "${project.title}": ${afterList.map((c) => c.title).join(' → ')}`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `New order on "${project.title}": ${afterList.map((c) => c.title).join(', ')}.`, itemId: projectId } }
+    }
+    case 'promote_checklist_item': {
+      const x = a as z.infer<typeof toolSchemas.promote_checklist_item>
+      const id = repo.resolveItemId(x.id)
+      const before = repo.getItem(id)!
+      if (before.kind !== 'checklist_item') throw new ToolValidationError(`"${before.title}" is not a checklist item`)
+      const due = repo.resolveDue(x.due_date_local, x.due_at_local, x.due_looseness)
+      const { item } = repo.updateItem(id, { kind: 'task', ...(due.dueAtUtc ? { dueAtUtc: due.dueAtUtc, duePrecision: due.precision } : {}), ...(x.hardness ? { hardness: x.hardness } : {}) })
+      const project = repo.parentProjectOf(id)
+      act({ targetType: 'item', targetId: id, projectId: project?.id ?? null, verb: 'updated', summary: `Promoted "${item.title}" to a task${item.due_at_utc ? ` due ${dueText(item)}` : ''}`, before, after: item })
+      pushFocus(item.id, item.title, 'promoted to task')
+      const summary = `"${item.title}" is now a task${item.due_at_utc ? ` · due ${dueText(item)}` : ''}${project ? ` (still part of "${project.title}")` : ''}`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `"${item.title}" is a proper task now${item.due_at_utc ? `, due ${dueText(item)}` : ''}${project ? `, still under "${project.title}"` : ''}.`, itemId: id } }
     }
     case 'create_item': {
       const x = a as z.infer<typeof toolSchemas.create_item>
@@ -799,6 +935,17 @@ function undoActivity(a: import('../../shared/types').Activity): string {
       // Only the alarms that this very change stopped come back — never ones the user cancelled separately.
       if (wrapped.stopped?.length) repo.reviveReminders(wrapped.stopped)
       return `"${b.title}" is back to how it was${wrapped.stopped?.length ? ` and its ${plural(wrapped.stopped.length, 'reminder')} ${wrapped.stopped.length === 1 ? 'is' : 'are'} live again` : ''}`
+    }
+  }
+  if (a.target_type === 'checklist') {
+    if (a.verb === 'created') {
+      const ids = (after as { ids?: string[] })?.ids ?? []
+      for (const id of ids) repo.deleteItemRow(id)
+      return `removed ${plural(ids.length, 'step')} from the list again`
+    }
+    if (a.verb === 'updated' && before) {
+      for (const o of (before as { orders: { id: string; sort_order: number | null }[] }).orders) repo.setSortOrder(o.id, o.sort_order ?? 0)
+      return 'put the checklist back in its previous order'
     }
   }
   if (a.target_type === 'reminder') {

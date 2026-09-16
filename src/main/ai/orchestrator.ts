@@ -2,7 +2,7 @@ import { log } from '../log'
 import * as repo from '../repo'
 import { assembleContext } from './context'
 import { ProviderUnavailableError, type Provider, type ProviderMessage, type ToolCall, type ToolResult } from './provider'
-import { routeTier0 } from './router'
+import { REPLY, routeTier0 } from './router'
 import { executeTool, inTransaction, isWriteTool, toolDefinitions, type ExecContext } from './tools'
 import { formatDue } from '../../shared/format'
 import type { Actor, AppliedChange, ChatResponse, ChatStatus, ToolRunResult } from '../../shared/types'
@@ -31,6 +31,7 @@ Things (projects) — the life model:
 - Progress on a Thing ("I worked on the TISS mailing today", "I drafted the first email") → record_activity with item_id = the project. Never a task named after the sentence.
 - Changing a Thing's date or details → update_item on the project id. "That belongs to X" → attach_to_project.
 - If create_project answers with a near-match question, relay it; "yes" → call again with use_existing_id, "no, it's different" → force_new=true.
+- Checklists: steps within a Thing are checklist items, not tasks. "Add a list of things to do" → just say you're ready for the steps (no tool). "Add send first email, follow up and attach the document" → add_checklist_item with three titles on that project. "I sent the first email" → complete_checklist_item (by title; the app matches it to the step) — never a new task. "What is left?" → get_project. Only promote_checklist_item when the user wants a step scheduled as its own task.
 
 Reference resolution:
 - "it", "that", "the earlier one" usually mean the most recently touched item listed in the context. When the user gives a new time for something just created ("actually make it 4"), update THAT item — never create a second one. Its reminder moves with it automatically.
@@ -85,7 +86,13 @@ async function handleChat(deps: OrchestratorDeps, rawText: string): Promise<Chat
   try {
     // ---- Tier 0: deterministic, no model call ----
     const t0 = routeTier0(text)
-    if (t0) {
+    if (t0 && t0.length === 1 && t0[0].name === REPLY) {
+      // Deterministic words, nothing to write.
+      tier = 0
+      replyText = String(t0[0].args.text ?? '')
+      repo.insertExtraction(userMessage.id, JSON.stringify([{ name: REPLY }]), true, null)
+      log('info', 'router.tier0', `reply in ${Date.now() - started}ms`)
+    } else if (t0) {
       tier = 0
       deps.onStatus({ kind: 'tools', count: t0.length })
       const outcome = runToolRound(
@@ -199,10 +206,17 @@ function phraseReadResults(results: ToolResult[]): string | null {
       const hist = (res as { history?: string[] }).history ?? []
       if (p) {
         const open = parts.filter((x) => !['done', 'cancelled', 'archived'].includes(x.status))
+        const done = parts.filter((x) => x.status === 'done')
         lines.push(
-          `"${p.title}"${p.due ? ` is due ${p.due}` : ''}: ${parts.length ? `${open.length} of ${parts.length} parts still open${open.length ? ` (${open.map((x) => x.title).join(', ')})` : ''}` : 'no parts yet'}.`
+          `"${p.title}"${p.due ? ` is due ${p.due}` : ''}: ` +
+            (parts.length
+              ? open.length
+                ? `still to do — ${open.map((x) => x.title).join(', ')}${done.length ? `. Done: ${done.map((x) => x.title).join(', ')}` : ''}`
+                : `everything on it is done (${done.map((x) => x.title).join(', ')})`
+              : 'no parts yet') +
+            '.'
         )
-        if (hist.length) lines.push(`History: ${hist.slice(0, 6).map((h) => h.replace(/^.*?· \w+: /, '')).join('; ')}.`)
+        if (hist.length) lines.push(`Recent history: ${hist.slice(0, 4).map((h) => h.replace(/^.*?· \w+: /, '')).join('; ')}.`)
       }
     } else if (r.name === 'search_activity') {
       const h = res.history ?? []

@@ -3,7 +3,22 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 3 in progress — slice 3a (Projects/Things) built and tested 2026-09-16; 3b–3f not started.
+## Current phase: Phase 3 in progress — 3a (Projects/Things) and 3b (Checklists) built and tested 2026-09-16; 3c–3f not started.
+
+## Phase 3b — Checklists (2026-09-16)
+- Checklist steps are `items` kind `checklist_item`, `part_of` a project, ordered by `sort_order` (`repo.nextSortOrder`,
+  `setSortOrder`, `checklistItems`). They are excluded from the standalone Open list and count; the window nests them under
+  their Thing with a tick box, ↑↓ reorder and × strike-off, all through `runTool`.
+- Tools: `add_checklist_item {project_id, titles[]}` (skips exact duplicates; ONE activity for the batch, target_type
+  `checklist`, so one undo removes all), `complete_checklist_item {id | title, project_id?}` (title resolved with
+  `entity.ts`, whose tokens are now lightly stemmed so "sent the first email" → "Send first email"), `remove_checklist_item`
+  (cancel), `reorder_checklist` (undoable), `promote_checklist_item` (→ task, keeps part_of). `get_project` excludes cancelled parts.
+- Tier 0: "add a list (for …)" → a canned reply (router `REPLY` spec, no tool, no model) and a `checklist_target` offer;
+  "add A, B and C" with a Thing in focus (offer → focus stack project → focused item's parent) → `add_checklist_item`, split on
+  commas/and/;. "I sent the first email" goes to the model → complete_checklist_item by title (1 call).
+- "What is left?" → model calls get_project; answer phrased in code: still to do / done / recent history.
+- Verified B1, B4, B5, B6, B10 in one run + restart; reorder and its undo via the manual hook.
+- Note: the user has real data now ("TISS mailing" with a task + due date) — never treat it as debris.
 Phases 0–2 complete. Test A (§11A) re-run in full 2026-09-16 including steps 4/5/7: pass. Toast buttons confirmed working by
 a real click (user snoozed "Call tom" on 2026-09-16). Phase 0's strict reboot test still not observed (user choice).
 
@@ -180,10 +195,9 @@ a real click (user snoozed "Call tom" on 2026-09-16). Phase 0's strict reboot te
 - `npm run typecheck`
 
 ## Next
-- Phase 3b — checklists: kind=checklist_item, sort_order, part_of a project; "add a list…" / "add A, B and C" → N items;
-  "I sent the first email" completes the matching item (entity resolution over the project's parts). Then 3c waiting +
-  conditional reminders (`condition_json`, evaluated in the scheduler), 3d notes, 3e project timeline view, 3f blocks/constraints.
-  Done when §11B passes across a restart with one project and no duplicates.
+- Phase 3c — waiting items (kind=waiting, waiting_on, visually distinct) + conditional follow-ups: "if they haven't replied by
+  Friday afternoon, remind me" → reminder with `condition_json {"unless_resolved": "<item_id>"}` evaluated deterministically in
+  the scheduler at fire time. Then 3d notes, 3e project timeline view, 3f blocks/constraints. §11B steps 7–9 remain.
 - Undo does not yet cover attach/detach/archive (recorded as irreversible).
 
 ## Deletion and undo — audited 2026-09-16

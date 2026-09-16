@@ -355,6 +355,29 @@ export function projectParts(projectId: string, includeClosed = true): Item[] {
     .all(projectId) as Item[]
 }
 
+/** Checklist rows of a project, in order. */
+export function checklistItems(projectId: string, includeClosed = true): Item[] {
+  return projectParts(projectId, includeClosed).filter((i) => i.kind === 'checklist_item')
+}
+
+export function nextSortOrder(projectId: string): number {
+  const row = getDb()
+    .prepare(`SELECT MAX(i.sort_order) m FROM links l JOIN items i ON i.id = l.from_item WHERE l.to_item = ? AND l.type = 'part_of'`)
+    .get(projectId) as { m: number | null }
+  return (row.m ?? 0) + 1
+}
+
+export function setSortOrder(itemId: string, order: number): void {
+  getDb().prepare(`UPDATE items SET sort_order = ?, updated_at = ? WHERE id = ?`).run(order, nowIso(), itemId)
+}
+
+/** All open checklist items across projects (for resolving "I sent the first email" without a named project). */
+export function openChecklistItems(limit = 200): Item[] {
+  return getDb()
+    .prepare(`SELECT * FROM items WHERE kind = 'checklist_item' AND ${LIVE} ORDER BY updated_at DESC LIMIT ?`)
+    .all(limit) as Item[]
+}
+
 export function parentProjectOf(itemId: string): Item | undefined {
   return getDb()
     .prepare(`SELECT p.* FROM links l JOIN items p ON p.id = l.to_item WHERE l.from_item = ? AND l.type = 'part_of' AND p.kind = 'project' LIMIT 1`)

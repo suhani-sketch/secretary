@@ -162,6 +162,27 @@ export default function App(): React.JSX.Element {
     if (child && live(child)) partsOf.set(l.to_item, (partsOf.get(l.to_item) ?? 0) + 1)
   }
   const projects = openItems.filter((i) => i.kind === 'project')
+  // Checklist steps render nested under their Thing, in sort order, not as standalone rows.
+  const checklistOf = new Map<string, Item[]>()
+  for (const it of openItems) {
+    if (it.kind !== 'checklist_item') continue
+    const p = parentOf.get(it.id)
+    if (!p) continue
+    const arr = checklistOf.get(p.id) ?? []
+    arr.push(it)
+    checklistOf.set(p.id, arr)
+  }
+  for (const arr of checklistOf.values()) arr.sort((a, b) => (a.sort_order ?? 1e9) - (b.sort_order ?? 1e9) || a.created_at.localeCompare(b.created_at))
+  const standalone = openItems.filter((i) => !(i.kind === 'checklist_item' && parentOf.has(i.id)))
+  const reorder = (project: Item, id: string, dir: -1 | 1): void => {
+    const list = checklistOf.get(project.id) ?? []
+    const idx = list.findIndex((c) => c.id === id)
+    const j = idx + dir
+    if (idx < 0 || j < 0 || j >= list.length) return
+    const ids = list.map((c) => c.id)
+    ;[ids[idx], ids[j]] = [ids[j], ids[idx]]
+    void quick('reorder_checklist', { project_id: project.id, ordered_ids: ids })
+  }
 
   // Overdue is its own list (spec §7 Today: "live obligations, blockers"), never mixed into Coming Up.
   const now = Date.now()
@@ -334,11 +355,12 @@ export default function App(): React.JSX.Element {
               </ul>
             </section>
             <section className="rounded-2xl bg-white/60 p-4 flex flex-col gap-2 min-h-0 flex-1">
-              <h2 className="text-xs font-medium uppercase tracking-wide text-stone-500">Open ({openItems.filter((i) => !i.is_suggestion).length})</h2>
-              {openItems.length === 0 && <p className="text-sm text-stone-400">Nothing open.</p>}
+              <h2 className="text-xs font-medium uppercase tracking-wide text-stone-500">Open ({standalone.filter((i) => !i.is_suggestion).length})</h2>
+              {standalone.length === 0 && <p className="text-sm text-stone-400">Nothing open.</p>}
               <ul className="flex flex-col gap-1 overflow-y-auto">
-                {openItems.slice(0, 30).map((it) => (
-                  <li key={it.id} className="group text-sm flex items-start gap-2 rounded-lg px-1 py-1 hover:bg-white/80 cursor-pointer" onClick={() => setEditing({ kind: 'item', item: it })}>
+                {standalone.slice(0, 30).map((it) => (
+                  <li key={it.id} className="group text-sm flex flex-col rounded-lg px-1 py-1 hover:bg-white/80 cursor-pointer" onClick={() => setEditing({ kind: 'item', item: it })}>
+                  <div className="flex items-start gap-2">
                     <span className={`text-[10px] mt-1 rounded px-1 ${it.kind === 'project' ? 'bg-[#B5836D]/25 text-[#3A2E28]' : 'bg-stone-200 text-stone-600'}`}>
                       {it.is_suggestion ? 'suggested' : it.kind === 'project' ? 'thing' : it.kind.replace('_', ' ')}
                     </span>
@@ -363,6 +385,28 @@ export default function App(): React.JSX.Element {
                     >
                       ✓
                     </button>
+                  </div>
+                  {it.kind === 'project' && (checklistOf.get(it.id)?.length ?? 0) > 0 && (
+                    <ul className="ml-6 mt-1 flex flex-col gap-0.5">
+                      {checklistOf.get(it.id)!.map((c, idx, arr) => (
+                        <li key={c.id} className="group/step flex items-center gap-2 text-xs text-stone-700" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            className="w-4 h-4 rounded border border-stone-400 hover:bg-emerald-100 shrink-0"
+                            title="Tick off"
+                            onClick={() => void quick('complete_checklist_item', { id: c.id })}
+                          />
+                          <span className="truncate flex-1 cursor-pointer hover:underline" onClick={() => setEditing({ kind: 'item', item: c })}>
+                            {c.title}
+                          </span>
+                          <span className="opacity-0 group-hover/step:opacity-100 flex gap-1 text-stone-400">
+                            <button disabled={idx === 0} className="disabled:opacity-20 hover:text-stone-800" title="Move up" onClick={() => reorder(it, c.id, -1)}>↑</button>
+                            <button disabled={idx === arr.length - 1} className="disabled:opacity-20 hover:text-stone-800" title="Move down" onClick={() => reorder(it, c.id, 1)}>↓</button>
+                            <button className="hover:text-red-700" title="Strike off" onClick={() => void quick('remove_checklist_item', { id: c.id })}>×</button>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                   </li>
                 ))}
               </ul>

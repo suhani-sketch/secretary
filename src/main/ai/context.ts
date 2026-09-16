@@ -29,6 +29,8 @@ export type Offer =
   | { kind: 'reminder'; itemId: string }
   /** "Is X the same as your existing project Y?" — a plain yes/no answers it. */
   | { kind: 'project_match'; existingId: string; proposedTitle: string }
+  /** "Add a list for the things I need to do" — the next "add A, B and C" goes onto this project's checklist. */
+  | { kind: 'checklist_target'; projectId: string }
 let offer: Offer | null = null
 export const setOffer = (o: Offer): void => {
   offer = o
@@ -96,13 +98,15 @@ export function assembleContext(userText: string): string {
   // Things: always listed in full with their parts, so mentions resolve to the existing project (spec §8 3a).
   const projects = repo.openProjects(30)
   const projectLines = projects.map((p) => {
-    const parts = repo.projectParts(p.id)
-    const open = parts.filter((c) => !['done', 'cancelled', 'archived'].includes(c.status))
+    const parts = repo.projectParts(p.id).filter((c) => c.status !== 'cancelled' && c.status !== 'archived')
+    const open = parts.filter((c) => c.status !== 'done')
     const last = repo.activitiesForProject(p.id, 1)[0]
+    const describePart = (c: Item): string =>
+      c.kind === 'checklist_item' ? `${c.status === 'done' ? '☑' : '☐'} [${shortId(c.id)}] ${c.title}` : `[${shortId(c.id)}] ${c.kind} ${c.title}${c.status !== 'open' ? ` (${c.status})` : ''}`
     return (
       `- [${shortId(p.id)}] "${p.title}"` +
       (p.due_at_utc ? ` · due ${formatDue(p.due_at_utc, p.due_precision)}${p.hardness === 'hard' ? ' (hard)' : ''}` : '') +
-      ` · ${parts.length ? `${open.length} open of ${parts.length} parts: ${parts.map((c) => `[${shortId(c.id)}] ${c.title}${c.status !== 'open' ? ` (${c.status})` : ''}`).join(', ')}` : 'no parts yet'}` +
+      ` · ${parts.length ? `${open.length} open of ${parts.length} parts: ${parts.map(describePart).join(', ')}` : 'no parts yet'}` +
       (last ? ` · last: ${last.summary}` : '')
     )
   })
@@ -134,7 +138,9 @@ export function assembleContext(userText: string): string {
     offer
       ? offer.kind === 'reminder'
         ? `Standing offer: you just asked whether to add a reminder for [${shortId(offer.itemId)}]; a plain "yes" means create it.`
-        : `Standing question: you asked whether "${offer.proposedTitle}" is the same Thing as project [${shortId(offer.existingId)}]. "yes" → create_project with use_existing_id; "no"/"different" → create_project with force_new=true.`
+        : offer.kind === 'project_match'
+          ? `Standing question: you asked whether "${offer.proposedTitle}" is the same Thing as project [${shortId(offer.existingId)}]. "yes" → create_project with use_existing_id; "no"/"different" → create_project with force_new=true.`
+          : `Standing context: the user just asked for a checklist on project [${shortId(offer.projectId)}]; items they list next belong on it (add_checklist_item).`
       : '',
     ``,
     prefs.length

@@ -15,10 +15,27 @@ export function normalizeName(s: string): string {
     .trim()
 }
 
+/** Light stemming so "sent the first email" meets "Send first email" and "drafting" meets "draft". */
+const IRREGULAR: Record<string, string> = {
+  sent: 'send', wrote: 'write', written: 'write', made: 'make', did: 'do', done: 'do', went: 'go', gone: 'go', paid: 'pay',
+  bought: 'buy', got: 'get', took: 'take', taken: 'take', spoke: 'speak', spoken: 'speak', met: 'meet', read: 'read', ran: 'run',
+  said: 'say', told: 'tell', found: 'find', built: 'build', left: 'leave', kept: 'keep', began: 'begin', begun: 'begin', emails: 'email'
+}
+export function stem(w: string): string {
+  if (IRREGULAR[w]) return IRREGULAR[w]
+  if (w.length > 5 && w.endsWith('ing')) return w.slice(0, -3)
+  if (w.length > 4 && w.endsWith('ied')) return w.slice(0, -3) + 'y'
+  if (w.length > 4 && w.endsWith('ed')) return w.slice(0, -2)
+  if (w.length > 3 && w.endsWith('es')) return w.slice(0, -2)
+  if (w.length > 3 && w.endsWith('s') && !w.endsWith('ss')) return w.slice(0, -1)
+  return w
+}
+
 export function tokens(s: string): string[] {
   return normalizeName(s)
     .split(' ')
     .filter((w) => w && !STOP.has(w))
+    .map(stem)
 }
 
 function trigrams(s: string): Set<string> {

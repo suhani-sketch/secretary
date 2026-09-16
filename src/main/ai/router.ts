@@ -1,7 +1,7 @@
 import * as chrono from 'chrono-node'
 import { DateTime } from 'luxon'
 import * as repo from '../repo'
-import { getFocus, getOffer } from './context'
+import { getFocus, getOffer, setOffer } from './context'
 import { firstOccurrence, parseRecurrencePhrase } from '../recurrence'
 import { log } from '../log'
 import type { Item, Reminder } from '../../shared/types'
@@ -16,6 +16,34 @@ import type { Item, Reminder } from '../../shared/types'
 export interface ToolCallSpec {
   name: string
   args: Record<string, unknown>
+}
+
+/** A Tier 0 result that is just words — no tool, no model. The orchestrator replies with `text`. */
+export const REPLY = '__reply__'
+
+/** Which project a bare "add A, B and C" belongs to: the standing checklist request, else the most recently touched Thing. */
+function checklistTarget(): Item | null {
+  const offer = getOffer()
+  if (offer?.kind === 'checklist_target') {
+    const p = repo.getItem(offer.projectId)
+    if (p && p.kind === 'project' && p.status !== 'archived') return p
+  }
+  for (const f of getFocus()) {
+    const it = repo.getItem(f.itemId)
+    if (!it) continue
+    if (it.kind === 'project') return it
+    const parent = repo.parentProjectOf(it.id)
+    if (parent) return parent
+  }
+  return null
+}
+
+/** "send first email, follow up, and attach the document" → three titles. */
+function splitList(s: string): string[] {
+  return s
+    .split(/\s*(?:,|;|\band\b|&|\n)\s*/i)
+    .map((t) => t.replace(/^(?:and|then|also)\s+/i, '').trim())
+    .filter((t) => t.length > 0)
 }
 
 const REF_WORDS = /^(it|that|this|that one|this one|the earlier one|the last one)$/
@@ -180,6 +208,7 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     if (offer.kind === 'project_match') {
       return [{ name: 'create_project', args: { title: offer.proposedTitle, use_existing_id: offer.existingId } }]
     }
+    if (offer.kind !== 'reminder') return null
     const item = repo.getItem(offer.itemId)
     if (!item || !item.due_at_utc || item.status !== 'open') return null
     const due = DateTime.fromISO(item.due_at_utc, { zone: 'utc' }).toLocal()
@@ -192,6 +221,25 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     const offer = getOffer()
     if (offer?.kind === 'project_match') return [{ name: 'create_project', args: { title: offer.proposedTitle, force_new: true } }]
     return null
+  }
+
+  // ---- checklists (3b) ----
+  // "add a list for the things I need to do" → acknowledge and remember which Thing the coming items belong to.
+  if (/^(?:add|make|create|start|give me|let'?s (?:add|make)) (?:a )?(?:check ?list|list|to-?do list)(?: (?:for|of|with) .*)?$/.test(text)) {
+    const target = checklistTarget()
+    if (!target) return null
+    setOffer({ kind: 'checklist_target', projectId: target.id })
+    return [{ name: REPLY, args: { text: `Sure — a checklist on "${target.title}". Tell me the steps and I'll add them in order.` } }]
+  }
+  // "add send first email, follow up, and attach the document" (with a Thing in focus) → N checklist items.
+  if ((m = /^(?:add|put|also add|and|then)[:\s]+(.+)$/.exec(text)) && !/\b(reminder|alarm)\b/.test(m[1])) {
+    const target = checklistTarget()
+    if (target) {
+      const titles = splitList(restoreCase(m[1]))
+      if (titles.length >= 1 && titles.every((t) => words(t).length > 0 || t.length >= 3)) {
+        return [{ name: 'add_checklist_item', args: { project_id: target.id, titles: titles.map((t) => t.charAt(0).toUpperCase() + t.slice(1)) } }]
+      }
+    }
   }
 
   // ---- "X is something I need to deal with" → a Thing (project), never a task named after the sentence ----
