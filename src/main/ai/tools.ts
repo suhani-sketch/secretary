@@ -568,18 +568,32 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const id = repo.resolveItemId(x.id)
       const before = repo.getItem(id)!
       const rems = repo.pendingRemindersForItems([id])
+      const parts = before.kind === 'project' ? repo.projectParts(id, false) : []
       if (!x.confirmed) {
-        const would = [`"${before.title}"`, ...(rems.length ? [`its ${plural(rems.length, 'reminder')}`] : [])]
+        const would = [
+          `"${before.title}"`,
+          ...(rems.length ? [`its ${plural(rems.length, 'reminder')}`] : []),
+          ...(parts.length ? [`${plural(parts.length, 'part')} left on their own (${parts.map((p) => `"${p.title}"`).join(', ')})`] : [])
+        ]
         return {
-          result: { ok: false, needs_confirmation: true, would_affect: would, question: `Permanently delete ${would.join(' and ')}? Say yes to confirm.` },
-          confirm: { question: `Delete "${before.title}" for good${rems.length ? ` along with its ${plural(rems.length, 'reminder')}` : ''}? Cancelling instead keeps the history.`, wouldAffect: would }
+          result: { ok: false, needs_confirmation: true, would_affect: would, question: `Permanently delete ${would.join(', ')}? Say yes to confirm.` },
+          confirm: {
+            question:
+              `Delete "${before.title}" for good` +
+              (rems.length ? ` along with its ${plural(rems.length, 'reminder')}` : '') +
+              (parts.length ? `? Its ${plural(parts.length, 'part')} (${parts.map((p) => p.title).join(', ')}) would stay but no longer belong to anything` : '') +
+              `? Cancelling instead keeps the history.`,
+            wouldAffect: would
+          }
         }
       }
-      const allRems = repo.listReminders().filter((r) => r.target_type === 'item' && r.target_id === id)
+      // Snapshot everything the deletion detaches, so undo restores links and history pointers too.
+      const snapshot = repo.snapshotForDeletion(id)
       repo.deleteItemRow(id)
-      act({ targetType: 'item', targetId: id, verb: 'deleted', summary: `Deleted "${before.title}"`, before: { item: before, reminders: allRems.map(strip) } })
+      act({ targetType: 'item', targetId: id, verb: 'deleted', summary: `Deleted "${before.title}"${parts.length ? ` (${plural(parts.length, 'part')} left on their own)` : ''}`, before: snapshot })
       clearOffer()
-      const summary = `Deleted "${before.title}"` + (allRems.length ? ` and ${plural(allRems.length, 'reminder')}` : '')
+      const allRems = snapshot.reminders
+      const summary = `Deleted "${before.title}"` + (allRems.length ? ` and ${plural(allRems.length, 'reminder')}` : '') + (parts.length ? ` · ${plural(parts.length, 'part')} kept, unattached` : '')
       return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Deleted "${before.title}". Say "undo" if that was a mistake.` } }
     }
     case 'create_reminder': {
@@ -771,13 +785,10 @@ function undoActivity(a: import('../../shared/types').Activity): string {
       return `removed "${it?.title ?? 'the item'}" again`
     }
     if (a.verb === 'deleted') {
-      const b = before as { item: Item; reminders: Omit<Reminder, 'item_title'>[] }
-      const cols = Object.keys(b.item) as (keyof Item)[]
-      getDb()
-        .prepare(`INSERT OR REPLACE INTO items (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`)
-        .run(...cols.map((c) => b.item[c]))
-      for (const r of b.reminders ?? []) repo.restoreReminder(r as Reminder)
-      return `restored "${b.item.title}"`
+      const b = before as Partial<repo.DeletionSnapshot> & { item: Item }
+      repo.restoreFromSnapshot({ item: b.item, reminders: b.reminders ?? [], links: b.links ?? [], activityIds: b.activityIds ?? [], eventIds: b.eventIds ?? [] })
+      const relinked = (b.links ?? []).length
+      return `restored "${b.item.title}"${relinked ? ` with its ${plural(relinked, 'link')}` : ''}`
     }
     if (before) {
       // complete/cancel record { item, stopped }; plain updates record the item itself.
@@ -830,7 +841,9 @@ export function inTransaction<T>(fn: () => T): T {
   try {
     return tx()
   } catch (e) {
-    log('warn', 'tools.rolled_back', (e as Error).message)
+    // A confirmation request also unwinds the transaction, but it is a question, not a failure.
+    const isQuestion = !!(e as { confirm?: unknown }).confirm
+    log(isQuestion ? 'info' : 'warn', isQuestion ? 'tools.awaiting_confirmation' : 'tools.rolled_back', (e as Error).message)
     throw e
   }
 }

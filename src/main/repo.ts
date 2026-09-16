@@ -222,10 +222,50 @@ export function restoreItem(row: Item): void {
 export function deleteItemRow(id: string): void {
   const db = getDb()
   db.prepare(`DELETE FROM reminders WHERE target_type = 'item' AND target_id = ?`).run(id)
-  // History keeps its rows; only the denormalised project pointer must be released before the row can go.
+  // Every foreign key that can point at an item (see PRAGMA foreign_key_list): links cascade; activities.project_id and
+  // events.project_id are NO ACTION and must be released first. History and events keep their rows.
   db.prepare(`UPDATE activities SET project_id = NULL WHERE project_id = ?`).run(id)
+  db.prepare(`UPDATE events SET project_id = NULL WHERE project_id = ?`).run(id)
   db.prepare(`DELETE FROM links WHERE from_item = ? OR to_item = ?`).run(id, id)
   db.prepare(`DELETE FROM items WHERE id = ?`).run(id)
+}
+
+/** Everything a deletion detaches from an item, captured so undo can put it all back. */
+export interface DeletionSnapshot {
+  item: Item
+  reminders: Omit<Reminder, 'item_title'>[]
+  links: { from_item: string; to_item: string; type: string }[]
+  activityIds: string[]
+  eventIds: string[]
+}
+
+export function snapshotForDeletion(id: string): DeletionSnapshot {
+  const db = getDb()
+  const item = getItem(id)
+  if (!item) throw new Error(`No item ${id}`)
+  return {
+    item,
+    reminders: (db.prepare(`SELECT * FROM reminders WHERE target_type = 'item' AND target_id = ?`).all(id) as Reminder[]).map((r) => {
+      const { item_title: _t, ...rest } = r
+      return rest
+    }),
+    links: db.prepare(`SELECT from_item, to_item, type FROM links WHERE from_item = ? OR to_item = ?`).all(id, id) as never,
+    activityIds: (db.prepare(`SELECT id FROM activities WHERE project_id = ?`).all(id) as { id: string }[]).map((r) => r.id),
+    eventIds: (db.prepare(`SELECT id FROM events WHERE project_id = ?`).all(id) as { id: string }[]).map((r) => r.id)
+  }
+}
+
+/** Reverse of deleteItemRow: the row, its alarms, its links and the pointers that were released. */
+export function restoreFromSnapshot(s: DeletionSnapshot): void {
+  const db = getDb()
+  const cols = Object.keys(s.item) as (keyof Item)[]
+  db.prepare(`INSERT OR REPLACE INTO items (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...cols.map((c) => s.item[c]))
+  for (const r of s.reminders) restoreReminder(r as Reminder)
+  for (const l of s.links) {
+    if (getItem(l.from_item) && getItem(l.to_item)) addLink(l.from_item, l.to_item, l.type as 'part_of')
+  }
+  for (const aid of s.activityIds) db.prepare(`UPDATE activities SET project_id = ? WHERE id = ?`).run(s.item.id, aid)
+  for (const eid of s.eventIds) db.prepare(`UPDATE events SET project_id = ? WHERE id = ?`).run(s.item.id, eid)
 }
 
 /**

@@ -323,17 +323,19 @@ function onReady(): void {
       // same tool layer. $ITEM / $REMINDER are replaced with the ids from the most recent applied change.
       let lastItem = ''
       let lastReminder = ''
-      const remember = (applied: { itemId?: string; reminderId?: string }[]): void => {
+      let lastProject = ''
+      const remember = (applied: { tool: string; itemId?: string; reminderId?: string }[]): void => {
         for (const a of applied) {
           if (a.itemId) lastItem = a.itemId
           if (a.reminderId) lastReminder = a.reminderId
+          if (a.tool === 'create_project' && a.itemId) lastProject = a.itemId
         }
       }
       for (const line of script.split('||')) {
         if (line.startsWith('!')) {
           const m = /^!(\w+)\s*(\{.*\})?$/.exec(line.trim())
           if (!m) continue
-          const args = JSON.parse((m[2] ?? '{}').replace(/\$ITEM/g, lastItem).replace(/\$REMINDER/g, lastReminder)) as Record<string, unknown>
+          const args = JSON.parse((m[2] ?? '{}').replace(/\$ITEM/g, lastItem).replace(/\$REMINDER/g, lastReminder).replace(/\$PROJECT/g, lastProject)) as Record<string, unknown>
           console.log(`\n>>> MANUAL: ${m[1]} ${JSON.stringify(args)}`)
           const res = applyExternalTools('manual', 'user', [{ name: m[1], args }])
           for (const a of res.applied) console.log(`    ✓ ${a.summary}`)
