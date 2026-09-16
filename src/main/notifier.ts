@@ -36,6 +36,10 @@ export interface ToastOptions {
   onClose?: () => void
 }
 
+/** One click can reach us more than once (instance `action` event plus `handleActivation`); act once. */
+const recentClicks = new Map<string, number>()
+const DEDUPE_MS = 5000
+
 /** Turn a button index into the reminder action it stands for. */
 export function dispatchToastAction(reminderId: string, actionIndex: number, source: string): void {
   const a = TOAST_ACTIONS[actionIndex]
@@ -43,6 +47,15 @@ export function dispatchToastAction(reminderId: string, actionIndex: number, sou
     log('warn', 'toast.unknown_button', `index ${actionIndex}`, reminderId)
     return
   }
+  const key = `${reminderId}:${actionIndex}`
+  const now = Date.now()
+  const last = recentClicks.get(key)
+  if (last && now - last < DEDUPE_MS) {
+    log('info', 'toast.button_duplicate', `"${a.label}" via ${source} ignored (${now - last}ms after the first)`, reminderId)
+    return
+  }
+  recentClicks.set(key, now)
+  for (const [k, t] of recentClicks) if (now - t > DEDUPE_MS) recentClicks.delete(k)
   log('info', 'toast.button', `"${a.label}" (index ${actionIndex}) via ${source}`, reminderId)
   if (!actionHandler) {
     log('error', 'toast.no_handler', 'button pressed before the handler was installed', reminderId)

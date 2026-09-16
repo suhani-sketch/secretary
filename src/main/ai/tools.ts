@@ -219,6 +219,21 @@ function reminderFromDate(dateOnly: string): { fireAtUtc: string; note: string }
 }
 
 const dueText = (i: Item): string => formatDue(i.due_at_utc, i.due_precision)
+
+/**
+ * A reminder in the past is never what anyone meant. The common slip is a wrong year ("on the 25th" → last year's
+ * 25th): if the same calendar date next year is in the future, use it and say so. Anything else in the past is refused.
+ */
+function futureReminderTime(utcIso: string): { utc: string; note: string } {
+  const t = DateTime.fromISO(utcIso, { zone: 'utc' })
+  const now = DateTime.utc()
+  if (t >= now.minus({ minutes: 5 })) return { utc: utcIso, note: '' }
+  const bumped = t.setZone(DateTime.local().zoneName).plus({ years: 1 })
+  if (t < now.minus({ days: 30 }) && bumped > now) {
+    return { utc: bumped.toUTC().toISO()!, note: ' (I took that as next year, since the date had already passed)' }
+  }
+  throw new ToolValidationError(`${formatClock(utcIso)} is already in the past — tell me a future time`)
+}
 const plural = (n: number, w: string): string => `${n} ${w}${n === 1 ? '' : 's'}`
 const strip = (r: Reminder): Omit<Reminder, 'item_title'> => {
   const { item_title: _t, ...rest } = r
@@ -275,7 +290,9 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const rr = validateRRule(x.remind_rrule)
       const zone = DateTime.local().zoneName
       if (x.remind_at_local) {
-        reminder = repo.insertReminder(item.id, repo.localToUtc(x.remind_at_local), rr ? { rrule: rr, seriesAnchorLocal: x.remind_at_local, seriesTz: zone } : {})
+        const fixed = futureReminderTime(repo.localToUtc(x.remind_at_local))
+        reminderNote = fixed.note
+        reminder = repo.insertReminder(item.id, fixed.utc, rr ? { rrule: rr, seriesAnchorLocal: x.remind_at_local, seriesTz: zone } : {})
       } else if (x.remind_date_local) {
         const r = reminderFromDate(x.remind_date_local)
         if (rr) {
@@ -434,11 +451,15 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const itemId = repo.resolveItemId(x.item_id)
       let note = ''
       let fireAt: string
-      if (x.fire_at_local) fireAt = repo.localToUtc(x.fire_at_local)
-      else {
+      if (x.fire_at_local) {
+        const fixed = futureReminderTime(repo.localToUtc(x.fire_at_local))
+        fireAt = fixed.utc
+        note = fixed.note
+      } else {
         const r = reminderFromDate(x.fire_date_local!)
-        fireAt = r.fireAtUtc
-        note = ` ${r.note}`
+        const fixed = futureReminderTime(r.fireAtUtc)
+        fireAt = fixed.utc
+        note = ` ${r.note}${fixed.note}`
       }
       const rr = validateRRule(x.rrule)
       const r = repo.insertReminder(itemId, fireAt, rr ? { rrule: rr, seriesAnchorLocal: x.fire_at_local ?? undefined, seriesTz: DateTime.local().zoneName } : {})
@@ -456,8 +477,11 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const before = repo.getReminder(id)!
       if (before.state === 'cancelled') throw new Error('That reminder is cancelled; create a new one instead')
       const patch: repo.ReminderPatch = {}
+      let timeNote = ''
       if (x.fire_at_local !== undefined) {
-        patch.fireAtUtc = repo.localToUtc(x.fire_at_local)
+        const fixed = futureReminderTime(repo.localToUtc(x.fire_at_local))
+        patch.fireAtUtc = fixed.utc
+        timeNote = fixed.note
         patch.state = 'pending'
       }
       if (x.rrule !== undefined) patch.rrule = validateRRule(x.rrule)
@@ -472,8 +496,8 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
         after: strip(r)
       })
       if (r.target_type === 'item') pushFocus(r.target_id, title, 'reminder moved')
-      const summary = `Moved reminder for "${title}" to ${formatClock(r.fire_at_utc)}${describeRRule(r.rrule)}`
-      const phrase = `The reminder for "${title}" now fires ${formatClock(r.fire_at_utc)}${describeRRule(r.rrule)}.`
+      const summary = `Moved reminder for "${title}" to ${formatClock(r.fire_at_utc)}${describeRRule(r.rrule)}${timeNote}`
+      const phrase = `The reminder for "${title}" now fires ${formatClock(r.fire_at_utc)}${describeRRule(r.rrule)}${timeNote}.`
       return { result: { ok: true, summary }, applied: { tool: name, summary, phrase, itemId: r.target_type === 'item' ? r.target_id : undefined, reminderId: id } }
     }
     case 'cancel_reminder': {
