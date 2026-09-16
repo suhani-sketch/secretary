@@ -20,6 +20,25 @@ Update it at the end of every session (spec §11).
   imports repo and moves to core when 6f touches it.
 - **Migration 7:** `plans` table; `events.plan_id`, `events.session_state`; index on `events.starts_at_utc`.
 
+## Phase 6e — manipulation (2026-09-16)
+- `calendar/dragging.ts`: `moveEntry` / `resizeEntry` / `dropExternal` — every drag ends in a tool call (`update_event` with
+  `occurrence_start_local` for one occurrence of a series; `create_event kind=work_block item_id` when a due chip or an
+  unscheduled obligation is dropped into the grid); the library's own move is always reverted and the real row comes back
+  through the data. Timed events cannot be dropped into the due row; due markers cannot be moved between days by drag (that is
+  a reschedule, from the panel). `useExternalDraggable(ref)` makes `[data-item-id]` rows draggable via the adapter's
+  `ExternalDraggable`. Week and Day grids: entries `editable` unless the day is past; Day's "Due today" rows are draggable.
+- `calendar/UnscheduledList.tsx` beside the Week grid: `repo.unscheduledObligations()` (IPC `calendar:unscheduled`) — open items
+  with a due date and no work block serving them, soonest first, whatever week is on screen; overdue ones ringed amber.
+- Series in natural language: router "econometrics class every tuesday 2-4" → `parseRecurrencePhrase` + `firstOccurrence` →
+  `create_event {rrule, starts_at_local, duration_minutes}`; panel shows "↻ repeats every week on Tuesday · n occurrences changed
+  or skipped" (`describeRRule`), never the RRULE. Move/skip one occurrence from chat ("move next tuesday's class to 3", "skip the
+  class on the 6th") or from the panel/drag: exdate + standalone event; the series row is never rewritten. Verified on scratch c2:
+  series row `FREQ=WEEKLY;BYDAY=TU` with two exdates and one standalone moved occurrence.
+- Conflicts: `conflictsFor` now expands recurring series and ignores all-day events (being "in Delhi" no longer blocks a 2 pm class).
+- Panel "What changed": `activitiesForTarget(type, id)` (IPC `activities:target`) lists the thing's activities with actor.
+- Not automatable here: the actual mouse drag. Tool paths behind every drag are the same `update_event`/`create_event` verified
+  above; §11C 4, 12 and 13 need a hand on the mouse to confirm.
+
 ## Phase 6d — Month, Week, Agenda with distinct jobs (2026-09-16)
 - One fetch per visible range: IPC `calendar:days` → `buildDays(from, n)` (the same `buildDay` per date, ≤ 42). `CalendarSurface`
   computes the range per mode (`rangeFor`: day 1 · week 7 from the week start · agenda 14 · month = full weeks covering the

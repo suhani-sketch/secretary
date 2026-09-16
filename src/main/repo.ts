@@ -1166,3 +1166,19 @@ export function notesForMany(targetType: Note['target_type'], ids: string[]): No
   const marks = ids.map(() => '?').join(',')
   return getDb().prepare(`SELECT * FROM notes WHERE target_type = ? AND target_id IN (${marks}) ORDER BY created_at`).all(targetType, ...ids) as Note[]
 }
+
+/**
+ * The unscheduled area (spec 6e): open obligations with a due date and no work block serving them, soonest first.
+ * Whatever week is on screen, these are the things that still need time found for them.
+ */
+export function unscheduledObligations(limit = 60): Item[] {
+  return getDb()
+    .prepare(
+      `SELECT i.* FROM items i
+       WHERE i.status = 'open' AND i.is_suggestion = 0 AND i.due_at_utc IS NOT NULL
+         AND i.kind NOT IN ('checklist_item', 'waiting', 'note', 'idea', 'project')
+         AND NOT EXISTS (SELECT 1 FROM events e WHERE e.item_id = i.id AND e.starts_at_utc >= datetime('now', '-1 day'))
+       ORDER BY i.due_at_utc LIMIT ?`
+    )
+    .all(limit) as Item[]
+}

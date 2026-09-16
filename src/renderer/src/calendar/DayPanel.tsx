@@ -3,6 +3,8 @@ import type { DayBundle, EventOccurrence, Item, Reminder } from '../../../shared
 import { formatDue } from '../../../shared/format'
 import type { Selection } from './selection'
 import { IMPORTANCE as IMP, TYPE, grammarOf, importanceOf } from './grammar'
+import { describeRRule } from '../../../core/recurrence'
+import type { Activity } from '../../../shared/types'
 
 /**
  * Day detail panel (spec §8 6b): the complete context for the selected date, directly editable — complete, reschedule,
@@ -78,6 +80,10 @@ export function DayPanel({ day, selection, onSelect, onQuick, onOpenEditor, onCl
         {selectedItem && <ItemDetail item={selectedItem} day={day} onQuick={onQuick} onOpenEditor={onOpenEditor} />}
         {selectedEvent && <EventDetail occ={selectedEvent} day={day} onQuick={onQuick} />}
         {selectedReminder && <ReminderDetail r={selectedReminder} onQuick={onQuick} />}
+        {/* what changed and when (6e): every manual or spoken change landed in activities */}
+        {selectedItem && <Changes targetType="item" id={selectedItem.id} />}
+        {selectedEvent && <Changes targetType="event" id={selectedEvent.id} />}
+        {selectedReminder && <Changes targetType="reminder" id={selectedReminder.id} />}
 
         {/* the date itself: a note on the day */}
         <DateNote date={day.date} onQuick={onQuick} />
@@ -233,6 +239,12 @@ function EventDetail({ occ, day, onQuick }: { occ: EventOccurrence; day: DayBund
           {occ.is_recurring_instance ? ' · one occurrence of a series' : ''}
           {occ.span !== 'single' ? ` · ${occ.span} today` : ''}
         </div>
+        {occ.rrule && (
+          <div className="text-[11px] text-stone-500 mt-0.5" title="The series rule, in plain words. Change it from the conversation, e.g. make the class every Wednesday instead.">
+            ↻ repeats {describeRRule(occ.rrule)}
+            {occ.exdates && JSON.parse(occ.exdates).length ? ` · ${(JSON.parse(occ.exdates) as string[]).length} occurrence${(JSON.parse(occ.exdates) as string[]).length === 1 ? '' : 's'} changed or skipped` : ''}
+          </div>
+        )}
         <input className={`${field} w-full font-medium text-sm mt-0.5`} value={title} onChange={(e) => setTitle(e.target.value)} onBlur={() => title.trim() && title !== occ.title && void onQuick('update_event', { id: occ.id, title: title.trim() })} />
         <div className="text-xs text-stone-500 mt-0.5">{occ.all_day ? 'all day' : `${clock(occ.occurrence_start_utc)}${occ.occurrence_end_utc ? `–${clock(occ.occurrence_end_utc)}` : ''}`}</div>
       </div>
@@ -346,6 +358,41 @@ function DateNote({ date, onQuick }: { date: string; onQuick: Props['onQuick'] }
         Note
       </button>
     </div>
+  )
+}
+
+/** What changed and when, for the selected thing — the activities log, which every manual and spoken change writes to. */
+function Changes({ targetType, id }: { targetType: 'item' | 'event' | 'reminder'; id: string }): React.JSX.Element | null {
+  const [rows, setRows] = useState<Activity[]>([])
+  useEffect(() => {
+    let alive = true
+    void window.api.activitiesForTarget(targetType, id, 8).then((r) => alive && setRows(r))
+    return () => {
+      alive = false
+    }
+  }, [targetType, id])
+  if (!rows.length) return null
+  const when = (iso: string): string => {
+    const d = new Date(iso)
+    const today = new Date()
+    const sameDay = d.toDateString() === today.toDateString()
+    return sameDay ? d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false }) : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) + ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
+  }
+  return (
+    <section className="rounded-2xl bg-white/50 p-2.5">
+      <h4 className="text-[10px] uppercase tracking-wide text-stone-500 mb-1">What changed</h4>
+      <ul className="flex flex-col gap-0.5">
+        {rows.map((a) => (
+          <li key={a.id} className="text-[11px] text-stone-600 flex gap-2">
+            <span className="text-stone-400 tabular-nums shrink-0 w-14">{when(a.created_at)}</span>
+            <span className="break-words">
+              {a.summary}
+              <span className="text-stone-400"> · {a.actor === 'user' ? 'you' : a.actor === 'assistant' ? 'secretary' : 'system'}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }
 

@@ -1,6 +1,7 @@
 import { DateTime } from 'luxon'
 import * as repo from './repo'
 import { nextOccurrenceUtc } from './recurrence'
+import { expandEvents } from '../core/calendar/occurrences'
 import { formatClock } from '../shared/format'
 import type { Constraint } from '../shared/types'
 
@@ -51,9 +52,12 @@ export function conflictsFor(startUtc: string, endUtc: string): Conflict[] {
   for (const c of repo.activeConstraints()) {
     for (const w of constraintWindows(c, startUtc, endUtc)) out.push({ kind: c.kind, label: c.label, window: w, constraintId: c.id })
   }
-  for (const e of repo.eventsBetween(startUtc, endUtc)) {
-    const w = { startUtc: e.starts_at_utc, endUtc: e.ends_at_utc ?? DateTime.fromISO(e.starts_at_utc).plus({ hours: 1 }).toISO()! }
-    if (overlaps(w, range)) out.push({ kind: 'event', label: e.title, window: w, eventId: e.id })
+  // Timed occurrences only (recurring series expanded through the one recurrence engine). All-day events — "in Delhi",
+  // a conference — are context for the day, not a booking of every minute of it, so they never block a timed slot.
+  for (const o of expandEvents(repo.eventsTouching(startUtc, endUtc), startUtc, endUtc)) {
+    if (o.all_day) continue
+    const w = { startUtc: o.occurrence_start_utc, endUtc: o.occurrence_end_utc ?? DateTime.fromISO(o.occurrence_start_utc).plus({ hours: 1 }).toISO()! }
+    if (overlaps(w, range)) out.push({ kind: 'event', label: o.title, window: w, eventId: o.id })
   }
   return out
 }

@@ -808,7 +808,7 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const servedItem = itemId ? repo.getItem(itemId) : undefined
       const ev = repo.insertEvent({ title: x.title, startsAtUtc, endsAtUtc, allDay, tz: zone, rrule: rr, projectId: projectId ?? (servedItem ? (repo.parentProjectOf(servedItem.id)?.id ?? null) : null), kind: x.kind ?? (itemId ? 'work_block' : null), itemId })
       const spanDays = allDay ? Math.round((DateTime.fromISO(endsAtUtc!).toMillis() - DateTime.fromISO(startsAtUtc).toMillis()) / 86_400_000) : 1
-      act({ targetType: 'event', targetId: ev.id, projectId: ev.project_id, verb: 'created', summary: `Created ${ev.kind ?? 'event'} "${ev.title}" ${allDay ? (spanDays > 1 ? `${formatDue(startsAtUtc, 'day')} – ${formatDue(DateTime.fromISO(endsAtUtc!, { zone: 'utc' }).minus({ days: 1 }).toISO()!, 'day')}` : formatDue(startsAtUtc, 'day')) : formatClock(startsAtUtc)}${rr ? ` ${describeRRule(rr)}` : ''}${servedItem ? ` for "${servedItem.title}"` : ''}`, after: ev })
+      act({ targetType: 'event', targetId: ev.id, projectId: ev.project_id, verb: 'created', summary: `Created ${ev.kind ?? 'event'} "${ev.title}" ${allDay ? (spanDays > 1 ? `${formatDue(startsAtUtc, 'day')} – ${formatDue(DateTime.fromISO(endsAtUtc!, { zone: 'utc' }).minus({ days: 1 }).toISO()!, 'day')}` : formatDue(startsAtUtc, 'day')) : formatClock(startsAtUtc)}${rr ? ` ${describeRRule(rr).replace(/^,\s*/, '')}` : ''}${servedItem ? ` for "${servedItem.title}"` : ''}`, after: ev })
       pushFocus(ev.id, ev.title, 'event created', 'event')
       if (servedItem) pushFocus(servedItem.id, servedItem.title, 'time set aside')
       clearOffer()
@@ -818,10 +818,10 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
           : formatDue(startsAtUtc, 'day')
         : `${formatClock(startsAtUtc)}–${DateTime.fromISO(endsAtUtc!, { zone: 'utc' }).toLocal().toFormat('HH:mm')}`
       const softNote = x.starts_at_local ? conflictsFor(startsAtUtc, endsAtUtc!).filter((c) => !blockingConflicts([c]).length).map(describeConflict) : []
-      const summary = `${ev.kind === 'work_block' ? 'Work block' : 'Event'} "${ev.title}" · ${when}${servedItem ? ` · for "${servedItem.title}"` : ''}${rr ? ` · ${describeRRule(rr)}` : ''}${x.override_conflicts ? ' · booked over a clash as asked' : ''}`
+      const summary = `${ev.kind === 'work_block' ? 'Work block' : 'Event'} "${ev.title}" · ${when}${servedItem ? ` · for "${servedItem.title}"` : ''}${rr ? ` · ${describeRRule(rr).replace(/^,\s*/, '')}` : ''}${x.override_conflicts ? ' · booked over a clash as asked' : ''}`
       const phrase = servedItem
         ? `Time set aside for "${servedItem.title}": ${when}. The task itself is unchanged.${softNote.length ? ` Note: it sits against ${softNote.join(' and ')}.` : ''}`
-        : `${rr ? 'Recurring: ' : ''}"${ev.title}" is on the calendar, ${when}${rr ? ` ${describeRRule(rr)}` : ''}${x.override_conflicts ? ' (booked over the clash as you asked)' : ''}${softNote.length ? `. Note: it sits against ${softNote.join(' and ')}` : ''}.`
+        : `${rr ? 'Recurring: ' : ''}"${ev.title}" is on the calendar, ${when}${rr ? ` ${describeRRule(rr).replace(/^,\s*/, '')}` : ''}${x.override_conflicts ? ' (booked over the clash as you asked)' : ''}${softNote.length ? `. Note: it sits against ${softNote.join(' and ')}` : ''}.`
       return { result: { ok: true, event_id: shortId(ev.id), summary }, applied: { tool: name, summary, phrase } }
     }
     case 'update_event': {
@@ -1438,13 +1438,13 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const r = repo.insertReminder(itemId, fireAt, { ...(rr ? { rrule: rr, seriesAnchorLocal: x.fire_at_local ?? undefined, seriesTz: DateTime.local().zoneName } : {}), conditionJson: condition })
       const item = repo.getItem(itemId)!
       const condText = watched ? ` unless "${watched.title}" is resolved by then` : ''
-      act({ targetType: 'reminder', targetId: r.id, projectId: repo.parentProjectOf(itemId)?.id ?? null, verb: 'created', summary: `${watched ? 'Follow-up' : 'Reminder'} set for "${item.title}" ${formatClock(r.fire_at_utc)}${describeRRule(rr)}${condText}`, after: strip(r) })
+      act({ targetType: 'reminder', targetId: r.id, projectId: repo.parentProjectOf(itemId)?.id ?? null, verb: 'created', summary: `${watched ? 'Follow-up' : 'Reminder'} set for "${item.title}" ${formatClock(r.fire_at_utc)}${describeRRule(rr).replace(/^,\s*/, '')}${condText}`, after: strip(r) })
       pushFocus(item.id, item.title, watched ? 'follow-up added' : 'reminder added')
       clearOffer()
-      const summary = `${watched ? 'Follow-up' : 'Reminder'} for "${item.title}" ${formatClock(r.fire_at_utc)}${describeRRule(rr)}${note}${condText}`
+      const summary = `${watched ? 'Follow-up' : 'Reminder'} for "${item.title}" ${formatClock(r.fire_at_utc)}${describeRRule(rr).replace(/^,\s*/, '')}${note}${condText}`
       const phrase = watched
         ? `Noted — if that's still unresolved by ${formatClock(r.fire_at_utc)}, I'll nudge you${note}. If they reply first, the follow-up quietly drops.`
-        : `I'll remind you about "${item.title}" ${formatClock(r.fire_at_utc)}${describeRRule(rr)}${note}.`
+        : `I'll remind you about "${item.title}" ${formatClock(r.fire_at_utc)}${describeRRule(rr).replace(/^,\s*/, '')}${note}.`
       return { result: { ok: true, reminder_id: shortId(r.id), fires: formatClock(r.fire_at_utc) + note, summary }, applied: { tool: name, summary, phrase, itemId, reminderId: r.id } }
     }
     case 'update_reminder': {

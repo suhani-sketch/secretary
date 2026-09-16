@@ -403,14 +403,58 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     if (when?.exact) return [{ name: 'get_day', args: { date_local: when.dateTime!.slice(0, 10) } }]
   }
   if ((m = /^(?:i(?:'ve| have) (?:got )?|i've got |there'?s |there is |put |add |book )?(?:a |an |my |the )?(meeting|call|appointment|dentist|doctor|gp|class|lecture|tutorial|seminar|workshop|interview|viva|lunch|dinner|coffee|drinks|catch[- ]?up|standup|stand-up|sync|review|presentation|exam|test|flight|train|haircut|gym class|rehearsal|session)\b(.*)$/.exec(text))) {
+    // Recurring series in natural language (6e): "class every tuesday 2-4", "standup every weekday at 9:30".
+    const rec = parseRecurrencePhrase(m[2])
+    if (rec) {
+      const range = /\b(\d{1,2})(?::(\d{2}))?\s*(?:-|–|to|till|until)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/.exec(m[2])
+      const at = /\bat (\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/.exec(m[2])
+      const toClock = (h: number, mm: number, ap?: string): string => {
+        let hour = h
+        if (ap === 'pm' && hour < 12) hour += 12
+        else if (ap === 'am' && hour === 12) hour = 0
+        else if (!ap && hour >= 1 && hour <= 6) hour += 12
+        return `${String(hour).padStart(2, '0')}:${String(mm).padStart(2, '0')}`
+      }
+      let clock: string | null = null
+      let minutes: number | undefined
+      if (range) {
+        clock = toClock(Number(range[1]), range[2] ? Number(range[2]) : 0, range[5])
+        const endClock = toClock(Number(range[3]), range[4] ? Number(range[4]) : 0, range[5])
+        const [sh, sm] = clock.split(':').map(Number)
+        const [eh, em] = endClock.split(':').map(Number)
+        minutes = Math.max(15, eh * 60 + em - (sh * 60 + sm))
+      } else if (at) clock = toClock(Number(at[1]), at[2] ? Number(at[2]) : 0, at[3])
+      else if (rec.clockHint) clock = rec.clockHint
+      if (clock) {
+        const first = firstOccurrence(rec.rrule, clock, DateTime.local().zoneName, new Date().toISOString())
+        if (first) {
+          const title = cleanTitle(`${m[1]}${m[2]}`, '')
+            .replace(/\s+(?:every|each|daily|weekly|monthly|weekdays?|weekends?)\b.*$/i, '')
+            .replace(/\s+(?:on|at|from)\s*$/i, '')
+            .trim()
+          const args: Record<string, unknown> = { title: title || restoreCase(m[1]), starts_at_local: first.anchorLocal, rrule: rec.rrule }
+          if (minutes) args.duration_minutes = minutes
+          if (/meeting|call|appointment|dentist|doctor|gp|interview|viva|lunch|dinner|coffee|drinks|catch|class|lecture|tutorial|seminar|standup|stand-up|sync/.test(m[1])) args.kind = 'commitment'
+          return [{ name: 'create_event', args }]
+        }
+      }
+    }
     const when = parseWhen(text)
     if (when && when.exact) {
       const title = cleanTitle(`${m[1]}${m[2]}`, when.text).replace(/\s+(?:on|at|from)\s*$/i, '')
       const dur = /\b(\d{1,3}) ?(?:min|mins|minutes)\b/.exec(m[2])
       const hours = /\b(?:for )?(\d(?:\.5)?) ?(?:h|hr|hrs|hours?)\b/.exec(m[2])
+      const range = /\b(\d{1,2})(?::(\d{2}))?\s*(?:-|–|to|till|until)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/.exec(m[2])
       const args: Record<string, unknown> = { title, starts_at_local: when.dateTime }
       if (dur) args.duration_minutes = Number(dur[1])
       else if (hours) args.duration_minutes = Math.round(Number(hours[1]) * 60)
+      else if (range) {
+        const startH = Number(when.dateTime!.slice(11, 13))
+        let endH = Number(range[3])
+        const endM = range[4] ? Number(range[4]) : 0
+        if (endH < startH || (endH <= 6 && !range[5])) endH += 12
+        if (endH > startH || (endH === startH && endM > Number(when.dateTime!.slice(14, 16)))) args.duration_minutes = Math.max(15, endH * 60 + endM - (startH * 60 + Number(when.dateTime!.slice(14, 16))))
+      }
       if (/\b(?:with|w\/)\b/.test(m[2]) || /meeting|call|appointment|dentist|doctor|gp|interview|viva|lunch|dinner|coffee|drinks|catch/.test(m[1])) args.kind = 'commitment'
       if (title && words(title).length) return [{ name: 'create_event', args }]
     }

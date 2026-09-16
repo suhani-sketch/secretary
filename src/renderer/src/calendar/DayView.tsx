@@ -3,6 +3,8 @@ import type { DayBundle, Item, PriorityEntry } from '../../../shared/types'
 import { formatDue } from '../../../shared/format'
 import { CalendarGrid, type GridEntry } from './CalendarAdapter'
 import type { Selection } from './selection'
+import { dropExternal, moveEntry, resizeEntry, useExternalDraggable } from './dragging'
+import { useRef } from 'react'
 import { Marks, TypeGlyph, TYPE, titleClass, isHard } from './grammar'
 
 /**
@@ -57,8 +59,8 @@ export function DayView({ dateLocal, onSelect, selection, onQuick, refreshKey, w
       endUtc: o.occurrence_end_utc,
       allDay: !!o.all_day,
       kind: o.kind === 'commitment' ? 'commitment' : o.kind === 'work_block' ? 'work_block' : o.kind === 'session' ? 'session' : 'event',
-      editable: false, // manipulation is slice 6e
-      data: o
+      editable: !day.summary.is_past,
+      data: { o }
     }))
     for (const c of day.constraints) {
       if (c.kind === 'unavailable' && c.starts_at && c.ends_at) out.push({ id: `c:${c.id}:${c.starts_at}`, title: c.label, startUtc: c.starts_at, endUtc: c.ends_at, allDay: false, kind: 'constraint', editable: false, tone: 'muted', data: c })
@@ -70,6 +72,8 @@ export function DayView({ dateLocal, onSelect, selection, onQuick, refreshKey, w
   }, [day])
 
   const spanning = day?.scheduled.filter((o) => o.all_day || o.span !== 'single') ?? []
+  const dueRef = useRef<HTMLUListElement>(null)
+  useExternalDraggable(dueRef, [day?.unscheduled.map((i) => i.id).join(',') ?? ''])
   const s = day?.summary
   return (
     <div className="flex flex-col gap-3 min-h-0 h-full">
@@ -86,9 +90,9 @@ export function DayView({ dateLocal, onSelect, selection, onQuick, refreshKey, w
                 ))}
               </Section>
             )}
-            <Section title="Due today" empty="Nothing due." count={day.unscheduled.length} hint="date-bound · no time taken from the schedule">
+            <Section title="Due today" empty="Nothing due." count={day.unscheduled.length} hint={day.summary.is_past ? 'date-bound' : 'date-bound · drag onto the grid to set time aside'} ulRef={dueRef}>
               {day.unscheduled.map((i) => (
-                <ItemRow key={i.id} item={i} active={isSel('item', i.id)} onOpen={onOpenItem} onDone={() => void onQuick('complete_item', { id: i.id })} />
+                <ItemRow key={i.id} item={i} active={isSel('item', i.id)} onOpen={onOpenItem} onDone={() => void onQuick('complete_item', { id: i.id })} draggable={!day.summary.is_past} />
               ))}
             </Section>
             {spanning.length > 0 && (
@@ -211,9 +215,12 @@ export function DayView({ dateLocal, onSelect, selection, onQuick, refreshKey, w
                 allDayRow={false}
                 weekStart={weekStart}
                 renderEntry={(e) => <GridEntryContent entry={e} />}
+                onEntryMoved={(e, start, end, allDay, revert) => void moveEntry(e, start, end, allDay, revert, onQuick)}
+                onEntryResized={(e, start, end, revert) => void resizeEntry(e, start, end, revert, onQuick)}
+                onExternalDrop={(payload, start, end, allDay) => void dropExternal(payload, start, end, allDay, onQuick)}
                 onEntryClick={(e) => {
                   if (e.kind === 'event' || e.kind === 'commitment' || e.kind === 'work_block' || e.kind === 'session') {
-                    const o = e.data as { id: string; occurrence_start_utc: string }
+                    const { o } = e.data as { o: { id: string; occurrence_start_utc: string } }
                     onSelect({ kind: 'event', id: o.id, occurrenceStartUtc: o.occurrence_start_utc })
                   } else if (e.kind === 'happening') onSelect({ kind: 'happening', id: (e.data as { id: string }).id })
                 }}
@@ -226,14 +233,14 @@ export function DayView({ dateLocal, onSelect, selection, onQuick, refreshKey, w
   )
 }
 
-function Section({ title, count, empty, hint, children }: { title: string; count: number; empty: string; hint?: string; children: React.ReactNode }): React.JSX.Element {
+function Section({ title, count, empty, hint, children, ulRef }: { title: string; count: number; empty: string; hint?: string; children: React.ReactNode; ulRef?: React.RefObject<HTMLUListElement | null> }): React.JSX.Element {
   return (
     <section className="rounded-2xl bg-white/50 p-3">
       <h3 className="text-xs font-medium uppercase tracking-wide text-stone-500 flex items-baseline gap-2">
         {title} <span className="text-stone-400">({count})</span>
         {hint && <span className="normal-case font-normal text-[10px] text-stone-400 ml-auto">{hint}</span>}
       </h3>
-      <ul className="mt-1.5 flex flex-col gap-0.5">{count ? children : <li className="text-sm text-stone-400 px-1">{empty}</li>}</ul>
+      <ul ref={ulRef} className="mt-1.5 flex flex-col gap-0.5">{count ? children : <li className="text-sm text-stone-400 px-1">{empty}</li>}</ul>
     </section>
   )
 }
@@ -266,9 +273,14 @@ function PriorityRow({ p, onOpen, onDone, active }: { p: PriorityEntry; onOpen: 
   )
 }
 
-function ItemRow({ item, onOpen, onDone, active }: { item: Item; onOpen: (i: Item) => void; onDone: () => void; active?: boolean }): React.JSX.Element {
+function ItemRow({ item, onOpen, onDone, active, draggable }: { item: Item; onOpen: (i: Item) => void; onDone: () => void; active?: boolean; draggable?: boolean }): React.JSX.Element {
   return (
-    <li className={`group text-sm flex items-start gap-2 rounded-lg px-1 py-1 cursor-pointer ${active ? 'bg-white ring-1 ring-[#3A2E28]/30' : 'hover:bg-white/80'}`} onClick={() => onOpen(item)}>
+    <li
+      className={`group text-sm flex items-start gap-2 rounded-lg px-1 py-1 ${draggable ? 'cursor-grab active:cursor-grabbing select-none' : 'cursor-pointer'} ${active ? 'bg-white ring-1 ring-[#3A2E28]/30' : 'hover:bg-white/80'}`}
+      onClick={() => onOpen(item)}
+      {...(draggable ? { 'data-item-id': item.id, 'data-title': item.title } : {})}
+      title={draggable ? 'Drag onto the schedule to set time aside' : undefined}
+    >
       <TypeGlyph item={item} />
       <div className="min-w-0 flex-1">
         <div className={`break-words leading-snug ${titleClass(item)}`}>{item.title}</div>

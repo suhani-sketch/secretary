@@ -475,6 +475,11 @@ function registerIpc(): void {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateLocal)) throw new Error('Bad date')
     return buildDay(dateLocal)
   })
+  ipcMain.handle(IPC.activitiesForTarget, (_e, targetType: string, targetId: string, limit?: number) => {
+    if (!/^(item|event|reminder|note|checklist|constraint|link)$/.test(targetType)) throw new Error('Bad target type')
+    return repo.activitiesFor(targetType, targetId, limit ?? 20)
+  })
+  ipcMain.handle(IPC.listUnscheduled, () => repo.unscheduledObligations())
   ipcMain.handle(IPC.getDays, (_e, fromDateLocal: string, days: number) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDateLocal)) throw new Error('Bad date')
     return buildDays(fromDateLocal, Math.max(1, Math.min(42, Math.floor(Number(days) || 7))))

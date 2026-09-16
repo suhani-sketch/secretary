@@ -3,13 +3,15 @@ import type { DayBundle, DayStatus } from '../../../shared/types'
 import { CalendarGrid, type GridEntry } from './CalendarAdapter'
 import { PrioritySummary, TYPE } from './grammar'
 import type { Selection } from './selection'
+import { UnscheduledList } from './UnscheduledList'
+import { dropExternal, moveEntry, resizeEntry, type Quick } from './dragging'
 
 /**
  * Week (spec §8 6d): PLANNING. Seven days side by side on one time grid, so the shape of the week is visible — where the
  * bookings cluster, where the free stretches are, what is due on which day. The all-day row is the DUE strip: date-bound
  * obligations sit there as markers and never occupy time; multi-day events run across it as bands; unavailable windows
  * are hatched. Each column header carries that day's status and compact priority chips from the Day View Model.
- * Dragging (a due task down into the grid becomes a work block) is slice 6e; here nothing is movable yet.
+ * 6e: events move and resize by drag; a due chip dragged down into the grid, or an unscheduled obligation dragged in, becomes a work block.
  */
 
 interface Props {
@@ -19,12 +21,14 @@ interface Props {
   todayLocal: string
   onOpenDay: (date: string) => void
   onSelectOn: (date: string, s: Selection) => void
+  onQuick: Quick
+  refreshKey: number
 }
 
 const STATUS_TONE: Record<DayStatus, string> = { light: 'text-emerald-800', normal: 'text-stone-500', busy: 'text-amber-900', overloaded: 'text-rose-900' }
 const clock = (iso: string): string => new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
 
-export function WeekView({ weekStartDate, days, weekStart, todayLocal, onOpenDay, onSelectOn }: Props): React.JSX.Element {
+export function WeekView({ weekStartDate, days, weekStart, todayLocal, onOpenDay, onSelectOn, onQuick, refreshKey }: Props): React.JSX.Element {
   const byDate = useMemo(() => new Map(days.map((d) => [d.date, d])), [days])
   const entries: GridEntry[] = useMemo(() => {
     const out: GridEntry[] = []
@@ -42,13 +46,13 @@ export function WeekView({ weekStartDate, days, weekStart, todayLocal, onOpenDay
           endUtc: o.occurrence_end_utc,
           allDay: !!o.all_day,
           kind: o.kind === 'commitment' ? 'commitment' : o.kind === 'work_block' ? 'work_block' : o.kind === 'session' ? 'session' : 'event',
-          editable: false,
+          editable: !d.summary.is_past,
           data: { date: d.date, o }
         })
       }
       // Due strip: date-bound obligations as all-day markers — they take no time.
       for (const i of d.unscheduled) {
-        out.push({ id: `due:${d.date}:${i.id}`, title: i.title, startUtc: `${d.date}T00:00:00`, endUtc: null, allDay: true, kind: 'due', editable: false, tone: i.hardness === 'hard' || i.kind === 'deadline' ? 'critical' : undefined, data: { date: d.date, item: i } })
+        out.push({ id: `due:${d.date}:${i.id}`, title: i.title, startUtc: `${d.date}T00:00:00`, endUtc: null, allDay: true, kind: 'due', editable: !d.summary.is_past, tone: i.hardness === 'hard' || i.kind === 'deadline' ? 'critical' : undefined, data: { date: d.date, item: i } })
       }
       for (const c of d.constraints) {
         if (c.kind === 'unavailable' && c.starts_at && c.ends_at) out.push({ id: `c:${c.id}:${c.starts_at}`, title: c.label, startUtc: c.starts_at, endUtc: c.ends_at, allDay: false, kind: 'constraint', editable: false, tone: 'muted' })
@@ -58,7 +62,9 @@ export function WeekView({ weekStartDate, days, weekStart, todayLocal, onOpenDay
   }, [days])
 
   return (
-    <div className="h-full min-h-0 cal-grid">
+    <div className="h-full min-h-0 grid grid-cols-[220px_minmax(0,1fr)] gap-4">
+      <UnscheduledList refreshKey={refreshKey} onSelect={(date, id) => onSelectOn(date, { kind: 'item', id })} />
+      <div className="min-h-0 cal-grid">
       <CalendarGrid
         view="week"
         dateLocal={weekStartDate}
@@ -100,7 +106,11 @@ export function WeekView({ weekStartDate, days, weekStart, todayLocal, onOpenDay
           else if (data.item) onSelectOn(data.date, { kind: 'item', id: data.item.id })
         }}
         onDayClick={(date) => onSelectOn(date, { kind: 'date' })}
+        onEntryMoved={(e, start, end, allDay, revert) => void moveEntry(e, start, end, allDay, revert, onQuick)}
+        onEntryResized={(e, start, end, revert) => void resizeEntry(e, start, end, revert, onQuick)}
+        onExternalDrop={(payload, start, end, allDay) => void dropExternal(payload, start, end, allDay, onQuick)}
       />
+      </div>
     </div>
   )
 }

@@ -197,7 +197,7 @@ export function CalendarSurface(p: Props): React.JSX.Element {
         <div className="min-h-0 rounded-3xl bg-white/50 p-5">
           {p.mode === 'day' && <DayView dateLocal={p.dateLocal} onSelect={(s) => selectOn(p.dateLocal, s)} selection={panelDate === p.dateLocal ? selection : null} onQuick={p.onQuick} refreshKey={p.refreshKey} weekStart={p.weekStart} onLoaded={(b) => setDays((ds) => (ds.some((d) => d.date === b.date) ? ds.map((d) => (d.date === b.date ? b : d)) : [...ds, b]))} />}
           {p.mode === 'month' && (days.length ? <MonthView gridStart={range.from} days={days} monthLabel={title} ym={p.dateLocal.slice(0, 7)} weekStart={p.weekStart} todayLocal={today} onOpenDay={openDay} /> : <Loading />)}
-          {p.mode === 'week' && (days.length ? <WeekView weekStartDate={range.from} days={days} weekStart={p.weekStart} todayLocal={today} onOpenDay={openDay} onSelectOn={selectOn} /> : <Loading />)}
+          {p.mode === 'week' && (days.length ? <WeekView weekStartDate={range.from} days={days} weekStart={p.weekStart} todayLocal={today} onOpenDay={openDay} onSelectOn={selectOn} onQuick={p.onQuick} refreshKey={p.refreshKey} /> : <Loading />)}
           {p.mode === 'agenda' && (days.length ? <AgendaView days={days} todayLocal={today} onOpenDay={openDay} onSelectOn={selectOn} /> : <Loading />)}
         </div>
         {selection && day && <DayPanel day={day} selection={selection} onSelect={(s) => selectOn(day.date, s)} onQuick={p.onQuick} onOpenEditor={p.onOpenEditor} onClose={() => setSelection(null)} />}

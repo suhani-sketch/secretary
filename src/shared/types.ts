@@ -289,6 +289,10 @@ export interface SecretaryApi {
   getDay(dateLocal: string): Promise<DayBundle>
   /** The same Day View Model for a run of dates (Week takes seven, Month up to 42, Agenda a fortnight). */
   getDays(fromDateLocal: string, days: number): Promise<DayBundle[]>
+  /** Obligations with a deadline and no time set aside (the unscheduled area, 6e), soonest first. */
+  listUnscheduled(): Promise<Item[]>
+  /** History of one thing of any type (item, event, reminder), newest first — what changed and when (6e). */
+  activitiesForTarget(targetType: string, targetId: string, limit?: number): Promise<Activity[]>
 }
 
 /** One occurrence of an event: the series row plus this instance's start/end. `occurrence_start_utc` identifies it in `exdates`. */
@@ -403,5 +407,7 @@ export const IPC = {
   listHappenings: 'happenings:list',
   listEvents: 'events:list',
   getDay: 'calendar:day',
-  getDays: 'calendar:days'
+  getDays: 'calendar:days',
+  activitiesForTarget: 'activities:target',
+  listUnscheduled: 'calendar:unscheduled'
 } as const
