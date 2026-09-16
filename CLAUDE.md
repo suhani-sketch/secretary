@@ -59,6 +59,16 @@ was not performed; 25 passes against planted history (see below).** Phase 5 comp
   Set-up sentences (due date, effort, "can't follow up until Priya replies") each cost one model call.
 - Not exercised yet: an `infeasible` verdict on real data; multi-level block chains beyond one edge; `tests/` has no unit test
   for core/deadline.ts yet (worth adding: chain, wait-gated, passed).
+- **Fixes from the user's first real-data run (2026-09-17):** (1) `get_project.done` listed a tick that had been UNDONE (it was
+  built from `completed` activities) — now only completions whose item is still `done` count. (2) "I can't follow up until Priya
+  replies" never became a link through the model, twice — the 3f dependency rule is now wide and deterministic: "can't X until /
+  before / unless Y", "X has to happen before I can Y", "once Y, I can X"; the blocker side resolves "Priya replies / I hear
+  from Priya / the dept confirms" to the single open WAIT on that person, else to an item; the blocked side resolves over open
+  items AND checklist steps. (3) **Contradictions are voiced:** `deadlines.noteDateConflicts(item)` reads every note on a dated
+  item (chrono + a bare-ordinal fallback for "the 20th"), and a note naming a different day is reported — at note time
+  ("Careful — that says Sun, 20 Sept, but it is dated Wed, 23 Sept. Which is right?") and first in every assessment
+  ("Careful: a note on it says … — which is right?"), and it makes the deadline count as at-risk. (4) Blockers of a part that
+  live outside the Thing (a wait filed elsewhere) are pulled into the assessment so the part shows as blocked.
 
 ## Phase 7a — brain dump and messy input (2026-09-17)
 - **Routing:** `router.looksLikeDump(text)` (newline, > 220 chars, or ≥ 3 clauses split on sentence ends / "also" / "and then" /

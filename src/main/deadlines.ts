@@ -4,6 +4,7 @@
  * Nothing here decides anything; it only collects.
  */
 import { DateTime } from 'luxon'
+import * as chrono from 'chrono-node'
 import * as repo from './repo'
 import { buildSummaries } from './calendar'
 import { assessDeadline, describeAssessment, type DeadlineAssessment, type DeadlineComponent } from '../core/deadline'
@@ -54,6 +55,17 @@ export function assessTarget(id: string, nowUtc = new Date().toISOString()): Dea
   let items: Item[]
   if (target.kind === 'project') {
     items = [...repo.projectParts(target.id).filter((c) => c.status !== 'cancelled' && c.status !== 'archived'), ...repo.openWaitingFor(target.id)]
+    // Whatever blocks a part counts too, even when it lives outside the Thing (a wait filed under another project).
+    const seen = new Set(items.map((i) => i.id))
+    const queue = items.map((i) => i.id)
+    while (queue.length) {
+      const cur = queue.shift()!
+      for (const b of repo.blockersOf(cur)) if (!seen.has(b.id)) {
+        seen.add(b.id)
+        items.push(b)
+        queue.push(b.id)
+      }
+    }
   } else {
     // A standalone deadline: the item itself plus whatever blocks it (transitively), waits included.
     items = [target]
@@ -76,8 +88,51 @@ export function assessTarget(id: string, nowUtc = new Date().toISOString()): Dea
     components,
     nowUtc,
     capacityMinutes: cap.minutes,
-    daysLeft: cap.days
+    daysLeft: cap.days,
+    contradictions: noteDateConflicts(target)
   })
+}
+
+/**
+ * A note the user attached that names a different date from the one on the record ("the deadline is really the 20th" on a
+ * Thing dated the 23rd). The app holds both; it must say so rather than quietly trust either. Deterministic (chrono), no model.
+ */
+export function noteDateConflicts(item: Item, onlyNoteId?: string): string[] {
+  if (!item.due_at_utc) return []
+  const dueDay = DateTime.fromISO(item.due_at_utc).toLocal().toISODate()!
+  const out: string[] = []
+  for (const n of repo.notesFor('item', item.id)) {
+    if (onlyNoteId && n.id !== onlyNoteId) continue
+    if (!/\b(?:deadline|due|by|before|on|until|moved|really|actually|is|date)\b/i.test(n.body)) continue
+    const ref = new Date(n.created_at)
+    const days: string[] = chrono.casual
+      .parse(n.body, ref, { forwardDate: true })
+      .filter((r) => r.start.isCertain('day'))
+      .map((r) => DateTime.fromJSDate(r.start.date()).toISODate()!)
+    // chrono skips a bare ordinal ("the 20th"); read it as the next such day-of-month on or after the note was written.
+    if (!days.length) {
+      const ord = /\b(?:the )?(\d{1,2})(?:st|nd|rd|th)\b(?!\s+(?:of\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))/i.exec(n.body)
+      if (ord) {
+        const d = Number(ord[1])
+        let cand = DateTime.fromJSDate(ref).toLocal().startOf('day')
+        for (let i = 0; i < 2 && d >= 1 && d <= 31; i++) {
+          const inMonth = cand.set({ day: Math.min(d, cand.daysInMonth!) })
+          if (inMonth >= DateTime.fromJSDate(ref).toLocal().startOf('day') && inMonth.day === d) {
+            days.push(inMonth.toISODate()!)
+            break
+          }
+          cand = cand.plus({ months: 1 }).startOf('month')
+        }
+      }
+    }
+    for (const day of days) {
+      if (day !== dueDay) {
+        out.push(`a note on it says "${n.body}" (${formatDue(DateTime.fromISO(day, { zone: 'local' }).toUTC().toISO()!, 'day')}), but it is dated ${formatDue(item.due_at_utc, item.due_precision as import('../shared/types').DuePrecision | null)}`)
+        break
+      }
+    }
+  }
+  return out
 }
 
 export function assessmentText(a: DeadlineAssessment, mode: 'full' | 'short' | 'bare' = 'full'): string {
@@ -98,7 +153,7 @@ export function atRiskLines(withinDays = 14): { id: string; title: string; text:
   for (const t of upcomingDeadlineTargets(withinDays)) {
     const a = assessTarget(t.id)
     if (!a) continue
-    const risky = a.feasibility === 'tight' || a.feasibility === 'infeasible' || a.feasibility === 'passed' || (a.feasibility === 'unknown' && a.remaining.length > 0) || a.bottleneck?.kind === 'wait'
+    const risky = a.contradictions.length > 0 || a.feasibility === 'tight' || a.feasibility === 'infeasible' || a.feasibility === 'passed' || (a.feasibility === 'unknown' && a.remaining.length > 0) || a.bottleneck?.kind === 'wait'
     if (risky) out.push({ id: t.id, title: t.title, text: assessmentText(a, 'short'), feasibility: a.feasibility })
   }
   return out

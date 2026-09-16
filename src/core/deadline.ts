@@ -40,6 +40,8 @@ export interface DeadlineInput {
   daysLeft: number
   /** What to assume for a component with no stated effort. */
   assumedEffortMinutes?: number
+  /** Facts the user gave that disagree with the record (a note naming a different date) — computed by the caller. */
+  contradictions?: string[]
 }
 
 export type Feasibility = 'comfortable' | 'tight' | 'infeasible' | 'unknown' | 'passed' | 'complete' | 'no_deadline'
@@ -69,6 +71,7 @@ export interface DeadlineAssessment {
   capacity_minutes: number
   feasibility: Feasibility
   reasons: string[]
+  contradictions: string[]
 }
 
 export const DEFAULT_ASSUMED_EFFORT_MIN = 60
@@ -197,7 +200,8 @@ export function assessDeadline(inp: DeadlineInput): DeadlineAssessment {
     needed_minutes: needed,
     capacity_minutes: inp.capacityMinutes,
     feasibility,
-    reasons
+    reasons,
+    contradictions: inp.contradictions ?? []
   }
 }
 
@@ -220,6 +224,8 @@ export function describeAssessment(a: DeadlineAssessment, opts: { short?: boolea
   const left = a.remaining.filter((c) => !c.is_wait)
   const bits: string[] = []
   if (!opts.bare) bits.push(`${name}${when}: ${progress}.`)
+  // A contradiction the user left in the record is said first, every time, until it is resolved.
+  for (const c of a.contradictions) bits.push(`Careful: ${c} — which is right?`)
   if (a.feasibility === 'passed') bits.push(`The date has passed with ${list(left.map((c) => c.title))} still open.`)
   if (a.bottleneck) bits.push(`Bottleneck: ${a.bottleneck.kind === 'wait' ? waitLabel(a.bottleneck.component) : `"${a.bottleneck.component.title}"`} — ${a.bottleneck.why}.`)
   if (opts.short || opts.bare) {

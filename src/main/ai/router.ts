@@ -615,17 +615,41 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     return [{ name: 'add_constraint', args }]
   }
 
-  // ---- dependencies (3f): "X blocks Y" / "Y depends on X" / "can't do Y until X is done" ----
-  if ((m = /^(.+?) (?:blocks|is blocking) (.+)$/.exec(text)) || (m = /^(.+?) (?:depends on|is waiting on|needs|is blocked by) (.+?)(?: (?:first|to be done|being done))?$/.exec(text)) ||
-      (m = /^(?:i )?can'?t (?:do|start|finish|send|submit) (.+?) (?:until|till|before) (.+?)(?: is| gets)? (?:done|finished|complete|completed|sorted|ready)$/.exec(text))) {
-    const isBlocks = /\b(?:blocks|is blocking)\b/.test(text)
-    const blockerText = isBlocks ? m[1] : m[2]
-    const blockedText = isBlocks ? m[2] : m[1]
-    const pool = repo.openItems(200)
-    const rb = resolveEntity(blockerText, pool, getFocus().map((f) => f.itemId))
-    const rd = resolveEntity(blockedText, pool, getFocus().map((f) => f.itemId))
-    if (rb.kind === 'none' || rd.kind === 'none' || rb.entity.id === rd.entity.id) return null
-    return [{ name: 'add_link', args: { from_id: rb.entity.id, to_id: rd.entity.id, type: 'blocks' } }]
+  // ---- dependencies (3f, widened in 7b): "X blocks Y" / "Y depends on X" / "can't do Y until X is done" /
+  //      "I can't follow up until Priya replies" / "X before I can Y" / "once Priya replies I can follow up" ----
+  {
+    const UNTIL = String.raw`(?:until|till|before|unless)`
+    const DOVERB = String.raw`(?:do|start|finish|send|submit|book|write|file|begin|attach|follow up on|work on|get on with|sort)`
+    let blockerText: string | null = null
+    let blockedText: string | null = null
+    if ((m = /^(.+?) (?:blocks|is blocking) (.+)$/.exec(text))) [blockerText, blockedText] = [m[1], m[2]]
+    else if ((m = /^(.+?) (?:depends on|is waiting on|needs|is blocked by|has to wait for|can'?t happen (?:until|before)) (.+?)(?: (?:first|to be done|being done))?$/.exec(text))) [blockerText, blockedText] = [m[2], m[1]]
+    else if ((m = new RegExp(String.raw`^(?:i )?(?:can'?t|cannot|can not|won'?t be able to) (?:${DOVERB} )?(?:the |my )?(.+?) ${UNTIL} (.+)$`).exec(text))) [blockerText, blockedText] = [m[2], m[1]]
+    else if ((m = new RegExp(String.raw`^(.+?) (?:has to|needs to|must) (?:happen|be done|come) before (?:i can )?(?:${DOVERB} )?(?:the |my )?(.+)$`).exec(text))) [blockerText, blockedText] = [m[1], m[2]]
+    else if ((m = new RegExp(String.raw`^(?:once|after|when) (.+?),? (?:then )?i can (?:${DOVERB} )?(?:the |my )?(.+)$`).exec(text))) [blockerText, blockedText] = [m[1], m[2]]
+    if (blockerText && blockedText) {
+      const focusIds = getFocus().map((f) => f.itemId)
+      // Steps of Things count too (a checklist item is exactly what "follow up" usually names).
+      const pool = [...repo.openItems(200), ...repo.openChecklistItems()]
+      const strip = (s: string): string => s.replace(/\b(?:is|gets|get|has been|have been|are) (?:done|finished|complete|completed|sorted|ready|back|in|confirmed|approved|sent)\b.*$/, '').replace(/\s+(?:first|properly|too)$/, '').trim()
+      // "until Priya replies" / "until I hear from Priya" / "until the dept confirms" → the open wait on that person.
+      const waitOn = /^(?:(?:i )?hear (?:back )?from |(?:the )?reply from |)(.+?)(?:'s reply| replies| reply| responds| answers| gets back(?: to me)?| confirms| confirm| sends? .*| approves?| signs? off| comes? back| has (?:replied|confirmed|responded))?$/.exec(strip(blockerText))
+      let blocker: Item | null = null
+      if (waitOn) {
+        const who = waitOn[1].replace(/^(?:the |from )/, '').trim()
+        const waits = repo.openWaitingItems()
+        const hit = waits.filter((w) => w.waiting_on && (w.waiting_on.toLowerCase() === who.toLowerCase() || words(who).some((x) => x.length > 2 && w.waiting_on!.toLowerCase().includes(x))))
+        if (hit.length === 1) blocker = hit[0]
+      }
+      if (!blocker) {
+        const rb = resolveEntity(strip(blockerText), pool, focusIds)
+        if (rb.kind !== 'none') blocker = rb.entity
+      }
+      const rd = resolveEntity(strip(blockedText), pool, focusIds)
+      if (blocker && rd.kind !== 'none' && blocker.id !== rd.entity.id) return [{ name: 'add_link', args: { from_id: blocker.id, to_id: rd.entity.id, type: 'blocks' } }]
+      // Both sides named but one is unknown → the model decides (it may need to create the blocker as a wait first).
+      return null
+    }
   }
 
   // ---- notes (3d): "add a note to the application that the transcript must be a PDF" / "note: X" ----

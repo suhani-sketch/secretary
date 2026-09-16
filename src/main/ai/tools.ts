@@ -10,7 +10,7 @@ import { log } from '../log'
 import * as repo from '../repo'
 import { clearOffer, getFocus, pushFocus, setOffer, shortId } from './context'
 import { resolveEntity, tokens } from '../entity'
-import { assessTarget, assessmentText, atRiskLines } from '../deadlines'
+import { assessTarget, assessmentText, atRiskLines, noteDateConflicts } from '../deadlines'
 import { afterConflicts, blockingConflicts, bookingWindowForDue, conflictsFor, describeConflict, describeConstraint } from '../planning'
 import { formatClock, formatDue, isOverdue } from '../../shared/format'
 import { assessSlot, bufferRules, describeBuffer } from '../planning'
@@ -740,7 +740,11 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
           notes: notes.map((n) => ({ id: shortId(n.id), body: n.body })),
           history: history.map((h) => `${h.created_at.slice(0, 16).replace('T', ' ')} · ${h.actor}: ${h.summary}`),
           // The user's own progress (record_activity, ticked steps, finished tasks) — what "what have I done?" is asking about.
-          done: history.filter((h) => h.verb === 'completed').map((h) => `${h.summary} (${h.created_at.slice(0, 10)})`).reverse()
+          // A tick that was later undone is not progress: only count completions whose item is STILL done.
+          done: history
+            .filter((h) => h.verb === 'completed' && (h.target_type !== 'item' || repo.getItem(h.target_id)?.status === 'done'))
+            .map((h) => `${h.summary} (${h.created_at.slice(0, 10)})`)
+            .reverse()
         }
       }
     }
@@ -1265,7 +1269,13 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       act({ targetType: 'note', targetId: note.id, projectId, verb: 'note_added', summary: `Note on ${label}: ${note.body.slice(0, 80)}${note.body.length > 80 ? '…' : ''}`, after: note })
       clearOffer()
       const summary = `Note on ${label}: ${note.body}`
-      const phrase = targetType === 'date' ? `Noted for ${label}: ${note.body}. I'll bear it in mind when planning.` : `Noted on ${label}: ${note.body}.`
+      let phrase = targetType === 'date' ? `Noted for ${label}: ${note.body}. I'll bear it in mind when planning.` : `Noted on ${label}: ${note.body}.`
+      // 7b: a note that names a different date from the record is a contradiction the app must voice, not file away.
+      if (targetType === 'item') {
+        const it = repo.getItem(targetId)
+        const clash = it ? noteDateConflicts(it, note.id) : []
+        if (clash.length) phrase += ` Careful — ${clash[0].replace(/^a note on it says "[^"]*" \(([^)]*)\)/, 'that says $1')}. Which is right? Say the word and I'll move the date.`
+      }
       return { result: { ok: true, note_id: shortId(note.id), summary }, applied: { tool: name, summary, phrase, itemId: targetType === 'item' ? targetId : undefined } }
     }
     case 'update_note': {
