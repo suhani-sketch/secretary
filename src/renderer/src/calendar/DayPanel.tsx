@@ -4,7 +4,7 @@ import { formatDue } from '../../../shared/format'
 import type { Selection } from './selection'
 import { IMPORTANCE as IMP, TYPE, grammarOf, importanceOf } from './grammar'
 import { describeRRule } from '../../../core/recurrence'
-import type { Activity } from '../../../shared/types'
+import type { Activity, PlanView } from '../../../shared/types'
 
 /**
  * Day detail panel (spec §8 6b): the complete context for the selected date, directly editable — complete, reschedule,
@@ -282,7 +282,23 @@ function EventDetail({ occ, day, onQuick }: { occ: EventOccurrence; day: DayBund
             ✓ Task done
           </button>
         )}
+        {occ.kind === 'session' && occ.session_state !== 'done' && (
+          <button className={btnDark} onClick={() => void onQuick('mark_session', { id: occ.id, state: 'done' })} title="I did this session">
+            ✓ Session done
+          </button>
+        )}
+        {occ.kind === 'session' && occ.session_state !== 'missed' && (
+          <button className={btn} onClick={() => void onQuick('mark_session', { id: occ.id, state: 'missed' })} title="Skip this session — the plan records it as missed and carries on">
+            Skip session
+          </button>
+        )}
+        {occ.kind === 'session' && (occ.session_state === 'done' || occ.session_state === 'missed') && (
+          <button className={btn} onClick={() => void onQuick('mark_session', { id: occ.id, state: 'planned' })} title="Undo the mark">
+            Back to planned
+          </button>
+        )}
       </div>
+      {occ.kind === 'session' && occ.plan_id && <PlanProgress planId={occ.plan_id} sessionState={occ.session_state} />}
       <div className="flex items-center gap-1.5">
         <input className={`${field} flex-1`} placeholder="Add a note to this event…" value={note} onChange={(e) => setNote(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && note.trim() && (void onQuick('add_note', { event_id: occ.id, body: note.trim() }), setNote(''))} />
         <button className={btn} disabled={!note.trim()} onClick={() => (void onQuick('add_note', { event_id: occ.id, body: note.trim() }), setNote(''))}>
@@ -357,6 +373,35 @@ function DateNote({ date, onQuick }: { date: string; onQuick: Props['onQuick'] }
       <button className={btn} disabled={!note.trim()} onClick={add}>
         Note
       </button>
+    </div>
+  )
+}
+
+/** The plan behind a session: hours done against target, sessions missed, what is left. Words and hours, never a bar or a score. */
+function PlanProgress({ planId, sessionState }: { planId: string; sessionState: string | null }): React.JSX.Element | null {
+  const [view, setView] = useState<PlanView | null>(null)
+  useEffect(() => {
+    let alive = true
+    void window.api.getPlanProgress(planId).then((v) => alive && setView(v)).catch(() => alive && setView(null))
+    return () => {
+      alive = false
+    }
+  }, [planId, sessionState])
+  if (!view) return null
+  const p = view.progress
+  const hours = (min: number): string => `${Math.round(min / 6) / 10} h`
+  return (
+    <div className="rounded-xl bg-[#8FA3B5]/15 p-2 text-[11px] text-stone-700">
+      <div className="flex items-baseline gap-2">
+        <span className="font-medium">📘 {view.plan.title}</span>
+        <span className="text-stone-500">{view.plan.status !== 'active' ? view.plan.status : ''}</span>
+      </div>
+      <div className="mt-0.5">{view.description}.</div>
+      <div className="mt-0.5 text-stone-500">
+        {p.sessions.done} done · {p.sessions.planned} ahead · {p.sessions.missed} missed{p.moved ? ` · ${p.moved} moved` : ''}
+        {p.target_minutes !== null ? ` · target ${hours(p.target_minutes)}` : ''}
+        {view.plan.ends_on ? ` · until ${view.plan.ends_on}` : ''}
+      </div>
     </div>
   )
 }

@@ -53,3 +53,6 @@ body {
 .cal-grid .fc .fc-event.k-due.t-critical { background: #FAF6F0; border-color: #3A2E28; }
 .cal-grid .fc .fc-col-header-cell { vertical-align: top; }
 .cal-grid .fc .fc-col-header-cell-cushion { display: block; width: 100%; padding: 2px 4px; }
+/* Plan sessions: missed ones read as gone-by, never as failure — muted, struck, still on the record. */
+.cal-grid .fc .fc-event.k-session.t-muted { background: transparent; color: #8a7b6e; border: 1px dashed #8FA3B5; box-shadow: none; text-decoration: line-through; }
+.cal-grid .fc .fc-event.k-session.t-low { opacity: 0.75; }

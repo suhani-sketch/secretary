@@ -60,6 +60,13 @@ Calendar (Phase 6) — events occupy time; tasks do not:
 - "Move it to 4" after an event → update_event on that event. "Cancel the meeting" → delete_event. For one occurrence of a recurring series pass occurrence_start_local — the series itself is never rewritten.
 - "What am I doing Thursday?" → get_day. "What have I got this week?" → get_calendar. The app phrases both.
 - INVARIANT 10: never move an existing event to make room for something new. If a new booking clashes, the app refuses with an alternative; relay it. Only the user can say "book it anyway".
+- Conflict LEVELS: the app grades a slot as clear, tight (fits, no breathing room), poor fit (violates a stated buffer or an avoid window) or hard (overlap). Hard is refused; tight and poor are BOOKED and named in the confirmation. When the user asks to book something, call create_event directly — the app does the grading and says "tight fit" / "poor fit" itself. Use check_conflicts only when the user asks whether a time works or you are proposing one.
+- Buffers: "thirty minutes to get home from TISS", "nothing straight after class", "15 minutes before meetings" → add_buffer {minutes, side, scope}. Never a task, never a constraint window.
+
+Plans (6f) — multi-day intentions that generate sessions:
+- "Study econometrics two hours every Monday, Wednesday and Friday until October 15" → create_plan {title "Study econometrics", rrule FREQ=WEEKLY;BYDAY=MO,WE,FR, session_minutes 120, ends_on 2026-10-15, clock_local only if stated, target_hours only if stated}. ONE plan; the app creates the sessions on the calendar. Never create_event for each session, never a task.
+- "Did my econometrics session" / "skip today's study session" → mark_session on the session listed in the context (done / missed). "How is the econometrics plan going?" → get_plan; the app phrases hours done against target — never a streak or a score.
+- Moving one session is update_event on that session (it is an ordinary event); the plan is untouched. replan_sessions only when the user asks to re-lay the sessions ahead; nothing else on the calendar moves.
 
 Reference resolution:
 - "it", "that", "the earlier one" usually mean the most recently touched item listed in the context. When the user gives a new time for something just created ("actually make it 4"), update THAT item — never create a second one. Its reminder moves with it automatically.
@@ -308,10 +315,15 @@ function phraseReadResults(results: ToolResult[]): string | null {
         if (f.today_context.some((t) => /exhaust|tired|wiped|drained|knackered|shattered|burnt|burned|worn|low|down|flat|anxious|stressed|overwhelmed|unwell|sick|ill/i.test(t))) parts.push(`You said you're ${f.today_context[0]} today — this is for the record, not a push. Nothing here needs to happen tonight unless it's a promise.`)
         lines.push(parts.join(' '))
       }
+    } else if (r.name === 'get_plan') {
+      const g = res as unknown as { ok?: boolean; plan?: { title: string; status: string; cadence: string | null; ends_on: string | null }; description?: string; next?: string | null; progress?: { sessions: { missed: number; done: number; planned: number } } }
+      if (!g.plan) lines.push('No plans yet. Say something like "study econometrics two hours every Monday, Wednesday and Friday until October 15" to start one.')
+      else lines.push(`"${g.plan.title}"${g.plan.status !== 'active' ? ` (${g.plan.status})` : ''}${g.plan.cadence ? `, ${g.plan.cadence}` : ''}${g.plan.ends_on ? ` until ${g.plan.ends_on}` : ''}: ${g.description}.${g.next ? ` Next session ${g.next}.` : ''}`)
     } else if (r.name === 'check_conflicts') {
-      const c = res as unknown as { window: string; conflicts: { kind: string; text: string }[]; clear: boolean; next_free_from: string | null }
-      if (!c.conflicts.length) lines.push(`${c.window} is clear.`)
-      else lines.push(`${c.window} clashes with ${c.conflicts.map((x) => x.text).join(' and ')}.${c.clear ? ' Nothing hard, so it can still be booked.' : c.next_free_from ? ` Free from ${c.next_free_from}.` : ''}`)
+      const c = res as unknown as { window: string; level: 'clear' | 'tight' | 'poor' | 'hard'; reasons: string[]; conflicts: { kind: string; text: string }[]; clear: boolean; next_free_from: string | null }
+      if (c.level === 'clear') lines.push(`${c.window} is clear.`)
+      else if (c.level === 'hard') lines.push(`${c.window} clashes with ${c.conflicts.map((x) => x.text).join(' and ')}.${c.next_free_from ? ` Free from ${c.next_free_from}.` : ''}`)
+      else lines.push(`${c.window} works but is a ${c.level === 'tight' ? 'tight fit' : 'poor fit'}: ${c.reasons.join('; ')}.`)
     } else if (r.name === 'search_activity') {
       const h = res.history ?? []
       // Entries arrive newest first as "yyyy-mm-dd hh:mm · actor: summary"; tell it oldest first, by day, without the plumbing.

@@ -3,6 +3,7 @@ import * as repo from '../repo'
 import { formatClock, formatDue } from '../../shared/format'
 import { describeConstraint } from '../planning'
 import { occurrencesBetween } from '../calendar'
+import { describeProgress, planProgress } from '../../core/plans'
 import type { Item, Reminder } from '../../shared/types'
 
 /** Short id the model uses to refer to rows. Resolved back with repo.resolveItemId / resolveReminderId. */
@@ -109,6 +110,12 @@ export function assembleContext(userText: string): string {
   const happenings = repo.runningHappenings()
   const todayCtx = repo.todayContext()
   const commitments = repo.openCommitments()
+  const plans = repo.listPlans().map((p) => {
+    const sessions = repo.sessionsForPlan(p.id)
+    const prog = planProgress(p, sessions, nowUtc)
+    const upcoming = sessions.filter((s) => (s.session_state === 'planned' || s.session_state === 'moved') && s.starts_at_utc >= nowUtc).slice(0, 3)
+    return `- [${shortId(p.id)}] "${p.title}" (${p.status}): ${describeProgress(prog)}${upcoming.length ? ` · next sessions: ${upcoming.map((s) => `[${shortId(s.id)}] ${formatClock(s.starts_at_utc)}`).join(', ')}` : ''}`
+  })
   const dateNotes = repo.dateNotesBetween(now.minus({ days: 1 }).toISODate()!, now.plus({ days: 14 }).toISODate()!)
   const events = occurrencesBetween(now.startOf('day').toUTC().toISO()!, now.plus({ days: 14 }).endOf('day').toUTC().toISO()!)
   const offer = getOffer()
@@ -164,6 +171,9 @@ export function assembleContext(userText: string): string {
     commitments.length
       ? `Open commitments (promises to a named person — they weigh more than plain tasks):\n${commitments.map((c) => `- [${shortId(c.id)}] "${c.title}" to ${c.committed_to ?? 'someone'}${c.due_at_utc ? ` · ${formatDue(c.due_at_utc, c.due_precision)}` : ''}`).join('\n')}`
       : `Open commitments: none.`,
+    plans.length
+      ? `Plans (multi-day; sessions are events with kind session — mark_session by the session id, get_plan by the plan id):\n${plans.join('\n')}`
+      : `Plans: none.`,
     happenings.length
       ? `Happening right now (living activities — never tasks, never history):\n${happenings
           .map((h) => `- [${shortId(h.id)}] ${h.label}${h.ends_at ? ` · ends ${formatClock(h.ends_at)}` : ' · open-ended'}${h.metaphor ? ` (${h.metaphor})` : ''}`)

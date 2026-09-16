@@ -12,8 +12,10 @@ import { clearOffer, getFocus, pushFocus, setOffer, shortId } from './context'
 import { resolveEntity } from '../entity'
 import { afterConflicts, blockingConflicts, bookingWindowForDue, conflictsFor, describeConflict, describeConstraint } from '../planning'
 import { formatClock, formatDue, isOverdue } from '../../shared/format'
+import { assessSlot, bufferRules, describeBuffer } from '../planning'
+import { describeProgress, generateSessionSlots, planProgress } from '../../core/plans'
 import type { ToolDefinition } from './provider'
-import type { Actor, AppliedChange, Item, Note, Reminder } from '../../shared/types'
+import type { Actor, AppliedChange, Item, Note, Reminder, Plan } from '../../shared/types'
 
 /**
  * Tool layer (spec §4). Small, flat schemas. Every call is validated with Zod before it touches
@@ -206,6 +208,39 @@ export const toolSchemas = {
     to_date_local: localDate.describe('Last day, inclusive.')
   }),
   get_day: z.object({ date_local: localDate }).describe('Everything about one day: priorities, due, schedule, reminders, notes, completed. Use for "what am I doing Thursday?".'),
+  create_plan: z
+    .object({
+      title: z.string().min(1).max(120).describe('"Study econometrics", "Train for the 10k".'),
+      rrule: rruleStr.describe('The cadence: "FREQ=WEEKLY;BYDAY=MO,WE,FR".'),
+      session_minutes: z.number().int().min(15).max(8 * 60).describe('Length of each session ("two hours" → 120).'),
+      clock_local: z.string().regex(/^\d{2}:\d{2}$/).optional().describe('"HH:MM" start of each session, if the user said one. Otherwise the app picks a default and says so.'),
+      starts_on: localDate.optional().describe('First day (default today).'),
+      ends_on: localDate.optional().describe('"until October 15" → that date, inclusive.'),
+      target_hours: z.number().min(0.5).max(1000).optional().describe('Total intended effort ("30 hours in total").'),
+      project_id: idRef.optional(),
+      deadline_item_id: idRef.optional().describe('The exam or submission this plan serves, if it is tracked.')
+    }),
+  update_plan: z.object({
+    id: idRef,
+    title: z.string().min(1).max(120).optional(),
+    target_hours: z.number().min(0.5).max(1000).nullable().optional(),
+    ends_on: localDate.nullable().optional(),
+    session_minutes: z.number().int().min(15).max(8 * 60).optional(),
+    rrule: rruleStr.optional().describe('New cadence; future planned sessions are regenerated (done/missed ones stay).'),
+    clock_local: z.string().regex(/^\d{2}:\d{2}$/).optional()
+  }),
+  pause_plan: z.object({ id: idRef, resume: z.boolean().optional().describe('true to resume a paused plan.'), abandon: z.boolean().optional().describe('true to abandon it for good (sessions ahead are removed).') }),
+  mark_session: z.object({
+    id: idRef.describe('The session (an event id).'),
+    state: z.enum(['done', 'missed', 'planned']).describe('done = the user did it; missed = skipped; planned = undo a mark.')
+  }),
+  replan_sessions: z.object({ id: idRef.describe('The plan.'), from_date_local: localDate.optional().describe('Regenerate planned sessions from this day (default today). Done and missed sessions are untouched; nothing else on the calendar moves.') }),
+  get_plan: z.object({ id: idRef.optional(), title: z.string().max(120).optional() }).describe('A plan and its progress: hours done against target, sessions missed, shortfall.'),
+  add_buffer: z.object({
+    minutes: z.number().int().min(5).max(240),
+    side: z.enum(['after', 'before', 'around']).describe('"thirty minutes to get home from TISS" → after; "nothing straight after class" → after; "need 15 min before meetings" → before.'),
+    scope: z.string().max(80).nullable().optional().describe('Title fragment the buffer applies to ("TISS", "class"); null/omitted = every booking.')
+  }),
   check_conflicts: z
     .object({
       starts_at_local: localDateTime.describe(DT_DESC),
@@ -331,6 +366,13 @@ const descriptions: Record<ToolName, string> = {
   delete_event: 'Cancel an event ("cancel the meeting") or skip one occurrence of a series.',
   get_calendar: 'Events between two days, expanded. Use for "what have I got this week?".',
   get_day: 'Everything about one day, aggregated: priorities, due, schedule, reminders, notes, completed. Use for "what am I doing Thursday?".',
+  create_plan: 'A multi-day plan that GENERATES sessions on the calendar: "study econometrics two hours every Monday, Wednesday and Friday until October 15". One plan; the app creates the sessions. Not for a single event.',
+  update_plan: 'Change a plan\'s title, target, end date, cadence or session length. Future planned sessions follow; done and missed ones stay.',
+  pause_plan: 'Pause, resume or abandon a plan.',
+  mark_session: 'The user did a session ("did my econometrics session") or skipped one ("skip today\'s study session").',
+  replan_sessions: 'Regenerate a plan\'s remaining sessions from a date. Only the plan\'s own future sessions move; nothing else on the calendar does.',
+  get_plan: 'How a plan is going: hours done against target, sessions missed, what is left. Phrased by the app.',
+  add_buffer: 'A transition buffer the user asked for: "thirty minutes to get home from TISS", "nothing straight after class", "15 minutes before meetings". Later bookings that ignore it are flagged as a poor fit.',
   check_conflicts: 'What clashes with a proposed time. The app computes it; you phrase it.',
   update_note: 'Change the text of an existing note.',
   delete_note: 'Remove a note.',
@@ -368,6 +410,12 @@ const WRITE_TOOLS: ReadonlySet<string> = new Set([
   'create_event',
   'update_event',
   'delete_event',
+  'create_plan',
+  'update_plan',
+  'pause_plan',
+  'mark_session',
+  'replan_sessions',
+  'add_buffer',
   'add_link',
   'remove_link',
   'add_constraint',
@@ -817,11 +865,13 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
           ? `${formatDue(startsAtUtc, 'day')} to ${formatDue(DateTime.fromISO(endsAtUtc!, { zone: 'utc' }).minus({ days: 1 }).toISO()!, 'day')} (${spanDays} days)`
           : formatDue(startsAtUtc, 'day')
         : `${formatClock(startsAtUtc)}–${DateTime.fromISO(endsAtUtc!, { zone: 'utc' }).toLocal().toFormat('HH:mm')}`
-      const softNote = x.starts_at_local ? conflictsFor(startsAtUtc, endsAtUtc!).filter((c) => !blockingConflicts([c]).length).map(describeConflict) : []
+      // Conflict levels (6f): booked, but named — tight (no breathing room) or poor fit (a stated buffer or avoid window).
+      const fit = x.starts_at_local && !allDay ? assessSlot(startsAtUtc, endsAtUtc!, ev.id) : null
+      const softNote = fit && fit.level !== 'clear' ? [`${fit.level === 'tight' ? 'tight fit' : 'poor fit'}: ${fit.reasons.join('; ')}`] : []
       const summary = `${ev.kind === 'work_block' ? 'Work block' : 'Event'} "${ev.title}" · ${when}${servedItem ? ` · for "${servedItem.title}"` : ''}${rr ? ` · ${describeRRule(rr).replace(/^,\s*/, '')}` : ''}${x.override_conflicts ? ' · booked over a clash as asked' : ''}`
       const phrase = servedItem
-        ? `Time set aside for "${servedItem.title}": ${when}. The task itself is unchanged.${softNote.length ? ` Note: it sits against ${softNote.join(' and ')}.` : ''}`
-        : `${rr ? 'Recurring: ' : ''}"${ev.title}" is on the calendar, ${when}${rr ? ` ${describeRRule(rr).replace(/^,\s*/, '')}` : ''}${x.override_conflicts ? ' (booked over the clash as you asked)' : ''}${softNote.length ? `. Note: it sits against ${softNote.join(' and ')}` : ''}.`
+        ? `Time set aside for "${servedItem.title}": ${when}. The task itself is unchanged.${softNote.length ? ` Note — ${softNote.join('; ')}.` : ''}`
+        : `${rr ? 'Recurring: ' : ''}"${ev.title}" is on the calendar, ${when}${rr ? ` ${describeRRule(rr).replace(/^,\s*/, '')}` : ''}${x.override_conflicts ? ' (booked over the clash as you asked)' : ''}.${softNote.length ? ` Note — ${softNote.join('; ')}.` : ''}`
       return { result: { ok: true, event_id: shortId(ev.id), summary }, applied: { tool: name, summary, phrase } }
     }
     case 'update_event': {
@@ -924,7 +974,13 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
             .filter((o) => o.item_id)
             .map((o) => ({ title: o.title, item: repo.getItem(o.item_id!)?.title ?? o.title, when: `${formatClock(o.occurrence_start_utc).replace(/^.*? at /, '')}${o.occurrence_end_utc ? `–${DateTime.fromISO(o.occurrence_end_utc, { zone: 'utc' }).toLocal().toFormat('HH:mm')}` : ''}` })),
           overdue: d.overdue.map((i) => ({ id: shortId(i.id), title: i.title, was_due: i.due_at_utc ? formatDue(i.due_at_utc, i.due_precision) : null })),
-          schedule: d.scheduled.map((o) => ({ id: shortId(o.id), title: o.title, when: o.all_day ? (o.span === 'single' ? 'all day' : o.span) : `${formatClock(o.occurrence_start_utc).replace(/^.*? at /, '')}${o.occurrence_end_utc ? `–${DateTime.fromISO(o.occurrence_end_utc, { zone: 'utc' }).toLocal().toFormat('HH:mm')}` : ''}`, kind: o.kind, span: o.span })),
+          schedule: d.scheduled.map((o) => ({
+            id: shortId(o.id),
+            title: o.title,
+            when: `${o.all_day ? (o.span === 'single' ? 'all day' : o.span) : `${formatClock(o.occurrence_start_utc).replace(/^.*? at /, '')}${o.occurrence_end_utc ? `–${DateTime.fromISO(o.occurrence_end_utc, { zone: 'utc' }).toLocal().toFormat('HH:mm')}` : ''}`}${o.kind === 'session' ? (o.session_state && o.session_state !== 'planned' ? ` (${o.session_state} session)` : ' (session)') : ''}`,
+            kind: o.kind,
+            span: o.span
+          })),
           reminders: d.reminders.map((r) => ({ id: shortId(r.id), for: r.item_title ?? 'reminder', at: formatClock(r.fire_at_utc).replace(/^.*? at /, ''), state: r.state })),
           waiting: d.waiting.map((w) => ({ who: w.waiting_on, about: w.details })),
           notes: d.notes.map((n) => (n.on_kind === 'date' ? n.note.body : `${n.note.body} (on ${n.on})`)),
@@ -932,6 +988,118 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
           history: d.summary.is_past ? d.history.slice(0, 12).map((a) => a.summary) : undefined
         }
       }
+    }
+    case 'create_plan': {
+      // Phase 6f. One plan row; sessions are ordinary events (kind session, plan_id). Nothing existing is moved (invariant 10):
+      // a session that lands on a hard clash is still created, and the clash is reported so the user can decide.
+      const x = a as z.infer<typeof toolSchemas.create_plan>
+      const zone = DateTime.local().zoneName
+      const rr = validateRRule(x.rrule)!
+      const clock = x.clock_local ?? repo.getPreference('default_session_time', DEFAULT_SESSION_CLOCK).value
+      const plan = repo.insertPlan({
+        title: x.title,
+        projectId: x.project_id ? repo.resolveItemId(x.project_id) : null,
+        targetMinutes: x.target_hours ? Math.round(x.target_hours * 60) : null,
+        startsOn: x.starts_on ?? DateTime.local().toISODate()!,
+        endsOn: x.ends_on ?? null,
+        rrule: rr,
+        sessionMinutes: x.session_minutes,
+        deadlineItem: x.deadline_item_id ? repo.resolveItemId(x.deadline_item_id) : null
+      })
+      const slots = generateSessionSlots(plan, clock, zone)
+      let clashes = 0
+      for (const s of slots) {
+        if (blockingConflicts(conflictsFor(s.startUtc, s.endUtc)).length) clashes++
+        repo.insertEvent({ title: plan.title, startsAtUtc: s.startUtc, endsAtUtc: s.endUtc, allDay: false, tz: zone, kind: 'session', planId: plan.id, sessionState: 'planned', projectId: plan.project_id })
+      }
+      act({ targetType: 'plan', targetId: plan.id, projectId: plan.project_id, verb: 'created', summary: `Plan "${plan.title}": ${slots.length} sessions of ${x.session_minutes} min ${describeRRule(rr).replace(/^,\s*/, '')}${plan.ends_on ? ` until ${formatDue(DateTime.fromISO(plan.ends_on, { zone }).toUTC().toISO()!, 'day')}` : ''}${plan.target_minutes ? ` · target ${Math.round(plan.target_minutes / 6) / 10} h` : ''}`, after: plan, reversible: false })
+      clearOffer()
+      const total = slots.length * x.session_minutes
+      const summary = `Plan "${plan.title}" · ${slots.length} sessions · ${Math.round(total / 6) / 10} h${plan.target_minutes ? ` of ${Math.round(plan.target_minutes / 6) / 10} h target` : ''}${clashes ? ` · ${clashes} clash${clashes === 1 ? '' : 'es'}` : ''}`
+      const phrase =
+        `"${plan.title}" is planned: ${slots.length} sessions of ${x.session_minutes >= 60 ? `${Math.round(x.session_minutes / 6) / 10} h` : `${x.session_minutes} min`} ${describeRRule(rr).replace(/^,\s*/, '')}, ${x.clock_local ? `at ${clock}` : `at ${clock} by default — say if another time suits`}` +
+        `${plan.ends_on ? `, until ${formatDue(DateTime.fromISO(plan.ends_on, { zone }).toUTC().toISO()!, 'day')}` : ''}. That is ${Math.round(total / 6) / 10} h on the calendar${plan.target_minutes ? ` against a ${Math.round(plan.target_minutes / 6) / 10} h target` : ''}.` +
+        `${clashes ? ` ${clashes} of them ${clashes === 1 ? 'lands' : 'land'} on something already booked — I have not moved anything; tell me which to shift.` : ''}`
+      return { result: { ok: true, plan_id: shortId(plan.id), sessions: slots.length, clashes, summary }, applied: { tool: name, summary, phrase } }
+    }
+    case 'update_plan': {
+      const x = a as z.infer<typeof toolSchemas.update_plan>
+      const plan = repo.getPlan(repo.resolvePlanId(x.id))
+      if (!plan) throw new Error('No such plan')
+      const rr = x.rrule ? validateRRule(x.rrule) : undefined
+      const after = repo.updatePlan(plan.id, {
+        ...(x.title !== undefined ? { title: x.title } : {}),
+        ...(x.target_hours !== undefined ? { targetMinutes: x.target_hours === null ? null : Math.round(x.target_hours * 60) } : {}),
+        ...(x.ends_on !== undefined ? { endsOn: x.ends_on } : {}),
+        ...(x.session_minutes !== undefined ? { sessionMinutes: x.session_minutes } : {}),
+        ...(rr !== undefined ? { rrule: rr } : {})
+      })
+      let regenerated = 0
+      if (rr !== undefined || x.session_minutes !== undefined || x.ends_on !== undefined || x.clock_local !== undefined) regenerated = regenerateSessions(after, x.clock_local)
+      act({ targetType: 'plan', targetId: after.id, projectId: after.project_id, verb: 'updated', summary: `Plan "${after.title}" changed${regenerated ? ` · ${regenerated} future sessions regenerated` : ''}`, before: plan, after, reversible: false })
+      clearOffer()
+      const summary = `Plan "${after.title}" updated${regenerated ? ` · ${regenerated} sessions ahead regenerated` : ''}`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Updated "${after.title}".${regenerated ? ` The ${regenerated} sessions ahead follow the new shape; done and missed ones are untouched.` : ''}` } }
+    }
+    case 'pause_plan': {
+      const x = a as z.infer<typeof toolSchemas.pause_plan>
+      const plan = repo.getPlan(repo.resolvePlanId(x.id))
+      if (!plan) throw new Error('No such plan')
+      const status: Plan['status'] = x.abandon ? 'abandoned' : x.resume ? 'active' : 'paused'
+      let removed = 0
+      if (status === 'abandoned') removed = repo.deleteFutureSessions(plan.id, new Date().toISOString())
+      const after = repo.updatePlan(plan.id, { status })
+      if (status === 'active') regenerateSessions(after)
+      act({ targetType: 'plan', targetId: plan.id, projectId: plan.project_id, verb: 'updated', summary: `Plan "${plan.title}" ${status}${removed ? ` · ${removed} sessions ahead removed` : ''}`, before: plan, after, reversible: false })
+      clearOffer()
+      const summary = `Plan "${plan.title}" ${status}`
+      const phrase = status === 'paused' ? `Paused "${plan.title}". Its sessions stay on the calendar but nothing will be marked missed while it rests.` : status === 'active' ? `"${plan.title}" is active again.` : `Abandoned "${plan.title}" — ${removed} sessions ahead removed; what was done stays on the record.`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase } }
+    }
+    case 'mark_session': {
+      const x = a as z.infer<typeof toolSchemas.mark_session>
+      const ev = repo.getEvent(repo.resolveEventId(x.id))
+      if (!ev || ev.kind !== 'session') throw new Error('That is not a plan session')
+      const after = repo.updateEvent(ev.id, { sessionState: x.state })
+      const plan = ev.plan_id ? repo.getPlan(ev.plan_id) : undefined
+      act({ targetType: 'event', targetId: ev.id, projectId: plan?.project_id ?? null, verb: x.state === 'done' ? 'completed' : x.state === 'missed' ? 'session_missed' : 'updated', summary: `Session "${ev.title}" ${formatClock(ev.starts_at_utc)} marked ${x.state}`, before: ev, after })
+      clearOffer()
+      const progress = plan ? planProgress(plan, repo.sessionsForPlan(plan.id), new Date().toISOString()) : null
+      const summary = `Session "${ev.title}" · ${x.state}`
+      const phrase = `${x.state === 'done' ? 'Done' : x.state === 'missed' ? 'Skipped' : 'Back to planned'}: "${ev.title}" ${formatClock(ev.starts_at_utc)}.${progress ? ` ${capital(describeProgress(progress))}.` : ''}`
+      return { result: { ok: true, summary, progress }, applied: { tool: name, summary, phrase } }
+    }
+    case 'replan_sessions': {
+      const x = a as z.infer<typeof toolSchemas.replan_sessions>
+      const plan = repo.getPlan(repo.resolvePlanId(x.id))
+      if (!plan) throw new Error('No such plan')
+      const n = regenerateSessions(plan, undefined, x.from_date_local)
+      act({ targetType: 'plan', targetId: plan.id, projectId: plan.project_id, verb: 'updated', summary: `Plan "${plan.title}": ${n} sessions ahead regenerated`, reversible: false })
+      clearOffer()
+      const summary = `Plan "${plan.title}" · ${n} sessions ahead regenerated`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Re-laid the sessions ahead for "${plan.title}": ${n} of them. Nothing else on the calendar moved.` } }
+    }
+    case 'get_plan': {
+      const x = a as z.infer<typeof toolSchemas.get_plan>
+      let plan: Plan | undefined
+      if (x.id) plan = repo.getPlan(repo.resolvePlanId(x.id))
+      else {
+        const pool = repo.listPlans()
+        plan = x.title ? pool.find((p) => p.title.toLowerCase().includes(x.title!.toLowerCase())) ?? pool[0] : pool[0]
+      }
+      if (!plan) return { result: { ok: false, error: 'no plans' } }
+      const sessions = repo.sessionsForPlan(plan.id)
+      const progress = planProgress(plan, sessions, new Date().toISOString())
+      return { result: { plan: { id: shortId(plan.id), title: plan.title, status: plan.status, cadence: plan.rrule ? describeRRule(plan.rrule).replace(/^,\s*/, '') : null, ends_on: plan.ends_on }, progress, description: describeProgress(progress), next: progress.next_session_utc ? formatClock(progress.next_session_utc) : null } }
+    }
+    case 'add_buffer': {
+      const x = a as z.infer<typeof toolSchemas.add_buffer>
+      const scope = x.scope?.trim() || null
+      const c = repo.insertConstraint({ kind: 'avoid', label: `buffer|${x.side}|${x.minutes}|${scope ?? ''}`, startsAt: null, endsAt: null, rrule: null, source: ctx.actor === 'assistant' ? 'inferred' : 'stated' })
+      act({ targetType: 'constraint', targetId: c.id, verb: 'created', summary: `Buffer: ${describeBuffer(x.side, x.minutes, scope)}`, after: c })
+      clearOffer()
+      const summary = `Buffer · ${describeBuffer(x.side, x.minutes, scope)}`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Noted — ${describeBuffer(x.side, x.minutes, scope)}. Anything booked tighter than that will be flagged as a poor fit.` } }
     }
     case 'add_constraint': {
       const x = a as z.infer<typeof toolSchemas.add_constraint>
@@ -974,7 +1142,17 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const s = repo.localToUtc(x.starts_at_local)
       const e = x.ends_at_local ? repo.localToUtc(x.ends_at_local) : DateTime.fromISO(s, { zone: 'utc' }).plus({ hours: 1 }).toISO()!
       const cs = conflictsFor(s, e)
-      return { result: { window: `${formatClock(s)} – ${formatClock(e)}`, conflicts: cs.map((c) => ({ kind: c.kind, text: describeConflict(c) })), clear: blockingConflicts(cs).length === 0, next_free_from: afterConflicts(blockingConflicts(cs)) ? formatClock(afterConflicts(blockingConflicts(cs))!) : null } }
+      const assessment = assessSlot(s, e)
+      return {
+        result: {
+          window: `${formatClock(s)} – ${formatClock(e)}`,
+          level: assessment.level,
+          reasons: assessment.reasons,
+          conflicts: cs.map((c) => ({ kind: c.kind, text: describeConflict(c) })),
+          clear: assessment.level === 'clear',
+          next_free_from: assessment.next_free_utc ? formatClock(assessment.next_free_utc) : null
+        }
+      }
     }
     case 'add_note': {
       const x = a as z.infer<typeof toolSchemas.add_note>
@@ -1748,4 +1926,28 @@ export function doneLineFor(label: string, metaphor: string | null): string {
   if (metaphor === 'focus') return METAPHORS.focus.doneLine
   if (metaphor === 'tea' || metaphor === 'egg' || metaphor === 'plant') return `${capital(label)} — ready.`
   return `${capital(label)} — done.`
+}
+
+/** Sessions default to this start when the user gave none; the phrase says so and invites a better time. */
+const DEFAULT_SESSION_CLOCK = '17:00'
+
+/**
+ * Regenerate a plan's sessions from a day forward: planned/moved sessions from that day are removed and re-laid on the plan's
+ * cadence; done and missed sessions are history and stay. Nothing else on the calendar moves (invariant 10).
+ */
+function regenerateSessions(plan: Plan, clockLocal?: string, fromDateLocal?: string): number {
+  if (plan.status !== 'active' || !plan.rrule || !plan.session_minutes) return 0
+  const zone = DateTime.local().zoneName
+  const fromUtc = fromDateLocal ? DateTime.fromISO(fromDateLocal, { zone }).startOf('day').toUTC().toISO()! : new Date().toISOString()
+  const existing = repo.sessionsForPlan(plan.id)
+  const kept = existing.filter((s) => !((s.session_state === 'planned' || s.session_state === 'moved') && s.starts_at_utc >= fromUtc))
+  const doneMin = kept.filter((s) => s.session_state === 'done').reduce((n, s) => n + (s.ends_at_utc ? Math.round((new Date(s.ends_at_utc).getTime() - new Date(s.starts_at_utc).getTime()) / 60_000) : 0), 0)
+  repo.deleteFutureSessions(plan.id, fromUtc)
+  // Keep the clock the existing sessions used unless a new one was given.
+  const sample = existing.find((s) => s.starts_at_utc)
+  const clock = clockLocal ?? (sample ? DateTime.fromISO(sample.starts_at_utc, { zone: 'utc' }).setZone(zone).toFormat('HH:mm') : repo.getPreference('default_session_time', DEFAULT_SESSION_CLOCK).value)
+  const remainingTarget = plan.target_minutes !== null ? Math.max(0, plan.target_minutes - doneMin) : null
+  const slots = generateSessionSlots({ ...plan, target_minutes: remainingTarget }, clock, zone, { fromUtc })
+  for (const s of slots) repo.insertEvent({ title: plan.title, startsAtUtc: s.startUtc, endsAtUtc: s.endUtc, allDay: false, tz: zone, kind: 'session', planId: plan.id, sessionState: 'planned', projectId: plan.project_id })
+  return slots.length
 }

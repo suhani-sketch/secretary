@@ -49,7 +49,9 @@ const api: SecretaryApi = {
   getDay: (dateLocal) => ipcRenderer.invoke(IPC.getDay, dateLocal),
   getDays: (fromDateLocal, days) => ipcRenderer.invoke(IPC.getDays, fromDateLocal, days),
   activitiesForTarget: (targetType, targetId, limit) => ipcRenderer.invoke(IPC.activitiesForTarget, targetType, targetId, limit),
-  listUnscheduled: () => ipcRenderer.invoke(IPC.listUnscheduled)
+  listUnscheduled: () => ipcRenderer.invoke(IPC.listUnscheduled),
+  listPlans: () => ipcRenderer.invoke(IPC.listPlans),
+  getPlanProgress: (planId) => ipcRenderer.invoke(IPC.getPlanProgress, planId)
 }
 
 contextBridge.exposeInMainWorld('api', api)

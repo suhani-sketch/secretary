@@ -9,6 +9,7 @@ import * as repo from './repo'
 import { TICK_MS, startScheduler, startupSweep, stopScheduler, tick } from './scheduler'
 import { buildDay, buildDays, occurrencesBetween } from './calendar'
 import { inferImportance } from '../core/importance'
+import { describeProgress, planProgress } from '../core/plans'
 import { createTray, refreshTrayMenu } from './tray'
 import { GeminiProvider } from './ai/gemini'
 import type { Provider } from './ai/provider'
@@ -480,6 +481,14 @@ function registerIpc(): void {
     return repo.activitiesFor(targetType, targetId, limit ?? 20)
   })
   ipcMain.handle(IPC.listUnscheduled, () => repo.unscheduledObligations())
+  ipcMain.handle(IPC.listPlans, () => repo.listPlans())
+  ipcMain.handle(IPC.getPlanProgress, (_e, planId: string) => {
+    const plan = repo.getPlan(planId)
+    if (!plan) throw new Error('No such plan')
+    const sessions = repo.sessionsForPlan(plan.id)
+    const progress = planProgress(plan, sessions, new Date().toISOString())
+    return { plan, sessions, progress, description: describeProgress(progress) }
+  })
   ipcMain.handle(IPC.getDays, (_e, fromDateLocal: string, days: number) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDateLocal)) throw new Error('Bad date')
     return buildDays(fromDateLocal, Math.max(1, Math.min(42, Math.floor(Number(days) || 7))))

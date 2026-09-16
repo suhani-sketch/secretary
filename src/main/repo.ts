@@ -3,6 +3,7 @@ import { DateTime } from 'luxon'
 import { getDb } from './db'
 import type {
   Happening,
+  Plan,
   CalendarEvent,
   Activity,
   Actor,
@@ -1181,4 +1182,76 @@ export function unscheduledObligations(limit = 60): Item[] {
        ORDER BY i.due_at_utc LIMIT ?`
     )
     .all(limit) as Item[]
+}
+
+// ---- Plans (spec §3 `plans`, Phase 6f). Sessions are events with kind='session' and plan_id. ------------------------
+
+export interface NewPlan {
+  title: string
+  projectId?: string | null
+  targetMinutes?: number | null
+  startsOn: string
+  endsOn?: string | null
+  rrule?: string | null
+  sessionMinutes?: number | null
+  deadlineItem?: string | null
+}
+
+export function insertPlan(p: NewPlan): Plan {
+  const id = randomUUID()
+  const ts = nowIso()
+  getDb()
+    .prepare(`INSERT INTO plans (id, title, project_id, target_minutes, starts_on, ends_on, rrule, session_minutes, deadline_item, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`)
+    .run(id, p.title.trim(), p.projectId ?? null, p.targetMinutes ?? null, p.startsOn, p.endsOn ?? null, p.rrule ?? null, p.sessionMinutes ?? null, p.deadlineItem ?? null, ts, ts)
+  return getPlan(id)!
+}
+
+export function getPlan(id: string): Plan | undefined {
+  return getDb().prepare('SELECT * FROM plans WHERE id = ?').get(id) as Plan | undefined
+}
+
+export function listPlans(includeClosed = false): Plan[] {
+  return getDb().prepare(includeClosed ? 'SELECT * FROM plans ORDER BY created_at DESC' : `SELECT * FROM plans WHERE status IN ('active','paused') ORDER BY created_at DESC`).all() as Plan[]
+}
+
+export function resolvePlanId(ref: string): string {
+  const rows = getDb().prepare('SELECT id FROM plans WHERE id LIKE ?').all(`${ref.trim()}%`) as { id: string }[]
+  if (rows.length === 1) return rows[0].id
+  if (rows.length === 0) throw new Error(`No plan with id "${ref}"`)
+  throw new Error(`Ambiguous plan id "${ref}"`)
+}
+
+export function updatePlan(id: string, p: Partial<{ title: string; targetMinutes: number | null; endsOn: string | null; rrule: string | null; sessionMinutes: number | null; status: Plan['status']; deadlineItem: string | null; projectId: string | null }>): Plan {
+  const sets: string[] = []
+  const vals: unknown[] = []
+  const set = (c: string, v: unknown): void => {
+    sets.push(`${c} = ?`)
+    vals.push(v)
+  }
+  if (p.title !== undefined) set('title', p.title.trim())
+  if (p.targetMinutes !== undefined) set('target_minutes', p.targetMinutes)
+  if (p.endsOn !== undefined) set('ends_on', p.endsOn)
+  if (p.rrule !== undefined) set('rrule', p.rrule)
+  if (p.sessionMinutes !== undefined) set('session_minutes', p.sessionMinutes)
+  if (p.status !== undefined) set('status', p.status)
+  if (p.deadlineItem !== undefined) set('deadline_item', p.deadlineItem)
+  if (p.projectId !== undefined) set('project_id', p.projectId)
+  if (!sets.length) return getPlan(id)!
+  set('updated_at', nowIso())
+  vals.push(id)
+  getDb().prepare(`UPDATE plans SET ${sets.join(', ')} WHERE id = ?`).run(...vals)
+  return getPlan(id)!
+}
+
+export function sessionsForPlan(planId: string): CalendarEvent[] {
+  return getDb().prepare(`SELECT * FROM events WHERE plan_id = ? ORDER BY starts_at_utc`).all(planId) as CalendarEvent[]
+}
+
+/** Planned or moved sessions across all active plans (for the scheduler's missed-session sweep). */
+export function openSessions(): CalendarEvent[] {
+  return getDb().prepare(`SELECT e.* FROM events e JOIN plans p ON p.id = e.plan_id WHERE e.kind = 'session' AND e.session_state IN ('planned','moved') AND p.status = 'active' ORDER BY e.starts_at_utc`).all() as CalendarEvent[]
+}
+
+export function deleteFutureSessions(planId: string, fromUtc: string): number {
+  return getDb().prepare(`DELETE FROM events WHERE plan_id = ? AND kind = 'session' AND session_state IN ('planned','moved') AND starts_at_utc >= ?`).run(planId, fromUtc).changes
 }

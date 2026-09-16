@@ -3,7 +3,10 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 6 — Calendar and temporal planning. 6a built 2026-09-16 (testable); 6b–6f next. Phase 5 complete (§11F passed).
+## Current phase: Phase 6 — Calendar and temporal planning. 6a–6f built 2026-09-16 (6f testable). Phase 5 complete (§11F passed).
+Phase 6 "Done when" = §11C end to end across a restart; steps 15–21 exercised on scratch DB c6 (see 6f). Steps 4, 12, 13 need a real mouse.
+**Restart (Phase 0 reboot) test is DEFERRED at the user's request — do not raise it.** The user registered a Task Scheduler logon task
+`Secretary` (20 s delay) after Explorer's Shell-Core log showed the HKCU Run entry being skipped; `<userData>/startup.log` logs each launch.
 
 ## Phase 6 — architecture decisions (2026-09-16)
 - **Library: FullCalendar pinned to 6.1.21** (`@fullcalendar/core|react|daygrid|timegrid|list|interaction`, exact versions — they
@@ -19,6 +22,35 @@ Update it at the end of every session (spec §11).
   reuse all of it. `src/main/calendar.ts` is the SQLite glue (`buildDay`, `occurrencesBetween`); `planning.ts` (conflicts) still
   imports repo and moves to core when 6f touches it.
 - **Migration 7:** `plans` table; `events.plan_id`, `events.session_state`; index on `events.starts_at_utc`.
+
+## Phase 6f — plans and conflict levels (2026-09-16)
+- **Plans** (`plans` table, migration 7; `events.plan_id` + `events.session_state` planned|done|missed, migration 8 adds
+  `events.item_id`). `src/core/plans.ts` (platform-independent): `generateSessionSlots(plan, clockLocal, tz, {fromUtc, max})`
+  (wall-clock rrule), `planProgress(plan, sessions, nowUtc)`, `sessionsToMarkMissed(sessions, nowUtc, grace 120 min)`,
+  `describeProgress` → "2 h done of 30 h · 1 session missed · 28 h to go, 24 h of it scheduled — 4 h not yet placed".
+- Tools: `create_plan {title, rrule, session_minutes, clock_local? (default 17:00), starts_on?, ends_on?, target_hours?,
+  project_id?, deadline_item_id?}` writes ONE plan row + its sessions as `events` kind `work_block` with `plan_id`;
+  `update_plan`, `pause_plan {resume|abandon}`, `mark_session {id, state}`, `replan_sessions` (deletes future *planned* sessions
+  and regenerates; done/missed rows are never touched), `get_plan` (read, phrased in code). Sessions are ordinary events: drag
+  one and only that one moves (`update_event`), the series row is never rewritten (invariant 10).
+- Router (tier 0): "Study econometrics two hours every Monday, Wednesday and Friday until October 15, 30 hours in total" →
+  create_plan; "did / skip friday's econometrics session" → mark_session done|missed (day parsed, else the nearest session);
+  "how is the econometrics plan going" → get_plan. Context lists plans with ids + progress; the prompt has a Plans section.
+- Scheduler: `sweepMissedSessions` on each tick marks planned sessions that ended >2 h ago as missed (system activity). get_day
+  says "(missed session)"; the Day panel shows `PlanProgress` and "Session done" / "Skip session" buttons through the tool layer.
+- **Conflict levels** (`planning.assessSlot(start, end, ignoreEventId?) → {level clear|tight|poor|hard, reasons, next_free_utc}`):
+  hard = overlap with an event or an `unavailable` constraint → refused with an alternative (unless `override_conflicts`);
+  poor = inside a buffer rule or an `avoid` window → booked, phrase says "Note — poor fit: …"; tight = <15 min gap either
+  side → booked, "Note — tight fit: …". The app grades, the user decides; nothing is ever moved silently.
+- **Buffers** are constraints kind `avoid` with label `buffer|after|30|TISS` (`add_buffer {minutes, side after|before|around,
+  scope}`; `bufferRules`, `describeBuffer`, `DEFAULT_BUFFER_MIN=15`). Router: "thirty minutes to get home from TISS", "nothing
+  straight after class". The rail renders them as "↔ buffer · 30 min after “TISS”", never the raw label.
+- Verified on scratch c6: plan → 13 sessions / 26 h against a 30 h target ("4 h not yet placed"); "Quick coffee" 5 min after a
+  meeting → booked, tight fit named; call 10 min after a TISS meeting with a 30 min TISS buffer → booked, poor fit named;
+  overlap with an existing meeting → refused with the next free slot; "skip friday's econometrics session" → that session
+  missed, progress line updated; Week header chips count session hours. Not observed here: a mouse drag of a session, and the
+  live missed-session sweep (needs a session to actually pass).
+- Dev-hash auto-open now waits for `info` (not items), so `SECRETARY_VIEW=calendar…` works on an empty scratch DB.
 
 ## Phase 6e — manipulation (2026-09-16)
 - `calendar/dragging.ts`: `moveEntry` / `resizeEntry` / `dropExternal` — every drag ends in a tool call (`update_event` with

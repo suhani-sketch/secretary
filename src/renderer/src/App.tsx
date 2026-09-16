@@ -184,7 +184,7 @@ export default function App(): React.JSX.Element {
   // Developer hook: "#project" / "#history" in the URL opens the first Thing's view / first item's history once loaded.
   const [autoOpened, setAutoOpened] = useState(false)
   useEffect(() => {
-    if (autoOpened || items.length === 0) return
+    if (autoOpened || !info) return
     const hash = window.location.hash.replace('#', '')
     const light = /^light:(\w+)$/.exec(hash)
     if (light) setTimeChoice(light[1] as TimeChoice)
@@ -199,7 +199,7 @@ export default function App(): React.JSX.Element {
       setEditing({ kind: 'history', item: items[0] })
     }
     setAutoOpened(true)
-  }, [items, autoOpened])
+  }, [items, info, autoOpened])
 
   const say = (msg: string): void => {
     setFlash(msg)
@@ -609,7 +609,13 @@ export default function App(): React.JSX.Element {
                 <ul className="flex flex-col gap-0.5 overflow-y-auto">
                   {constraints.slice(0, 8).map((c) => (
                     <li key={c.id} className="group text-xs flex items-center gap-2 rounded-lg px-1 py-0.5 hover:bg-white/80">
-                      <span>{c.kind === 'unavailable' ? '🚫' : c.kind === 'avoid' ? '⚠️' : '👍'}</span>
+                      <span>{c.label.startsWith('buffer|') ? '↔' : c.kind === 'unavailable' ? '🚫' : c.kind === 'avoid' ? '⚠️' : '👍'}</span>
+                      {c.label.startsWith('buffer|') ? (
+                        <span className="flex-1 truncate text-stone-700" title="A transition buffer: bookings tighter than this are flagged as a poor fit">
+                          <span className="font-medium">buffer</span>
+                          <span className="text-stone-500">{` · ${c.label.split('|')[2]} min ${c.label.split('|')[1] === 'around' ? 'either side of' : c.label.split('|')[1]} ${c.label.split('|')[3] ? `“${c.label.split('|')[3]}”` : 'anything'}`}</span>
+                        </span>
+                      ) : (
                       <span className="flex-1 truncate text-stone-700">
                         <span className="font-medium">{c.label}</span>
                         <span className="text-stone-500">
@@ -619,6 +625,7 @@ export default function App(): React.JSX.Element {
                           {c.rrule ? ' ↻' : ''}
                         </span>
                       </span>
+                      )}
                       <button className="opacity-0 group-hover:opacity-100 text-stone-500 hover:text-red-700" title="Remove" onClick={() => void quick('remove_constraint', { id: c.id })}>
                         ×
                       </button>

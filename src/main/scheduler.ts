@@ -5,6 +5,7 @@ import { showToast } from './notifier'
 import * as repo from './repo'
 import type { Reminder } from '../shared/types'
 import { doneLineFor } from './ai/tools'
+import { sessionsToMarkMissed } from '../core/plans'
 
 export const TICK_MS = 30_000
 
@@ -170,6 +171,22 @@ function endDueHappenings(now: DateTime, late: boolean): number {
 }
 const capital = (s: string): string => (s ? s[0].toUpperCase() + s.slice(1) : s)
 
+/**
+ * Plans (Phase 6f): a planned session whose end passed two hours ago without being marked done was missed. Recorded
+ * deterministically as session_state='missed' with a system activity; the plan stays active and its shortfall grows.
+ * No toast — a missed study session is planning information, not an alarm.
+ */
+function sweepMissedSessions(now: DateTime): void {
+  const missed = sessionsToMarkMissed(repo.openSessions(), now.toISO()!)
+  for (const s of missed) {
+    repo.updateEvent(s.id, { sessionState: 'missed' })
+    const plan = s.plan_id ? repo.getPlan(s.plan_id) : undefined
+    repo.insertActivity({ targetType: 'event', targetId: s.id, projectId: plan?.project_id ?? null, verb: 'session_missed', actor: 'system', summary: `Missed session "${s.title}" (${DateTime.fromISO(s.starts_at_utc, { zone: 'utc' }).toLocal().toFormat('ccc d LLL HH:mm')})${plan ? ` — plan "${plan.title}"` : ''}`, reversible: false })
+    log('info', 'session.missed', `"${s.title}" ${s.starts_at_utc}`)
+  }
+  if (missed.length) onDeliveredCb?.()
+}
+
 export function startupSweep(): number {
   const now = DateTime.utc()
   endDueHappenings(now, true)
@@ -192,6 +209,7 @@ export function tick(reason = 'interval'): void {
   try {
     const now = DateTime.utc()
     endDueHappenings(now, false)
+    sweepMissedSessions(now)
     const due = repo.duePendingReminders(now.toISO()!)
     if (due.length > 0) log('info', 'tick.due', `${due.length} reminder(s) due (${reason})`)
     for (const r of due) {

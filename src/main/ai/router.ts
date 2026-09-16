@@ -383,6 +383,101 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     if (when) return [{ name: 'add_note', args: { date_local: when.exact ? when.dateTime!.slice(0, 10) : when.date, body: restoreCase(m[2]) } }]
   }
 
+  // ---- plans (6f): "study econometrics two hours every monday, wednesday and friday until october 15" → ONE plan ----
+  if ((m = /^(?:i(?:'d| would) like to |i want to |i need to |let'?s |plan to |i'?m going to )?(study|revise|practise|practice|train|work on|read|write|prepare|prep|learn|rehearse|exercise|run|swim|code|research)\b (.+)$/.exec(text)) && /\b(every|each|daily|weekdays?|mondays?|tuesdays?|wednesdays?|thursdays?|fridays?|saturdays?|sundays?)\b/.test(m[2]) && /\b(\d+(?:\.\d+)?|one|two|three|four|half an?|an?) ?(?:-| )?(hours?|hrs?|h|minutes?|mins?)\b/.test(m[2])) {
+    const verb = m[1]
+    let rest = m[2]
+    // duration
+    const durM = /\b(\d+(?:\.\d+)?|one|two|three|four|half an?|an?) ?(?:-| )?(hours?|hrs?|h|minutes?|mins?)\b(?: (?:a |per )?(?:day|session|time))?/.exec(rest)!
+    const num = durM[1] === 'one' || durM[1] === 'an' || durM[1] === 'a' ? 1 : durM[1] === 'two' ? 2 : durM[1] === 'three' ? 3 : durM[1] === 'four' ? 4 : /^half/.test(durM[1]) ? 0.5 : Number(durM[1])
+    const sessionMinutes = /^h|^hr|^hour/.test(durM[2]) ? Math.round(num * 60) : Math.round(num)
+    rest = rest.replace(durM[0], ' ')
+    // until <date>
+    let endsOn: string | undefined
+    const untilM = /\b(?:until|till|through|up to|before) (.+?)(?:\s*$|,)/.exec(rest)
+    if (untilM) {
+      const w = parseWhen(untilM[1])
+      if (w) endsOn = w.exact ? w.dateTime!.slice(0, 10) : w.date
+      rest = rest.replace(untilM[0], ' ')
+    }
+    // total target: "30 hours in total"
+    const totalM = /\b(\d+(?:\.\d+)?) ?(?:hours?|hrs?|h) (?:in total|total|altogether|overall)\b/.exec(rest)
+    const targetHours = totalM ? Number(totalM[1]) : undefined
+    if (totalM) rest = rest.replace(totalM[0], ' ')
+    // days: "every monday, wednesday and friday" / "every weekday" / "daily" / "mon wed fri"
+    const dayMap: Record<string, string> = { mon: 'MO', monday: 'MO', tue: 'TU', tues: 'TU', tuesday: 'TU', wed: 'WE', wednesday: 'WE', thu: 'TH', thur: 'TH', thurs: 'TH', thursday: 'TH', fri: 'FR', friday: 'FR', sat: 'SA', saturday: 'SA', sun: 'SU', sunday: 'SU' }
+    const days = [...rest.matchAll(/\b(mon|monday|tues?|tuesday|wed|wednesday|thur?s?|thursday|fri|friday|sat|saturday|sun|sunday)s?\b/g)].map((x) => dayMap[x[1].replace(/s$/, '')]).filter(Boolean)
+    let rrule: string | null = null
+    if (days.length) rrule = `FREQ=WEEKLY;BYDAY=${[...new Set(days)].join(',')}`
+    else if (/\bweekdays?\b/.test(rest)) rrule = 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR'
+    else if (/\b(daily|every day|each day)\b/.test(rest)) rrule = 'FREQ=DAILY'
+    else if (/\bevery week\b|\bweekly\b/.test(rest)) rrule = 'FREQ=WEEKLY'
+    // clock
+    const atM = /\bat (\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/.exec(rest)
+    let clock: string | undefined
+    if (atM) {
+      let h = Number(atM[1])
+      if (atM[3] === 'pm' && h < 12) h += 12
+      else if (atM[3] === 'am' && h === 12) h = 0
+      else if (!atM[3] && h >= 1 && h <= 6) h += 12
+      clock = `${String(h).padStart(2, '0')}:${atM[2] ?? '00'}`
+      rest = rest.replace(atM[0], ' ')
+    } else if (/\bmornings?\b/.test(rest)) clock = '09:00'
+    else if (/\bafternoons?\b/.test(rest)) clock = '14:00'
+    else if (/\bevenings?\b/.test(rest)) clock = '18:00'
+    if (rrule && sessionMinutes >= 15) {
+      const subject = restoreCase(
+        rest
+          .replace(/\b(every|each|daily|weekly|weekdays?|on|and|,|mornings?|afternoons?|evenings?|for|a|per|day|session|time|in total|total)\b/g, ' ')
+          .replace(/\b(mon|monday|tues?|tuesday|wed|wednesday|thur?s?|thursday|fri|friday|sat|saturday|sun|sunday)s?\b/g, ' ')
+          .replace(/[,;:]+/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+      )
+      const title = `${verb[0].toUpperCase()}${verb.slice(1)} ${subject}`.trim()
+      const args: Record<string, unknown> = { title, rrule, session_minutes: sessionMinutes }
+      if (clock) args.clock_local = clock
+      if (endsOn) args.ends_on = endsOn
+      if (targetHours) args.target_hours = targetHours
+      return [{ name: 'create_plan', args }]
+    }
+  }
+  // "did my econometrics session" / "skip today's study session" → mark the plan session nearest to now
+  if ((m = /^(?:i )?(did|finished|completed|done with|skip|skipped|missed|skipping) (?:my |the )?((?:today|tomorrow|yesterday|(?:this |next |last )?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|this morning|tonight)'?s? )?(.+?) (?:session|study session|practice|training)(?: (today|tomorrow|yesterday|tonight|this morning|on (?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)))?$/.exec(text))) {
+    const state = /^(did|finished|completed|done)/.test(m[1]) ? 'done' : 'missed'
+    const subject = m[3]
+    const plans = repo.listPlans().filter((p) => p.title.toLowerCase().includes(subject.toLowerCase()) || subject.toLowerCase().includes(p.title.toLowerCase().replace(/^(study|revise|train|practise|practice|work on|read|write|prepare|learn) /, '')))
+    if (plans.length === 1) {
+      // Which session: the day named ("friday's", "on monday", "today"), else the one nearest to now.
+      const dayText = (m[2] ?? m[4] ?? '').replace(/^on /, '').replace(/'s$/, '').trim()
+      const when = dayText ? parseWhen(dayText.replace(/^(?:tonight|this morning)$/, 'today')) : null
+      const wanted = when ? (when.exact ? when.dateTime!.slice(0, 10) : when.date!) : DateTime.local().toISODate()!
+      const now = Date.now()
+      const sessions = repo.sessionsForPlan(plans[0].id).filter((s) => s.session_state === 'planned' || s.session_state === 'moved')
+      const onDay = sessions.filter((s) => DateTime.fromISO(s.starts_at_utc, { zone: 'utc' }).toLocal().toISODate() === wanted)
+      const pick = (onDay.length ? onDay : dayText ? [] : sessions).sort((a, b) => Math.abs(new Date(a.starts_at_utc).getTime() - now) - Math.abs(new Date(b.starts_at_utc).getTime() - now))[0]
+      if (pick) return [{ name: 'mark_session', args: { id: pick.id, state } }]
+    }
+  }
+  // "how is the econometrics plan going" / "where am I on econometrics"
+  if ((m = /^(?:how(?:'s| is| am i doing with| am i doing on| far along is) |where am i (?:on|with) |progress on )(?:the |my )?(.+?)(?: plan| going| coming along)?\??$/.exec(text)) && repo.listPlans().length) {
+    const plans = repo.listPlans().filter((p) => p.title.toLowerCase().includes(m![1].toLowerCase()) || m![1].toLowerCase().includes(p.title.toLowerCase().replace(/^(study|revise|train|practise|practice|work on|read|write|prepare|learn) /, '')))
+    if (plans.length === 1) return [{ name: 'get_plan', args: { id: plans[0].id } }]
+  }
+  // ---- buffers (6f): "thirty minutes to get home from TISS" / "nothing straight after class" / "15 minutes before meetings" ----
+  if ((m = /^(?:i need |give me |leave |keep |allow |add )?(\d{1,3}|five|ten|fifteen|twenty|thirty|forty|forty-five|sixty|an hour|half an hour) ?(?:min|mins|minutes?)?\s*(?:to get (?:home|back|there|to|from)|to travel|travel(?:ling)? time|to walk|buffer|gap|break)?\s*(after|before|from|to|between|around|either side of) (.+)$/.exec(text)) && !/\bremind\b/.test(text)) {
+    const WORDS: Record<string, number> = { five: 5, ten: 10, fifteen: 15, twenty: 20, thirty: 30, forty: 40, 'forty-five': 45, sixty: 60, 'an hour': 60, 'half an hour': 30 }
+    const minutes = WORDS[m[1]] ?? Number(m[1])
+    const side = m[2] === 'before' || m[2] === 'to' ? 'before' : m[2] === 'between' || m[2] === 'around' || m[2] === 'either side of' ? 'around' : 'after'
+    const scopeRaw = m[3].replace(/^(?:the |my |a |any |every |all )/, '').replace(/\s+(?:sessions?|meetings?|bookings?|events?|things?)$/, (v) => v).trim()
+    const scope = /^(?:anything|everything|any booking|bookings|all bookings|meetings|events)$/.test(scopeRaw) ? null : restoreCase(scopeRaw).replace(/\s+(?:sessions?|things?)$/i, '')
+    if (minutes >= 5 && minutes <= 240) return [{ name: 'add_buffer', args: { minutes, side, scope } }]
+  }
+  if ((m = /^(?:nothing|no bookings?|no meetings?|don'?t (?:book|put) anything) (?:straight |right |immediately |directly )?(after|before) (.+)$/.exec(text))) {
+    const scopeRaw = m[2].replace(/^(?:the |my |a |any )/, '').trim()
+    return [{ name: 'add_buffer', args: { minutes: 30, side: m[1], scope: /^(?:anything|everything|meetings|bookings)$/.test(scopeRaw) ? null : restoreCase(scopeRaw) } }]
+  }
+
   // ---- multi-day (6a): "I'm in Delhi Monday to Wednesday" → ONE all-day event spanning the days, never three ----
   if ((m = /^(?:i'?m|i am|i'?ll be|i will be|we'?re|we are) (?:going to be |away |off |travelling |traveling )?(?:in|at|to|visiting) (.+?) (?:from )?((?:next |this )?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today|the \d{1,2}(?:st|nd|rd|th)?(?: of \w+)?|\w+ \d{1,2}(?:st|nd|rd|th)?)) (?:to|until|till|through|-|–) ((?:next |this )?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|the \d{1,2}(?:st|nd|rd|th)?(?: of \w+)?|\w+ \d{1,2}(?:st|nd|rd|th)?))$/.exec(text))) {
     const a = parseWhen(m[2])
@@ -402,7 +497,7 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     if (when && !when.exact) return [{ name: 'get_day', args: { date_local: when.date } }]
     if (when?.exact) return [{ name: 'get_day', args: { date_local: when.dateTime!.slice(0, 10) } }]
   }
-  if ((m = /^(?:i(?:'ve| have) (?:got )?|i've got |there'?s |there is |put |add |book )?(?:a |an |my |the )?(meeting|call|appointment|dentist|doctor|gp|class|lecture|tutorial|seminar|workshop|interview|viva|lunch|dinner|coffee|drinks|catch[- ]?up|standup|stand-up|sync|review|presentation|exam|test|flight|train|haircut|gym class|rehearsal|session)\b(.*)$/.exec(text))) {
+  if ((m = /^(?:i(?:'ve| have) (?:got )?|i've got |there'?s |there is |put |add |book )?(?:a |an |my |the )?(?:quick |short |brief |long )?(meeting|call|appointment|dentist|doctor|gp|class|lecture|tutorial|seminar|workshop|interview|viva|lunch|dinner|coffee|drinks|catch[- ]?up|standup|stand-up|sync|review|presentation|exam|test|flight|train|haircut|gym|gym class|rehearsal|session|walk|run)\b(.*)$/.exec(text))) {
     // Recurring series in natural language (6e): "class every tuesday 2-4", "standup every weekday at 9:30".
     const rec = parseRecurrencePhrase(m[2])
     if (rec) {

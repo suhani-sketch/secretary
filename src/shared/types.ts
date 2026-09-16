@@ -132,6 +132,25 @@ export interface Plan {
   updated_at: string
 }
 
+/** A plan with its sessions and computed progress (6f). Progress is planning information — hours, never a score. */
+export interface PlanView {
+  plan: Plan
+  sessions: CalendarEvent[]
+  progress: {
+    target_minutes: number | null
+    done_minutes: number
+    planned_minutes: number
+    missed_minutes: number
+    moved: number
+    sessions: { planned: number; done: number; missed: number; total: number }
+    shortfall_minutes: number | null
+    unplanned_shortfall_minutes: number | null
+    next_session_utc: string | null
+    ends_on: string | null
+  }
+  description: string
+}
+
 export interface Link {
   from_item: string
   to_item: string
@@ -291,6 +310,10 @@ export interface SecretaryApi {
   getDays(fromDateLocal: string, days: number): Promise<DayBundle[]>
   /** Obligations with a deadline and no time set aside (the unscheduled area, 6e), soonest first. */
   listUnscheduled(): Promise<Item[]>
+  /** Active and paused plans (6f). */
+  listPlans(): Promise<Plan[]>
+  /** One plan with its computed progress: hours done against target, missed sessions, shortfall. Never a score. */
+  getPlanProgress(planId: string): Promise<PlanView>
   /** History of one thing of any type (item, event, reminder), newest first — what changed and when (6e). */
   activitiesForTarget(targetType: string, targetId: string, limit?: number): Promise<Activity[]>
 }
@@ -409,5 +432,7 @@ export const IPC = {
   getDay: 'calendar:day',
   getDays: 'calendar:days',
   activitiesForTarget: 'activities:target',
-  listUnscheduled: 'calendar:unscheduled'
+  listUnscheduled: 'calendar:unscheduled',
+  listPlans: 'plans:list',
+  getPlanProgress: 'plans:progress'
 } as const
