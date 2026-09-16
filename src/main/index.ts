@@ -243,7 +243,9 @@ function createWindow(): BrowserWindow {
   if (process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
-    win.loadFile(join(__dirname, '../renderer/index.html'))
+    // Developer hook: SECRETARY_VIEW=project|history opens that view on load (used with SECRETARY_SCREENSHOT).
+    const view = process.env['SECRETARY_VIEW']
+    win.loadFile(join(__dirname, '../renderer/index.html'), view ? { hash: view } : undefined)
   }
   // Developer hook: SECRETARY_SCREENSHOT=<file.png> saves a picture of the window ~2.5s after load, then quits.
   const shot = process.env['SECRETARY_SCREENSHOT']
@@ -443,6 +445,8 @@ function registerIpc(): void {
   ipcMain.handle(IPC.listAiCalls, (_e, limit?: number) => listAiCalls(limit ?? 20))
   ipcMain.handle(IPC.listLinks, () => repo.listLinks())
   ipcMain.handle(IPC.listNotes, () => repo.listNotes())
+  ipcMain.handle(IPC.activitiesForProject, (_e, projectId: string, limit?: number) => repo.activitiesForProject(projectId, limit ?? 200))
+  ipcMain.handle(IPC.activitiesForItem, (_e, itemId: string, limit?: number) => repo.activitiesFor('item', itemId, limit ?? 100))
 
   // Conversation (Phase 1)
   ipcMain.handle(IPC.sendChat, (_e, text: string) => {

@@ -15,6 +15,7 @@ import type {
 } from '../../shared/types'
 import { Companion } from './Companion'
 import { ItemEditor, NoteEditor, ReminderEditor } from './Editors'
+import { ItemHistory, ProjectView } from './ProjectView'
 import { formatClock, formatDue, isOverdue } from '../../shared/format'
 
 const fmtLocal = (utcIso: string | null): string => (utcIso ? formatClock(utcIso) : '—')
@@ -29,7 +30,13 @@ const levelColor: Record<string, string> = {
 }
 
 type UiMessage = ChatMessage & { applied?: AppliedChange[]; error?: string | null; pending?: boolean }
-type Editing = { kind: 'item'; item: Item } | { kind: 'reminder'; reminder: Reminder } | { kind: 'note'; note: Note } | null
+type Editing =
+  | { kind: 'item'; item: Item }
+  | { kind: 'reminder'; reminder: Reminder }
+  | { kind: 'note'; note: Note }
+  | { kind: 'project'; project: Item; tab?: 'overview' | 'timeline' }
+  | { kind: 'history'; item: Item }
+  | null
 
 export default function App(): React.JSX.Element {
   const [items, setItems] = useState<Item[]>([])
@@ -98,6 +105,20 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
   }, [messages, status])
+
+  // Developer hook: "#project" / "#history" in the URL opens the first Thing's view / first item's history once loaded.
+  const [autoOpened, setAutoOpened] = useState(false)
+  useEffect(() => {
+    if (autoOpened || items.length === 0) return
+    const hash = window.location.hash.replace('#', '')
+    if (hash === 'project' || hash === 'timeline') {
+      const p = items.find((i) => i.kind === 'project' && i.status !== 'archived')
+      if (p) setEditing({ kind: 'project', project: p, tab: hash === 'timeline' ? 'timeline' : 'overview' })
+    } else if (hash === 'history') {
+      setEditing({ kind: 'history', item: items[0] })
+    }
+    setAutoOpened(true)
+  }, [items, autoOpened])
 
   const say = (msg: string): void => {
     setFlash(msg)
@@ -423,7 +444,11 @@ export default function App(): React.JSX.Element {
               {standalone.length === 0 && <p className="text-sm text-stone-400">Nothing open.</p>}
               <ul className="flex flex-col gap-1 overflow-y-auto">
                 {standalone.slice(0, 30).map((it) => (
-                  <li key={it.id} className="group text-sm flex flex-col rounded-lg px-1 py-1 hover:bg-white/80 cursor-pointer" onClick={() => setEditing({ kind: 'item', item: it })}>
+                  <li
+                    key={it.id}
+                    className="group text-sm flex flex-col rounded-lg px-1 py-1 hover:bg-white/80 cursor-pointer"
+                    onClick={() => setEditing(it.kind === 'project' ? { kind: 'project', project: it } : { kind: 'item', item: it })}
+                  >
                   <div className="flex items-start gap-2">
                     <span className={`text-[10px] mt-1 rounded px-1 ${it.kind === 'project' ? 'bg-[#B5836D]/25 text-[#3A2E28]' : 'bg-stone-200 text-stone-600'}`}>
                       {it.is_suggestion ? 'suggested' : it.kind === 'project' ? 'thing' : it.kind.replace('_', ' ')}
@@ -488,6 +513,7 @@ export default function App(): React.JSX.Element {
           projects={projects}
           parentId={parentOf.get(editing.item.id)?.id ?? null}
           notes={notesOnItem.get(editing.item.id) ?? []}
+          onHistory={() => setEditing(editing.item.kind === 'project' ? { kind: 'project', project: editing.item } : { kind: 'history', item: editing.item })}
           runTool={runTool}
           onDone={say}
           onClose={() => setEditing(null)}
@@ -498,6 +524,20 @@ export default function App(): React.JSX.Element {
         <ReminderEditor target={reminders.find((r) => r.id === editing.reminder.id) ?? editing.reminder} runTool={runTool} onDone={say} onClose={() => setEditing(null)} />
       )}
       {editing?.kind === 'note' && <NoteEditor note={notes.find((n) => n.id === editing.note.id) ?? editing.note} runTool={runTool} onDone={say} onClose={() => setEditing(null)} />}
+      {editing?.kind === 'project' && (
+        <ProjectView
+          project={itemById.get(editing.project.id) ?? editing.project}
+          parts={items.filter((i) => parentOf.get(i.id)?.id === editing.project.id)}
+          notes={notesOnItem.get(editing.project.id) ?? []}
+          reminders={reminders}
+          runTool={runTool}
+          onOpenItem={(i) => setEditing({ kind: 'item', item: i })}
+          onOpenReminder={(r) => setEditing({ kind: 'reminder', reminder: r })}
+          onClose={() => setEditing(null)}
+          initialTab={editing.tab}
+        />
+      )}
+      {editing?.kind === 'history' && <ItemHistory item={editing.item} onClose={() => setEditing(null)} />}
     </div>
   )
 }

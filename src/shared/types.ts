@@ -200,6 +200,10 @@ export interface SecretaryApi {
   listLinks(): Promise<Link[]>
   /** All notes (items, reminders, dates), newest first. */
   listNotes(): Promise<Note[]>
+  /** Timeline of one Thing: everything that happened to it or its parts, newest first. */
+  activitiesForProject(projectId: string, limit?: number): Promise<Activity[]>
+  /** History of one item (task, step, waiting item), newest first. */
+  activitiesForItem(itemId: string, limit?: number): Promise<Activity[]>
 }
 
 export const IPC = {
@@ -224,5 +228,7 @@ export const IPC = {
   listActivities: 'activities:list',
   listAiCalls: 'ai:calls',
   listLinks: 'links:list',
-  listNotes: 'notes:list'
+  listNotes: 'notes:list',
+  activitiesForProject: 'activities:project',
+  activitiesForItem: 'activities:item'
 } as const

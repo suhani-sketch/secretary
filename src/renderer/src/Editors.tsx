@@ -72,8 +72,9 @@ export function ItemEditor({
   runTool,
   onDone,
   onClose,
-  onOpenReminder
-}: EditorProps<Item> & { projects: Item[]; parentId: string | null; notes: Note[] }): React.JSX.Element {
+  onOpenReminder,
+  onHistory
+}: EditorProps<Item> & { projects: Item[]; parentId: string | null; notes: Note[]; onHistory: () => void }): React.JSX.Element {
   const [parent, setParent] = useState<string>(parentId ?? '')
   const [newNote, setNewNote] = useState('')
   const [editingNote, setEditingNote] = useState<{ id: string; body: string } | null>(null)
@@ -350,6 +351,9 @@ export function ItemEditor({
               </button>
             </>
           )}
+          <button type="button" className={quiet} onClick={onHistory}>
+            {item.kind === 'project' ? 'Timeline' : 'History'}
+          </button>
           <span className="flex-1" />
           <button disabled={busy} className={danger} onClick={() => run('delete_item', { id: item.id }, 'Deleted.')}>
             Delete…

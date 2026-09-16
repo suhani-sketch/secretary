@@ -3,7 +3,16 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 3 in progress — 3a Things, 3b Checklists, 3c Waiting + conditional follow-ups, 3d Notes built and tested 2026-09-16; 3e–3f not started.
+## Current phase: Phase 3 in progress — 3a Things, 3b Checklists, 3c Waiting + conditional follow-ups, 3d Notes, 3e Activity history in the UI built 2026-09-16; 3f (blocks + constraints) not started.
+
+## Phase 3e — Activity history in the UI (2026-09-16)
+- `ProjectView.tsx`: clicking a Thing row opens its view (Overview: steps with tick boxes, tasks, waiting-on with "replied ✓",
+  alarms, notes; Timeline: `activities` for the project grouped by day, actor badges you/secretary/system, optional hide-system).
+  `ItemHistory` (from the item editor's History button) shows one item's activities. Both read `activities` via IPC
+  (`activitiesForProject`, `activitiesForItem`); the model is never involved.
+- "What have I done for X?" is answered from `search_activity`/`get_project` results phrased in code (already true since 3a).
+- Dev hook: `SECRETARY_VIEW=project|history` opens that view on load (hash), pairs with `SECRETARY_SCREENSHOT`.
+- Editor: History/Timeline button; project rows open the view, other rows the editor.
 
 ## Phase 3d — Notes on anything (2026-09-16)
 - `notes` table (migration 3): target_type item|event|reminder|date, target_id (ISO date for 'date'), body, source user|assistant.
