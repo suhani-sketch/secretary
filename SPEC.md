@@ -438,22 +438,41 @@ A real internal calendar, as a secondary view. Conversation stays the home scree
 
 ## 7. UI structure and manual editing
 
-Primary window, conversation-first:
+The app has **separate surfaces**, switched between — not one screen that other features are squeezed into.
+
+**Conversation** is home:
 
 ```
 ┌────────────────┬──────────────────────────┬──────────┐
-│   ROOM +       │      CONVERSATION        │  TODAY   │
-│   COMPANION    │      (primary)           │  (rail)  │
+│   ROOM +       │      CONVERSATION        │   RAIL   │
+│   COMPANION    │      (primary)           │          │
 │                │  ┌────────────────────┐  │          │
 │                │  │ type or dump here  │  │          │
 └────────────────┴──┴────────────────────┴──┴──────────┘
 ```
 
-Secondary views, reachable but not the home screen: **Calendar**, **Things**, **Settings**. Later: Memory, Search.
+**Calendar** is its own full-width surface:
 
-**There is no separate Today view.** An earlier draft had one, and it collided with both the rail and the calendar's day view. Three surfaces showing overlapping versions of today is how an app stops being trustworthy — the user can't tell which is authoritative. The resolution:
+```
+┌─────────────────────────────────────────────────────────┐
+│  ‹  Wednesday, September 16  ›     Month Week Day Agenda│
+├─────────────────────────────────────────────────────────┤
+│  PRIORITIES                                             │
+│  DUE TODAY                                              │
+│  SCHEDULE   08:00 ──────────────────────────────────    │
+│             09:00 ──────────────────────────────────    │
+│             10:00 ┌────────── TISS ──────────┐          │
+│  REMINDERS · NOTES · COMPLETED                          │
+└─────────────────────────────────────────────────────────┘
+```
 
-- **The rail** is the ambient glance beside the conversation: overdue, coming up, open, waiting, what's running right now. Enough to confirm the assistant recorded things. Never a dashboard.
+**The calendar is never rendered inside the conversation layout.** It does not sit as a narrow column between the room and the rail, and the conversation's rail does not appear on it — Overdue, Coming Up and Open belong beside the conversation, not beside a calendar. Squeezing the calendar into the home screen is the failure mode for Phase 6: every later slice then gets layered into a cramped column.
+
+Surfaces: **Conversation**, **Calendar**, **Things**, **Settings**. Later: Memory, Search. The room and companion live on Conversation; they may appear minimised elsewhere or not at all.
+
+**There is no separate Today view.** An earlier draft had one, and it collided with both the rail and the calendar's day view. Three surfaces showing overlapping versions of today is how an app stops being trustworthy — the user cannot tell which is authoritative. The resolution:
+
+- **The rail** is the ambient glance beside the conversation: overdue, coming up, open, waiting, what is running right now. Enough to confirm the assistant recorded things. Never a dashboard.
 - **The calendar's day view** is the full picture of a date, today included, built from the Day View Model in §8 Phase 6a.
 - Both read the same records. Neither is a separate query.
 
@@ -605,7 +624,11 @@ A happening never enters `items`, never appears in Open, and never becomes an ob
 
 Build in slices.
 
-**6a — Aggregation and the day view.** For any date, assemble a complete temporal representation from existing records: timed events, all-day events, tasks and deadlines due, checklist items due, reminders firing, work blocks, commitments, waiting items needing attention, relevant happenings, **notes attached to the date itself** as well as notes on the things appearing that day, completed items, relevant project context, and **unresolved overdue items carried in from earlier days**. Never create duplicate calendar records.
+**6a — The calendar surface, and day aggregation.** Two things, and the first is easy to skip.
+
+**Build the Calendar as its own surface**, per §7: a navigation destination that renders full-width when selected, with date navigation and Month / Week / Day / Agenda controls in its header. Only Day needs to work in this slice; the others are placeholders for 6d. The conversation's rail — Overdue, Coming Up, Open — does **not** appear on it. Rendering the day view as a column inside the conversation layout is not this slice done; it is this slice failed, because every later slice then gets layered into that column.
+
+**And the aggregation.** For any date, assemble a complete temporal representation from existing records: timed events, all-day events, tasks and deadlines due, checklist items due, reminders firing, work blocks, commitments, waiting items needing attention, relevant happenings, **notes attached to the date itself** as well as notes on the things appearing that day, completed items, relevant project context, and **unresolved overdue items carried in from earlier days**. Never create duplicate calendar records.
 
 **One Day View Model, consumed by every view.** This is the most important instruction in the phase. Build a single function returning the complete state of a date. Day renders it directly; Week takes seven; Month takes summary versions; Agenda takes them chronologically. Four bespoke queries would drift apart and make every later addition a fourfold change.
 
@@ -625,7 +648,7 @@ Day structure: *Priorities → Due today → Schedule → Reminders and follow-u
 
 **Do not expand the UI beyond what 6a requires.** Build the aggregation cleanly; 6b–6f build the surfaces on top of it. Polishing the current layout instead of building the model is the failure mode for this slice.
 
-**Done when:** selecting any date produces a complete deterministic representation of everything due, scheduled, relevant or unresolved on it; date-bound tasks occupy no arbitrary slot; overdue items surface as priorities; completed items remain as history without counting as load; priorities and workload compute with no AI call; and the same Day View Model can serve Month, Week, Day and Agenda.
+**Done when:** Calendar is a distinct full-width surface with its own header and no conversation rail on it; selecting any date produces a complete deterministic representation of everything due, scheduled, relevant or unresolved on it; date-bound tasks occupy no arbitrary slot; overdue items surface as priorities; completed items remain as history without counting as load; priorities and workload compute with no AI call; and the same Day View Model can serve Month, Week, Day and Agenda.
 
 **Also in 6a, easily missed:**
 
@@ -736,43 +759,46 @@ Each must pass **across an app restart**, and at no point may the assistant clai
 ### C. Calendar (Phase 6)
 Run across a restart.
 
+**The surface**
+1. Calendar opens as its own full-width screen, not as a column inside the conversation layout, and carries no Overdue / Coming Up / Open rail.
+
 **Aggregation and display**
-1. "Meeting with Professor X Thursday at 3" → event.
-2. "Move it to 4" → same event updated.
-3. Drag it manually to 5 → same row; the assistant knows it is at 5.
-4. Create a task due Thursday with no time → appears under Due today, **not** occupying a slot in Schedule.
-5. Create a reminder Thursday → appears separately from the task.
-6. Attach a note to Thursday → appears under Notes, never becomes a task.
-7. Thursday's priority summary is visible without opening the panel.
-8. Importance is distinguishable without relying on colour alone.
+2. "Meeting with Professor X Thursday at 3" → event.
+3. "Move it to 4" → same event updated.
+4. Drag it manually to 5 → same row; the assistant knows it is at 5.
+5. Create a task due Thursday with no time → appears under Due today, **not** occupying a slot in Schedule.
+6. Create a reminder Thursday → appears separately from the task.
+7. Attach a note to Thursday → appears under Notes, never becomes a task.
+8. Thursday's priority summary is visible without opening the panel.
+9. Importance is distinguishable without relying on colour alone.
 
 **Panel and manipulation**
-9. Click Thursday → the full day panel: priorities, due, schedule, reminders, notes, completed.
-10. Complete a task from the panel → gone from Open, still in history.
-11. Drag an item from the unscheduled area onto a slot → becomes a work block.
-12. Change one occurrence of a recurring series → only that occurrence changes.
-13. Cancel an event → the assistant knows it was cancelled.
+10. Click Thursday → the full day panel: priorities, due, schedule, reminders, notes, completed.
+11. Complete a task from the panel → gone from Open, still in history.
+12. Drag an item from the unscheduled area onto a slot → becomes a work block.
+13. Change one occurrence of a recurring series → only that occurrence changes.
+14. Cancel an event → the assistant knows it was cancelled.
 
 **Plans**
-14. "Study econometrics two hours every Monday, Wednesday and Friday until October 15" → one plan, with sessions on the calendar.
-15. Skip a session → the plan records it missed and remains active; the shortfall is visible.
-16. Move one session → only that session moves; the plan is intact.
-17. Progress shows hours done against target, with no streak or score.
+15. "Study econometrics two hours every Monday, Wednesday and Friday until October 15" → one plan, with sessions on the calendar.
+16. Skip a session → the plan records it missed and remains active; the shortfall is visible.
+17. Move one session → only that session moves; the plan is intact.
+18. Progress shows hours done against target, with no streak or score.
 
 **Conflicts and load**
-18. Book over an existing commitment → hard conflict, refused with an alternative.
-19. Book with no gap after something → flagged tight, not refused.
-20. Add "thirty minutes to get home from TISS" → later scheduling respects it.
-21. A heavy day reads as busy or overloaded in month view, descriptively.
-22. Nothing existing was moved at any point without approval.
+19. Book over an existing commitment → hard conflict, refused with an alternative.
+20. Book with no gap after something → flagged tight, not refused.
+21. Add "thirty minutes to get home from TISS" → later scheduling respects it.
+22. A heavy day reads as busy or overloaded in month view, descriptively.
+23. Nothing existing was moved at any point without approval.
 
 **Spanning, past and week start**
-23. "I'm in Delhi Monday to Wednesday" → one event, shown on all three days, marked as continuing on Tuesday and Wednesday, rendered as a band in week and month.
-24. Navigate to a past date → completed items, fired reminders and that day's history are visible; no priorities are computed for it.
-25. The week starts on Monday, and the setting changes it.
+24. "I'm in Delhi Monday to Wednesday" → one event, shown on all three days, marked as continuing on Tuesday and Wednesday, rendered as a band in week and month.
+25. Navigate to a past date → completed items, fired reminders and that day's history are visible; no priorities are computed for it.
+26. The week starts on Monday, and the setting changes it.
 
 **Persistence**
-26. Restart. The whole calendar, plan and session states persist.
+27. Restart. The whole calendar, plan and session states persist.
 
 ### D. The application (Phase 8)
 1. "I need to submit my IIM application Monday at 5." → project + hard deadline

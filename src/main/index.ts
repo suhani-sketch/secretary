@@ -8,6 +8,7 @@ import { NOTIFICATION_ID_PREFIX, PROTOCOL, dispatchToastAction, setToastActionHa
 import * as repo from './repo'
 import { TICK_MS, startScheduler, startupSweep, stopScheduler, tick } from './scheduler'
 import { buildDay, occurrencesBetween } from './calendar'
+import { inferImportance } from '../core/importance'
 import { createTray, refreshTrayMenu } from './tray'
 import { GeminiProvider } from './ai/gemini'
 import type { Provider } from './ai/provider'
@@ -312,6 +313,7 @@ const trayHandlers = {
 // ---- Startup ----
 function onReady(): void {
   openDatabase()
+  backfillImportance()
   log('info', 'app.start', `v${app.getVersion()} electron ${process.versions.electron} hidden=${startedHidden} db=${dbPath()}`)
   if (!scratchUserData) {
     applyStoredOpenAtLogin()
@@ -493,4 +495,25 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.chatHistory, (_e, limit?: number) => repo.recentMessages(limit ?? 60))
   ipcMain.handle(IPC.listExtractions, (_e, limit?: number) => repo.listExtractions(limit ?? 30))
+}
+
+/**
+ * One-off (guarded by a setting): items created before importance inference existed all sit at "normal". Re-derive
+ * importance for open items from their own words, exactly as create_item now does. Explicitly set values are unknown, so
+ * only rows still at the default 2 are touched, and only once.
+ */
+function backfillImportance(): void {
+  if (repo.getSettingValue('importance.backfilled') === '1') return
+  const rows = getDb().prepare(`SELECT id, title, details, kind, hardness, committed_to, due_at_utc, created_at FROM items WHERE status = 'open' AND importance = 2`).all() as { id: string; title: string; details: string | null; kind: string; hardness: string | null; committed_to: string | null; due_at_utc: string | null; created_at: string }[]
+  let changed = 0
+  for (const r of rows) {
+    const days = r.due_at_utc ? Math.round((new Date(r.due_at_utc).getTime() - new Date(r.created_at).getTime()) / 86_400_000) : null
+    const imp = inferImportance({ title: r.title, details: r.details, kind: r.kind, hardness: r.hardness, committedTo: r.committed_to, daysToDue: days })
+    if (imp !== 2) {
+      getDb().prepare('UPDATE items SET importance = ? WHERE id = ?').run(imp, r.id)
+      changed++
+    }
+  }
+  repo.setSettingValue('importance.backfilled', '1')
+  log('info', 'importance.backfill', `${changed} of ${rows.length} open items re-derived`)
 }

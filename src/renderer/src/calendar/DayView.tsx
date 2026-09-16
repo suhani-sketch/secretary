@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { DayBundle, DayStatus, Item, PriorityEntry } from '../../../shared/types'
+import type { DayBundle, Item, PriorityEntry } from '../../../shared/types'
 import { formatDue } from '../../../shared/format'
 import { CalendarGrid, type GridEntry } from './CalendarAdapter'
 
@@ -11,31 +11,19 @@ import { CalendarGrid, type GridEntry } from './CalendarAdapter'
 
 interface Props {
   dateLocal: string
-  onChangeDate: (d: string) => void
   onOpenItem: (item: Item) => void
   onOpenEvent: (eventId: string) => void
   onQuick: (tool: string, args: Record<string, unknown>) => Promise<void>
   refreshKey: number
   /** 0 = Sunday … 6 = Saturday. */
   weekStart: number
-  onChangeWeekStart: (n: number) => void
+  /** The surface header shows the day's status; it learns it from here. */
+  onLoaded?: (bundle: DayBundle) => void
 }
 
-const addDays = (d: string, n: number): string => {
-  const [y, m, dd] = d.split('-').map(Number)
-  const dt = new Date(y, m - 1, dd + n)
-  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
-}
-const todayLocal = (): string => {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-const weekday = (d: string): string => new Date(`${d}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })
 const clock = (iso: string): string => new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
 const hours = (min: number): string => `${Math.round(min / 6) / 10} h`
 
-const STATUS_WORD: Record<DayStatus, string> = { light: 'a light day', normal: 'a normal day', busy: 'a busy day', overloaded: 'an overloaded day' }
-const STATUS_TONE: Record<DayStatus, string> = { light: 'text-emerald-800 bg-emerald-50', normal: 'text-stone-700 bg-stone-100', busy: 'text-amber-900 bg-amber-50', overloaded: 'text-rose-900 bg-rose-50' }
 
 /** Importance + hardness as glyph AND word (spec 6c: never colour alone). */
 export function importanceMark(i: Item): { glyph: string; word: string; tone: string } {
@@ -49,16 +37,19 @@ export function importanceMark(i: Item): { glyph: string; word: string; tone: st
   return { glyph: '•', word: 'normal', tone: 'text-stone-600' }
 }
 
-export function DayView({ dateLocal, onChangeDate, onOpenItem, onOpenEvent, onQuick, refreshKey, weekStart, onChangeWeekStart }: Props): React.JSX.Element {
+export function DayView({ dateLocal, onOpenItem, onOpenEvent, onQuick, refreshKey, weekStart, onLoaded }: Props): React.JSX.Element {
   const [day, setDay] = useState<DayBundle | null>(null)
   const [showDone, setShowDone] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const load = useCallback(async () => {
     try {
-      setDay(await window.api.getDay(dateLocal))
+      const b = await window.api.getDay(dateLocal)
+      setDay(b)
+      onLoaded?.(b)
     } catch {
       setDay(null)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dateLocal])
   useEffect(() => {
     void load()
@@ -85,46 +76,14 @@ export function DayView({ dateLocal, onChangeDate, onOpenItem, onOpenEvent, onQu
     return out
   }, [day])
 
-  const isToday = dateLocal === todayLocal()
   const spanning = day?.scheduled.filter((o) => o.all_day || o.span !== 'single') ?? []
   const s = day?.summary
   return (
     <div className="flex flex-col gap-3 min-h-0 h-full">
-      <div className="flex items-center gap-2">
-        <button className="rounded-lg px-2 py-1 text-sm bg-white/70 hover:bg-white" onClick={() => onChangeDate(addDays(dateLocal, -1))} title="Previous day">
-          ‹
-        </button>
-        <button className="rounded-lg px-2 py-1 text-sm bg-white/70 hover:bg-white disabled:opacity-40" onClick={() => onChangeDate(todayLocal())} disabled={isToday}>
-          today
-        </button>
-        <button className="rounded-lg px-2 py-1 text-sm bg-white/70 hover:bg-white" onClick={() => onChangeDate(addDays(dateLocal, 1))} title="Next day">
-          ›
-        </button>
-        <h2 className="text-lg font-medium ml-2 truncate min-w-0">
-          {weekday(dateLocal)}
-          {s?.is_past && <span className="text-sm text-stone-400 font-normal"> · looking back</span>}
-        </h2>
-        <div className="ml-auto flex items-center gap-2">
-          <label className="text-[11px] text-stone-400 flex items-center gap-1 whitespace-nowrap" title="Which day the week starts on">
-            week starts
-            <select className="bg-white/70 rounded px-1 py-0.5 text-[11px] text-stone-600" value={weekStart} onChange={(e) => onChangeWeekStart(Number(e.target.value))}>
-              <option value={1}>Mon</option>
-              <option value={0}>Sun</option>
-              <option value={6}>Sat</option>
-            </select>
-          </label>
-          {s && s.status && (
-            <span className={`text-xs rounded-full px-2 py-0.5 whitespace-nowrap ${STATUS_TONE[s.status]}`} title={`${hours(s.scheduled_minutes)} scheduled · ${s.due} due · ${s.overdue} overdue · ~${hours(s.due_effort_minutes)} of due work · ${hours(s.available_minutes)} available${s.conflicts ? ` · ${s.conflicts} clash${s.conflicts === 1 ? '' : 'es'}` : ''}`}>
-              {STATUS_WORD[s.status]}
-            </span>
-          )}
-        </div>
-      </div>
-
       {!day || !s ? (
         <div className="text-sm text-stone-500">Loading…</div>
       ) : (
-        <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] gap-4 min-h-0 flex-1">
+        <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-5 min-h-0 flex-1">
           {/* left: the structured list */}
           <div className="flex flex-col gap-3 overflow-y-auto pr-1">
             {!s.is_past && (
@@ -144,7 +103,7 @@ export function DayView({ dateLocal, onChangeDate, onOpenItem, onOpenEvent, onQu
                 {spanning.map((o) => (
                   <li key={`${o.id}:${o.occurrence_start_utc}`} className="text-sm flex items-center gap-2 px-1 py-0.5 rounded hover:bg-white/70 cursor-pointer" onClick={() => onOpenEvent(o.id)}>
                     <span className="text-xs">▬</span>
-                    <span className="flex-1 truncate">{o.title}</span>
+                    <span className="flex-1 break-words">{o.title}</span>
                     <span className="text-[10px] text-stone-400">{o.span === 'single' ? 'all day' : o.span}</span>
                   </li>
                 ))}
@@ -154,7 +113,7 @@ export function DayView({ dateLocal, onChangeDate, onOpenItem, onOpenEvent, onQu
               {day.reminders.map((r) => (
                 <li key={r.id} className="text-sm flex items-center gap-2 px-1 py-0.5">
                   <span className="text-xs">🔔</span>
-                  <span className="flex-1 truncate">{r.item_title ?? 'Reminder'}</span>
+                  <span className="flex-1 break-words">{r.item_title ?? 'Reminder'}</span>
                   <span className="text-xs text-stone-500 tabular-nums">{clock(r.fire_at_utc)}</span>
                   {r.state !== 'pending' && <span className="text-[10px] text-stone-400">{r.state}</span>}
                 </li>
@@ -162,7 +121,7 @@ export function DayView({ dateLocal, onChangeDate, onOpenItem, onOpenEvent, onQu
               {day.waiting.map((w) => (
                 <li key={w.id} className="text-sm flex items-center gap-2 px-1 py-0.5 cursor-pointer hover:bg-white/70 rounded" onClick={() => onOpenItem(w)}>
                   <span className="text-xs">⏳</span>
-                  <span className="flex-1 truncate">
+                  <span className="flex-1 break-words">
                     waiting on <span className="font-medium">{w.waiting_on ?? 'someone'}</span>
                     {w.details ? <span className="text-stone-500"> · {w.details}</span> : null}
                   </span>
@@ -274,7 +233,7 @@ function PriorityRow({ p, onOpen, onDone }: { p: PriorityEntry; onOpen: (i: Item
         {p.overdue ? '⚠' : mark.glyph}
       </span>
       <div className="min-w-0 flex-1">
-        <div className="truncate">{p.item.title}</div>
+        <div className="break-words leading-snug">{p.item.title}</div>
         <div className={`text-xs truncate ${p.overdue ? 'text-amber-800' : 'text-stone-500'}`}>
           {p.overdue && p.item.due_at_utc ? `was due ${formatDue(p.item.due_at_utc, p.item.due_precision)}` : p.reasons.filter((r) => r !== 'overdue').join(' · ') || mark.word}
           {p.blocked ? ' · blocked' : ''}
@@ -302,7 +261,7 @@ function ItemRow({ item, onOpen, onDone }: { item: Item; onOpen: (i: Item) => vo
         {mark.glyph}
       </span>
       <div className="min-w-0 flex-1">
-        <div className="truncate">{item.title}</div>
+        <div className="break-words leading-snug">{item.title}</div>
         <div className="text-xs text-stone-500 truncate">
           {mark.word}
           {item.kind !== 'task' && item.kind !== 'commitment' ? ` · ${item.kind}` : ''}

@@ -1,6 +1,7 @@
 import { detectHappeningStart, kindForLabel } from '../happenings'
 import { METAPHORS } from '../../shared/happenings'
 import { occurrencesBetween, buildDay } from '../calendar'
+import { hasLowSignal, inferImportance } from '../../core/importance'
 import { z } from 'zod'
 import { DateTime } from 'luxon'
 import { describeRRule as describeRule, firstOccurrence, normalizeRRule } from '../recurrence'
@@ -1195,7 +1196,17 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
         dueAtUtc: due.dueAtUtc,
         duePrecision: due.precision,
         hardness: x.hardness ?? (x.kind === 'deadline' ? 'hard' : null),
-        importance: x.importance ?? null,
+        // Priority is inferred, never asked (spec §4): from the words, the kind, hardness and how soon it is due.
+        importance:
+          (hasLowSignal(`${x.title} ${x.details ?? ''}`) && x.kind !== 'commitment' && x.kind !== 'deadline' ? 3 : x.importance) ??
+          inferImportance({
+            title: x.title,
+            details: x.details ?? null,
+            kind: x.kind,
+            hardness: x.hardness ?? (x.kind === 'deadline' ? 'hard' : null),
+            committedTo: x.kind === 'commitment' ? (x.committed_to ?? null) : null,
+            daysToDue: due.dueAtUtc ? Math.round((DateTime.fromISO(due.dueAtUtc).toMillis() - Date.now()) / 86_400_000) : null
+          }),
         waitingOn: x.waiting_on ?? null,
         committedTo: x.kind === 'commitment' ? (x.committed_to ?? null) : null,
         isSuggestion: x.is_suggestion ?? false,

@@ -155,13 +155,16 @@ export function assembleDay(inp: DayInputs): DayBundle {
 
   // Date-bound obligations due this day (checklist steps excluded: they live inside their Thing).
   const open = inp.items.filter((i) => !CLOSED.has(i.status) && !i.is_suggestion && i.kind !== 'checklist_item' && i.kind !== 'waiting' && i.kind !== 'note' && i.kind !== 'idea')
-  const dueToday = open.filter((i) => i.due_at_utc && i.due_at_utc >= startUtc && i.due_at_utc < endUtc)
-  const unscheduled = dueToday.filter((i) => !servedItemIds.has(i.id))
   // Unresolved and already overdue NOW, carried into today and every future date until resolved. Something due between
   // today and a future date is not "overdue" on that future date — it is simply still due, and shows on its own day.
   // A past date shows what WAS overdue then only through its history.
   const todayStartUtc = DateTime.fromISO(today, { zone: inp.zone }).startOf('day').toUTC().toISO()!
-  const overdue = isPast ? [] : open.filter((i) => i.due_at_utc && i.due_at_utc < startUtc && i.due_at_utc < todayStartUtc)
+  // Also overdue: due EARLIER TODAY at an exact time that has passed ("Call Tom at 16:00", viewed at 21:00). The rail
+  // calls that overdue and so must the calendar — anything overdue and unresolved is pressing by definition.
+  const passedToday = (i: Item): boolean => isToday && i.due_precision === 'exact' && !!i.due_at_utc && i.due_at_utc < inp.nowUtc
+  const dueToday = open.filter((i) => i.due_at_utc && i.due_at_utc >= startUtc && i.due_at_utc < endUtc && !passedToday(i))
+  const unscheduled = dueToday.filter((i) => !servedItemIds.has(i.id))
+  const overdue = isPast ? [] : open.filter((i) => i.due_at_utc && ((i.due_at_utc < startUtc && i.due_at_utc < todayStartUtc) || passedToday(i)))
   // History, never workload: finished (or dropped) on this day, any kind.
   const completed = inp.items.filter((i) => (i.status === 'done' && i.completed_at && i.completed_at >= startUtc && i.completed_at < endUtc) || (i.status === 'cancelled' && i.updated_at >= startUtc && i.updated_at < endUtc))
 

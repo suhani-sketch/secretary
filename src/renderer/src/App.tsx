@@ -21,7 +21,7 @@ import { ItemHistory, ProjectView } from './ProjectView'
 import { formatClock, formatDue, isOverdue } from '../../shared/format'
 import { RightNow } from './Happenings'
 import type { Happening } from '../../shared/types'
-import { DayView } from './calendar/DayView'
+import { CalendarSurface, type CalendarMode } from './calendar/CalendarSurface'
 
 const fmtLocal = (utcIso: string | null): string => (utcIso ? formatClock(utcIso) : '—')
 
@@ -34,6 +34,7 @@ const levelColor: Record<string, string> = {
   error: 'text-red-700 font-semibold'
 }
 
+type Surface = 'conversation' | 'calendar' | 'things' | 'settings'
 type UiMessage = ChatMessage & { applied?: AppliedChange[]; error?: string | null; pending?: boolean }
 type Editing =
   | { kind: 'item'; item: Item }
@@ -62,7 +63,8 @@ export default function App(): React.JSX.Element {
   const [flash, setFlash] = useState<string | null>(null)
   const [editing, setEditing] = useState<Editing>(null)
   // Calendar (Phase 6): a secondary view over the same records; conversation stays home.
-  const [view, setView] = useState<'chat' | 'calendar'>('chat')
+  const [surface, setSurface] = useState<Surface>('conversation')
+  const [calMode, setCalMode] = useState<CalendarMode>('day')
   const [calDate, setCalDate] = useState(() => {
     const d = new Date()
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -183,7 +185,7 @@ export default function App(): React.JSX.Element {
     const light = /^light:(\w+)$/.exec(hash)
     if (light) setTimeChoice(light[1] as TimeChoice)
     if (hash === 'calendar' || hash.startsWith('calendar:')) {
-      setView('calendar')
+      setSurface('calendar')
       const d = /^calendar:(\d{4}-\d{2}-\d{2})$/.exec(hash)
       if (d) setCalDate(d[1])
     } else if (hash === 'project' || hash === 'timeline') {
@@ -398,7 +400,69 @@ export default function App(): React.JSX.Element {
   )
 
   return (
-    <div className="h-full grid grid-cols-[260px_minmax(0,1fr)_300px] gap-5 p-5 overflow-hidden">
+    <div className="h-full flex flex-col gap-3 p-5 overflow-hidden">
+      {/* SURFACES (spec §7): Conversation is home; Calendar, Things and Settings are their own full-width screens. */}
+      <nav className="flex items-center gap-1 text-sm" aria-label="Surfaces">
+        {(
+          [
+            ['conversation', 'Conversation'],
+            ['calendar', 'Calendar'],
+            ['things', 'Things'],
+            ['settings', 'Settings']
+          ] as [Surface, string][]
+        ).map(([id, label]) => (
+          <button key={id} onClick={() => setSurface(id)} className={`rounded-full px-3 py-1 ${surface === id ? 'bg-[#3A2E28] text-[#FAF6F0]' : 'text-stone-500 hover:bg-white/60 hover:text-stone-800'}`} aria-current={surface === id ? 'page' : undefined}>
+            {label}
+          </button>
+        ))}
+      </nav>
+
+      {surface === 'calendar' && (
+        <div className="flex-1 min-h-0">
+          <CalendarSurface
+            dateLocal={calDate}
+            onChangeDate={setCalDate}
+            mode={calMode}
+            onChangeMode={setCalMode}
+            weekStart={weekStart}
+            onChangeWeekStart={(n) => {
+              setWeekStart(n)
+              void window.api.setSetting('calendar.weekStart', String(n))
+            }}
+            onOpenItem={(it) => setEditing(it.kind === 'project' ? { kind: 'project', project: it } : { kind: 'item', item: it })}
+            onOpenEvent={(eventId) => {
+              // Event editing arrives with the day panel (6b) and manipulation (6e). Until then the conversation is the editor.
+              void window.api.listEvents(`${calDate}T00:00:00.000Z`, `${calDate}T23:59:59.000Z`).then((occ) => {
+                const ev = occ.find((o) => o.id === eventId)
+                setSurface('conversation')
+                setDraft(`Move "${ev?.title ?? 'that event'}" to `)
+                setTimeout(() => inputRef.current?.focus(), 50)
+              })
+            }}
+            onQuick={quick}
+            refreshKey={refreshKey}
+          />
+        </div>
+      )}
+      {surface === 'things' && (
+        <div className="flex-1 min-h-0 rounded-3xl bg-white/50 p-6 flex items-center justify-center text-sm text-stone-400 text-center">
+          <div>
+            <div className="text-base text-stone-500 mb-1">Things — its own surface, later.</div>
+            <div>For now, open a Thing from the conversation's rail.</div>
+          </div>
+        </div>
+      )}
+      {surface === 'settings' && (
+        <div className="flex-1 min-h-0 rounded-3xl bg-white/50 p-6 flex items-center justify-center text-sm text-stone-400 text-center">
+          <div>
+            <div className="text-base text-stone-500 mb-1">Settings — its own surface, later.</div>
+            <div>The scene chooser is in the room; the week start is in the calendar header.</div>
+          </div>
+        </div>
+      )}
+
+      {surface === 'conversation' && (
+      <div className="flex-1 min-h-0 grid grid-cols-[260px_minmax(0,1fr)_300px] gap-5 overflow-hidden">
       {/* ROOM + COMPANION */}
       <aside className="relative overflow-hidden rounded-3xl">
         <Room
@@ -432,9 +496,6 @@ export default function App(): React.JSX.Element {
             <button onClick={() => void quick('undo_last', {})} className="hover:text-stone-800" title="Undo the last change">
               undo
             </button>
-            <button onClick={() => setView((v) => (v === 'chat' ? 'calendar' : 'chat'))} className="hover:text-stone-800" title={view === 'chat' ? 'Open the calendar' : 'Back to the conversation'}>
-              {view === 'chat' ? 'calendar' : 'chat'}
-            </button>
             <button onClick={() => setShowDebug((v) => !v)} className="hover:text-stone-800">
               {showDebug ? 'hide debug' : 'debug'}
             </button>
@@ -447,32 +508,6 @@ export default function App(): React.JSX.Element {
           </div>
         )}
 
-        {view === 'calendar' ? (
-          <div className="flex-1 min-h-0 rounded-3xl bg-white/50 p-4">
-            <DayView
-              dateLocal={calDate}
-              onChangeDate={setCalDate}
-              onOpenItem={(it) => setEditing(it.kind === 'project' ? { kind: 'project', project: it } : { kind: 'item', item: it })}
-              onOpenEvent={(eventId) => {
-                // Event editing arrives with the day panel (6b) and manipulation (6e). Until then: the conversation is the editor.
-                void window.api.listEvents(`${calDate}T00:00:00.000Z`, `${calDate}T23:59:59.000Z`).then((occ) => {
-                  const ev = occ.find((o) => o.id === eventId)
-                  setView('chat')
-                  setDraft(`Move "${ev?.title ?? 'that event'}" to `)
-                  setTimeout(() => inputRef.current?.focus(), 50)
-                })
-              }}
-              onQuick={quick}
-              refreshKey={refreshKey}
-              weekStart={weekStart}
-              onChangeWeekStart={(n) => {
-                setWeekStart(n)
-                void window.api.setSetting('calendar.weekStart', String(n))
-              }}
-            />
-          </div>
-        ) : (
-          <>
         <div ref={scrollRef} className="flex-1 overflow-y-auto rounded-3xl bg-white/50 p-5 flex flex-col gap-3">
           {messages.length === 0 && (
             <p className="text-sm text-stone-400 m-auto text-center max-w-sm">
@@ -503,8 +538,6 @@ export default function App(): React.JSX.Element {
           </button>
         </div>
         {flash && <p className="mt-2 text-xs text-stone-500">{flash}</p>}
-          </>
-        )}
       </main>
 
       {/* TODAY RAIL (or DEBUG) */}
@@ -704,6 +737,8 @@ export default function App(): React.JSX.Element {
           <DebugPanel info={info} logs={logs} aiCalls={aiCalls} activities={activities} extractions={extractions} reminders={reminders} say={say} refresh={refresh} onOpenReminder={(r) => setEditing({ kind: 'reminder', reminder: r })} />
         )}
       </aside>
+      </div>
+      )}
 
       {editing?.kind === 'item' && (
         <ItemEditor

@@ -20,7 +20,25 @@ Update it at the end of every session (spec §11).
   imports repo and moves to core when 6f touches it.
 - **Migration 7:** `plans` table; `events.plan_id`, `events.session_state`; index on `events.starts_at_utc`.
 
-## Phase 6a — redone against the full slice (2026-09-16, second pass)
+## Phase 6a — third pass: the Calendar surface (2026-09-16)
+- **Surfaces (spec §7):** `App.tsx` now has a top navigation — Conversation · Calendar · Things · Settings — and renders ONE
+  surface at a time. Conversation is the old three-zone layout (room · conversation · rail). Calendar is
+  `calendar/CalendarSurface.tsx`: full width, its own header (‹ today › · long date · status pill · week-start · Month / Week /
+  Day / Agenda), body = `DayView` for Day; Month/Week/Agenda are labelled placeholders until 6d. No rail on it, no room. Things
+  and Settings are placeholder screens (later phases). Dev hook `SECRETARY_VIEW=calendar[:date]` opens the surface.
+  `DayView` no longer owns navigation; it reports its bundle up via `onLoaded` so the header can show the day's status.
+- **Bugs fixed this pass:** (1) titles truncated in Due today / Reminders / Priorities → wrap (`break-words`), and the surface is
+  wide anyway; (2) importance was never inferred — everything sat at 2. `src/core/importance.ts` `inferImportance` (critical/
+  high/low word lists, commitment → high, hard deadline → high, due within a day → high, "someday/maybe/no rush" → low and it
+  overrides a model value) runs in `create_item` when the model gave none; a one-off `backfillImportance()` at startup (guarded
+  by setting `importance.backfilled`) re-derives open items still at 2; (3) "Priorities 0 while four items overdue": the four
+  were due EARLIER TODAY at exact times — the model treated them as merely due today. Now `passedToday` (exact, time passed,
+  viewing today) counts as overdue, is excluded from Due today, and lands in Priorities with "was due … at HH:MM".
+- **Verified (Test C step 1) on scratch DB c2 by screenshot:** Calendar opens as its own full-width screen with no Overdue /
+  Coming Up / Open rail; header carries navigation and the four view controls; Priorities show both overdue items with full titles.
+  Importance check: "submit the visa application friday" → 0, "Call Tom …" due today → 1, "someday clean out the garage" → 3.
+
+## Phase 6a — second pass (2026-09-16)
 - **Day View Model** (`src/core/calendar/aggregate.ts`, `assembleDay(DayInputs) → DayBundle`): four states — `scheduled`
   (occurrences with `span` single|starts|continues|ends), `unscheduled` (due, no time set aside), `overdue` (open, due before the
   viewed day AND already overdue now — carried into today and every future date; never a projection of things not yet due),
