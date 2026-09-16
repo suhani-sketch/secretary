@@ -581,8 +581,9 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
             question:
               `Delete "${before.title}" for good` +
               (rems.length ? ` along with its ${plural(rems.length, 'reminder')}` : '') +
-              (parts.length ? `? Its ${plural(parts.length, 'part')} (${parts.map((p) => p.title).join(', ')}) would stay but no longer belong to anything` : '') +
-              `? Cancelling instead keeps the history.`,
+              `?` +
+              (parts.length ? ` Its ${plural(parts.length, 'part')} (${parts.map((p) => p.title).join(', ')}) would stay but no longer belong to anything.` : '') +
+              ` Cancelling instead keeps the history.`,
             wouldAffect: would
           }
         }

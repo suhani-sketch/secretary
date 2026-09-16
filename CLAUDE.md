@@ -185,6 +185,16 @@ a real click (user snoozed "Call tom" on 2026-09-16). Phase 0's strict reboot te
   conditional reminders (`condition_json`, evaluated in the scheduler), 3d notes, 3e project timeline view, 3f blocks/constraints.
   Done when §11B passes across a restart with one project and no duplicates.
 - Undo does not yet cover attach/detach/archive (recorded as irreversible).
+
+## Deletion and undo — audited 2026-09-16
+- Item rows are deleted in exactly one place, `repo.deleteItemRow` (callers: confirmed `delete_item`, undo of a `created`
+  activity). It releases every FK that can point at an item: `links` (cascade + explicit), `activities.project_id`,
+  `events.project_id` — the full list is `PRAGMA foreign_key_list` per table; re-audit it whenever a migration adds a FK.
+- `delete_item` records a `DeletionSnapshot` (item, alarms, links, activity ids, event ids) as `before_json`; undo of a deletion
+  uses `restoreFromSnapshot` so parts re-attach and history/event pointers come back. Verified: project with part + alarm +
+  history + event → delete → undo → identical, `PRAGMA foreign_key_check` clean.
+- The one observed "FOREIGN KEY constraint failed" on undo was the pre-fix build; the transaction rolled back and the reply said
+  nothing changed, which is the intended failure behaviour (invariant 4).
 - Phase 2 leftovers, not blocking: recurring alarms can't yet be described with an end ("until December") or count; the
   `tier` column shows ~40% tier 0 so far — keep widening Tier 0 as real phrasing accumulates; tomorrow/yesterday edge cases
   around midnight untested.
