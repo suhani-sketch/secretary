@@ -8,12 +8,13 @@ import type {
   ExtractionEntry,
   Item,
   Link,
+  Note,
   Reminder,
   SchedulerLogEntry,
   ToolRunResult
 } from '../../shared/types'
 import { Companion } from './Companion'
-import { ItemEditor, ReminderEditor } from './Editors'
+import { ItemEditor, NoteEditor, ReminderEditor } from './Editors'
 import { formatClock, formatDue, isOverdue } from '../../shared/format'
 
 const fmtLocal = (utcIso: string | null): string => (utcIso ? formatClock(utcIso) : '—')
@@ -28,11 +29,12 @@ const levelColor: Record<string, string> = {
 }
 
 type UiMessage = ChatMessage & { applied?: AppliedChange[]; error?: string | null; pending?: boolean }
-type Editing = { kind: 'item'; item: Item } | { kind: 'reminder'; reminder: Reminder } | null
+type Editing = { kind: 'item'; item: Item } | { kind: 'reminder'; reminder: Reminder } | { kind: 'note'; note: Note } | null
 
 export default function App(): React.JSX.Element {
   const [items, setItems] = useState<Item[]>([])
   const [links, setLinks] = useState<Link[]>([])
+  const [notes, setNotes] = useState<Note[]>([])
   const [reminders, setReminders] = useState<Reminder[]>([])
   const [logs, setLogs] = useState<SchedulerLogEntry[]>([])
   const [aiCalls, setAiCalls] = useState<SchedulerLogEntry[]>([])
@@ -50,7 +52,7 @@ export default function App(): React.JSX.Element {
 
   const refresh = useCallback(async () => {
     try {
-      const [i, r, l, a, x, ac, act, lk] = await Promise.all([
+      const [i, r, l, a, x, ac, act, lk, nt] = await Promise.all([
         window.api.listItems(),
         window.api.listReminders(),
         window.api.listLog(50),
@@ -58,10 +60,12 @@ export default function App(): React.JSX.Element {
         window.api.listExtractions(20),
         window.api.listAiCalls(20),
         window.api.listActivities(40),
-        window.api.listLinks()
+        window.api.listLinks(),
+        window.api.listNotes()
       ])
       setItems(i)
       setLinks(lk)
+      setNotes(nt)
       setReminders(r)
       setLogs(l)
       setInfo(a)
@@ -197,7 +201,13 @@ export default function App(): React.JSX.Element {
 
   // Coming Up reflects exactly what exists (spec §5): alarms AND dated items, told apart, next 7 days.
   const horizon = now + 7 * 24 * 3600 * 1000
-  type Upcoming = { key: string; at: number; label: string; when: string; kind: 'alarm' | 'due'; suggestion: boolean; open: () => void; item?: Item }
+  const todayIso = new Date(now - new Date(now).getTimezoneOffset() * 60000).toISOString().slice(0, 10)
+  const horizonIso = new Date(horizon - new Date(horizon).getTimezoneOffset() * 60000).toISOString().slice(0, 10)
+  // Day notes ("travelling Friday") sit in Coming Up as information, never as obligations.
+  const dayNotes = notes.filter((n) => n.target_type === 'date' && n.target_id >= todayIso && n.target_id <= horizonIso)
+  const notesOnItem = new Map<string, Note[]>()
+  for (const n of notes) if (n.target_type === 'item') notesOnItem.set(n.target_id, [...(notesOnItem.get(n.target_id) ?? []), n])
+  type Upcoming = { key: string; at: number; label: string; when: string; kind: 'alarm' | 'due' | 'note'; suggestion: boolean; open: () => void; item?: Item }
   const upcoming: Upcoming[] = [
     ...pending
       .filter((r) => new Date(r.fire_at_utc).getTime() <= horizon && !(r.target_type === 'item' && overdueIds.has(r.target_id)))
@@ -224,7 +234,17 @@ export default function App(): React.JSX.Element {
         suggestion: !!i.is_suggestion,
         open: () => setEditing({ kind: 'item', item: i }),
         item: i
-      }))
+      })),
+    ...dayNotes.map((n) => ({
+      key: 'n' + n.id,
+      at: new Date(n.target_id + 'T00:00').getTime() + 1,
+      label: n.body,
+      when: new Date(n.target_id + 'T00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }),
+      kind: 'note' as const,
+      suggestion: false,
+      open: () => setEditing({ kind: 'note', note: n }),
+      item: undefined as Item | undefined
+    }))
   ].sort((a, b) => a.at - b.at)
 
   const companionState =
@@ -331,17 +351,18 @@ export default function App(): React.JSX.Element {
               <ul className="flex flex-col gap-1 overflow-y-auto">
                 {upcoming.slice(0, 10).map((u) => (
                   <li key={u.key} className="group text-sm flex items-start gap-2 rounded-lg px-1 py-1 hover:bg-white/80 cursor-pointer" onClick={u.open}>
-                    <span className="mt-0.5 text-xs" title={u.kind === 'alarm' ? 'Reminder will fire' : 'Due date, no reminder'}>
-                      {u.kind === 'alarm' ? '🔔' : '📅'}
+                    <span className="mt-0.5 text-xs" title={u.kind === 'alarm' ? 'Reminder will fire' : u.kind === 'note' ? 'Note for that day' : 'Due date, no reminder'}>
+                      {u.kind === 'alarm' ? '🔔' : u.kind === 'note' ? '📝' : '📅'}
                     </span>
                     <div className="min-w-0 flex-1">
-                      <div className={`truncate ${u.suggestion ? 'italic text-stone-500' : ''}`}>
+                      <div className={`truncate ${u.suggestion || u.kind === 'note' ? 'italic text-stone-600' : ''}`}>
                         {u.label}
                         {u.suggestion && <span className="ml-1 text-[10px] not-italic text-stone-400">suggested</span>}
                       </div>
                       <div className="text-xs text-stone-500">
                         {u.when}
                         {u.kind === 'due' && <span className="text-stone-400"> · no reminder</span>}
+                        {u.kind === 'note' && <span className="text-stone-400"> · note</span>}
                       </div>
                     </div>
                     {u.item && live(u.item) && (
@@ -466,6 +487,7 @@ export default function App(): React.JSX.Element {
           reminders={reminders}
           projects={projects}
           parentId={parentOf.get(editing.item.id)?.id ?? null}
+          notes={notesOnItem.get(editing.item.id) ?? []}
           runTool={runTool}
           onDone={say}
           onClose={() => setEditing(null)}
@@ -475,6 +497,7 @@ export default function App(): React.JSX.Element {
       {editing?.kind === 'reminder' && (
         <ReminderEditor target={reminders.find((r) => r.id === editing.reminder.id) ?? editing.reminder} runTool={runTool} onDone={say} onClose={() => setEditing(null)} />
       )}
+      {editing?.kind === 'note' && <NoteEditor note={notes.find((n) => n.id === editing.note.id) ?? editing.note} runTool={runTool} onDone={say} onClose={() => setEditing(null)} />}
     </div>
   )
 }

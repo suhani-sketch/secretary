@@ -3,7 +3,18 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 3 in progress — 3a (Things), 3b (Checklists), 3c (Waiting + conditional follow-ups) built and tested 2026-09-16; 3d–3f not started.
+## Current phase: Phase 3 in progress — 3a Things, 3b Checklists, 3c Waiting + conditional follow-ups, 3d Notes built and tested 2026-09-16; 3e–3f not started.
+
+## Phase 3d — Notes on anything (2026-09-16)
+- `notes` table (migration 3): target_type item|event|reminder|date, target_id (ISO date for 'date'), body, source user|assistant.
+  Repo: insert/get/update/delete/restore, `notesFor`, `dateNotesBetween`, `searchNotes`, `listNotes`. No FK on notes.
+- Tools: `add_note {body, item_id | item_title | reminder_id | date_local}` (item_title resolved with entity.ts over projects
+  then items), `update_note`, `delete_note`. Activities target_type `note` (verbs note_added/updated/deleted) with undo for all
+  three. `get_item` and `search_memory` return notes; `phraseReadResults` speaks them.
+- Context: item lines carry up to 3 notes; "Notes on upcoming days" section (yesterday..+14d) so day notes inform planning.
+- Tier 0: "add a note to X that/saying Y" (X resolved by entity match or it/that), "note: Y" (→ focused item, else today's date).
+- Window: 📝 day notes inside Coming Up (open → NoteEditor: edit/remove); ItemEditor has a Notes block (add/edit/remove).
+- Day notes are information: never a task, no reminder. Feelings are not notes (prompt).
 
 ## Phase 3c — Waiting items and conditional follow-ups (2026-09-16)
 - Waiting item = `items` kind `waiting`, `waiting_on` = who, `details` = about, expected reply as a SOFT due date (day

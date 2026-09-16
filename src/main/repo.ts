@@ -12,6 +12,7 @@ import type {
   ItemKind,
   ItemStatus,
   MessageRole,
+  Note,
   Reminder
 } from '../shared/types'
 
@@ -672,6 +673,65 @@ export function createTestReminder(minutesFromNow: number): Reminder {
     return insertReminder(item.id, fireAt)
   })
   return tx()
+}
+
+// ---------- Notes on anything (spec §8 3d) ----------
+
+export function insertNote(targetType: Note['target_type'], targetId: string, body: string, source: Note['source']): Note {
+  const id = randomUUID()
+  const ts = nowIso()
+  getDb()
+    .prepare(`INSERT INTO notes (id, target_type, target_id, body, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .run(id, targetType, targetId, body.trim(), source, ts, ts)
+  return getNote(id)!
+}
+
+export function getNote(id: string): Note | undefined {
+  return getDb().prepare('SELECT * FROM notes WHERE id = ?').get(id) as Note | undefined
+}
+
+export function resolveNoteId(ref: string): string {
+  const rows = getDb().prepare('SELECT id FROM notes WHERE id LIKE ?').all(`${ref.trim()}%`) as { id: string }[]
+  if (rows.length === 1) return rows[0].id
+  if (rows.length === 0) throw new Error(`No note with id "${ref}"`)
+  throw new Error(`Ambiguous note id "${ref}"`)
+}
+
+export function updateNoteBody(id: string, body: string): Note {
+  getDb().prepare('UPDATE notes SET body = ?, updated_at = ? WHERE id = ?').run(body.trim(), nowIso(), id)
+  return getNote(id)!
+}
+
+export function deleteNoteRow(id: string): void {
+  getDb().prepare('DELETE FROM notes WHERE id = ?').run(id)
+}
+
+export function restoreNote(n: Note): void {
+  getDb()
+    .prepare(`INSERT OR REPLACE INTO notes (id, target_type, target_id, body, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .run(n.id, n.target_type, n.target_id, n.body, n.source, n.created_at, n.updated_at)
+}
+
+export function notesFor(targetType: Note['target_type'], targetId: string): Note[] {
+  return getDb().prepare('SELECT * FROM notes WHERE target_type = ? AND target_id = ? ORDER BY created_at').all(targetType, targetId) as Note[]
+}
+
+/** Date notes between two ISO dates inclusive ("yyyy-MM-dd"). */
+export function dateNotesBetween(fromDate: string, toDate: string): Note[] {
+  return getDb()
+    .prepare(`SELECT * FROM notes WHERE target_type = 'date' AND target_id >= ? AND target_id <= ? ORDER BY target_id, created_at`)
+    .all(fromDate, toDate) as Note[]
+}
+
+export function searchNotes(query: string, limit = 20): Note[] {
+  const words = query.toLowerCase().split(/\s+/).filter((w) => w.length >= 3)
+  if (!words.length) return []
+  const where = words.map(() => 'LOWER(body) LIKE ?').join(' OR ')
+  return getDb().prepare(`SELECT * FROM notes WHERE ${where} ORDER BY updated_at DESC LIMIT ?`).all(...words.map((w) => `%${w}%`), limit) as Note[]
+}
+
+export function listNotes(limit = 500): Note[] {
+  return getDb().prepare('SELECT * FROM notes ORDER BY created_at DESC LIMIT ?').all(limit) as Note[]
 }
 
 // ---------- Activities (history; basis for undo) ----------

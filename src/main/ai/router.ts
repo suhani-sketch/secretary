@@ -3,6 +3,7 @@ import { DateTime } from 'luxon'
 import * as repo from '../repo'
 import { getFocus, getOffer, setOffer } from './context'
 import { firstOccurrence, parseRecurrencePhrase } from '../recurrence'
+import { resolveEntity } from '../entity'
 import { log } from '../log'
 import type { Item, Reminder } from '../../shared/types'
 
@@ -221,6 +222,20 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     const offer = getOffer()
     if (offer?.kind === 'project_match') return [{ name: 'create_project', args: { title: offer.proposedTitle, force_new: true } }]
     return null
+  }
+
+  // ---- notes (3d): "add a note to the application that the transcript must be a PDF" / "note: X" ----
+  if ((m = /^(?:add |make |put )?(?:a )?note (?:to|on|for|about) (.+?)(?:,)? (?:that|saying|:) (.+)$/.exec(text))) {
+    const pool = [...repo.openProjects(), ...repo.openItems(200).filter((i) => i.kind !== 'project')]
+    const target = REF_WORDS.test(norm(m[1])) ? resolveTarget(m[1]) : (() => { const r = resolveEntity(m[1], pool, getFocus().map((f) => f.itemId)); return r.kind === 'none' ? null : r.entity })()
+    if (!target) return null
+    return [{ name: 'add_note', args: { item_id: target.id, body: restoreCase(m[2]) } }]
+  }
+  if ((m = /^note(?: to self)?[:\s]+(.+)$/.exec(text)) && !/^(?:to|on|for|about) /.test(m[1])) {
+    const top = getFocus()[0]
+    const item = top ? repo.getItem(top.itemId) : undefined
+    if (item && item.status !== 'done' && item.status !== 'cancelled') return [{ name: 'add_note', args: { item_id: item.id, body: restoreCase(m[1]) } }]
+    return [{ name: 'add_note', args: { date_local: DateTime.local().toISODate(), body: restoreCase(m[1]) } }]
   }
 
   // ---- waiting (3c): "they replied" / "heard back from TISS" / "the bank got back to me" ----

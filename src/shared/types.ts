@@ -50,6 +50,18 @@ export interface Reminder {
   item_title?: string | null
 }
 
+/** A note attached to an item, event, reminder, or a bare date ("I'll be travelling Friday"). */
+export interface Note {
+  id: string
+  target_type: 'item' | 'event' | 'reminder' | 'date'
+  /** For target_type 'date': an ISO date "yyyy-MM-dd". */
+  target_id: string
+  body: string
+  source: 'user' | 'assistant'
+  created_at: string
+  updated_at: string
+}
+
 export interface Link {
   from_item: string
   to_item: string
@@ -186,6 +198,8 @@ export interface SecretaryApi {
   listAiCalls(limit?: number): Promise<SchedulerLogEntry[]>
   /** All part_of / blocks / relates_to links, so the window can show which items belong to which project. */
   listLinks(): Promise<Link[]>
+  /** All notes (items, reminders, dates), newest first. */
+  listNotes(): Promise<Note[]>
 }
 
 export const IPC = {
@@ -209,5 +223,6 @@ export const IPC = {
   runTool: 'tools:run',
   listActivities: 'activities:list',
   listAiCalls: 'ai:calls',
-  listLinks: 'links:list'
+  listLinks: 'links:list',
+  listNotes: 'notes:list'
 } as const

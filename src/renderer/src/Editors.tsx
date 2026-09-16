@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Item, ItemKind, ItemStatus, Reminder, ToolRunResult } from '../../shared/types'
+import type { Item, ItemKind, ItemStatus, Note, Reminder, ToolRunResult } from '../../shared/types'
 import { formatClock } from '../../shared/format'
 
 /**
@@ -68,12 +68,15 @@ export function ItemEditor({
   reminders,
   projects,
   parentId,
+  notes,
   runTool,
   onDone,
   onClose,
   onOpenReminder
-}: EditorProps<Item> & { projects: Item[]; parentId: string | null }): React.JSX.Element {
+}: EditorProps<Item> & { projects: Item[]; parentId: string | null; notes: Note[] }): React.JSX.Element {
   const [parent, setParent] = useState<string>(parentId ?? '')
+  const [newNote, setNewNote] = useState('')
+  const [editingNote, setEditingNote] = useState<{ id: string; body: string } | null>(null)
   const [title, setTitle] = useState(item.title)
   const [details, setDetails] = useState(item.details ?? '')
   const [kind, setKind] = useState<ItemKind>(item.kind)
@@ -237,6 +240,71 @@ export function ItemEditor({
         </div>
 
         <div className="rounded-2xl bg-white/70 p-3">
+          <span className={label}>Notes</span>
+          {notes.length === 0 && <p className="text-sm text-stone-400">None.</p>}
+          {notes.map((n) => (
+            <div key={n.id} className="flex items-start gap-2 text-sm py-1">
+              <span className="text-xs mt-0.5">📝</span>
+              {editingNote?.id === n.id ? (
+                <>
+                  <input className={`${field} flex-1`} value={editingNote.body} onChange={(e) => setEditingNote({ id: n.id, body: e.target.value })} autoFocus />
+                  <button
+                    className={quiet}
+                    disabled={busy || !editingNote.body.trim()}
+                    onClick={async () => {
+                      setBusy(true)
+                      const res = await runTool('update_note', { id: n.id, body: editingNote.body })
+                      setBusy(false)
+                      if (res.error) setErr(res.error)
+                      else setEditingNote(null)
+                    }}
+                  >
+                    Save
+                  </button>
+                  <button className="text-xs text-stone-500" onClick={() => setEditingNote(null)}>
+                    cancel
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="flex-1 whitespace-pre-wrap">{n.body}</span>
+                  <button className="text-xs text-stone-500 hover:text-stone-800" onClick={() => setEditingNote({ id: n.id, body: n.body })}>
+                    edit
+                  </button>
+                  <button
+                    className="text-xs text-stone-500 hover:text-red-700"
+                    onClick={async () => {
+                      setBusy(true)
+                      const res = await runTool('delete_note', { id: n.id })
+                      setBusy(false)
+                      if (res.error) setErr(res.error)
+                    }}
+                  >
+                    remove
+                  </button>
+                </>
+              )}
+            </div>
+          ))}
+          <div className="flex items-end gap-2 mt-2">
+            <input className={`${field} flex-1`} placeholder="Add a note…" value={newNote} onChange={(e) => setNewNote(e.target.value)} />
+            <button
+              disabled={!newNote.trim() || busy}
+              className={quiet}
+              onClick={async () => {
+                setBusy(true)
+                const res = await runTool('add_note', { item_id: item.id, body: newNote })
+                setBusy(false)
+                if (res.error) setErr(res.error)
+                else setNewNote('')
+              }}
+            >
+              Add
+            </button>
+          </div>
+        </div>
+
+        <div className="rounded-2xl bg-white/70 p-3">
           <span className={label}>Reminders</span>
           {mine.length === 0 && <p className="text-sm text-stone-400">None.</p>}
           {mine.map((r) => (
@@ -287,6 +355,43 @@ export function ItemEditor({
             Delete…
           </button>
         </div>
+      </div>
+    </Modal>
+  )
+}
+
+/** A day note opened from Coming Up: edit or remove it. */
+export function NoteEditor({ note, runTool, onDone, onClose }: { note: Note; runTool: RunTool; onDone: (m: string) => void; onClose: () => void }): React.JSX.Element {
+  const [body, setBody] = useState(note.body)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const when = note.target_type === 'date' ? new Date(note.target_id + 'T00:00').toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' }) : note.target_type
+  const run = async (name: string, args: Record<string, unknown>, ok: string): Promise<void> => {
+    setBusy(true)
+    setErr(null)
+    const res = await runTool(name, args)
+    setBusy(false)
+    if (res.error) setErr(res.error)
+    else {
+      onDone(res.applied.map((a) => a.phrase).join(' ') || ok)
+      onClose()
+    }
+  }
+  return (
+    <Modal title={`Note · ${when}`} onClose={onClose}>
+      <div className="flex flex-col gap-3">
+        <textarea className={field} rows={3} value={body} onChange={(e) => setBody(e.target.value)} />
+        {err && <p className="text-sm text-red-700">{err}</p>}
+        <div className="flex items-center gap-2">
+          <button disabled={busy || !body.trim() || body.trim() === note.body} className={primary} onClick={() => run('update_note', { id: note.id, body }, 'Saved.')}>
+            Save
+          </button>
+          <span className="flex-1" />
+          <button disabled={busy} className={danger} onClick={() => run('delete_note', { id: note.id }, 'Removed.')}>
+            Remove
+          </button>
+        </div>
+        <p className="text-xs text-stone-400">A day note informs planning; it is not a task and will not remind you.</p>
       </div>
     </Modal>
   )

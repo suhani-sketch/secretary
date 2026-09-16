@@ -8,7 +8,7 @@ import { clearOffer, getFocus, pushFocus, setOffer, shortId } from './context'
 import { resolveEntity } from '../entity'
 import { formatClock, formatDue } from '../../shared/format'
 import type { ToolDefinition } from './provider'
-import type { Actor, AppliedChange, Item, Reminder } from '../../shared/types'
+import type { Actor, AppliedChange, Item, Note, Reminder } from '../../shared/types'
 
 /**
  * Tool layer (spec §4). Small, flat schemas. Every call is validated with Zod before it touches
@@ -107,6 +107,17 @@ export const toolSchemas = {
   }),
   detach_from_project: z.object({ item_id: idRef }),
   get_project: z.object({ id: idRef }).describe('A project with its parts and history.'),
+  add_note: z
+    .object({
+      body: z.string().min(1).max(2000).describe('The note itself, in the user\'s words: "the transcript must be a PDF".'),
+      item_id: idRef.optional().describe('Attach to this item/project/waiting item (id from the context).'),
+      item_title: z.string().max(200).optional().describe('Or the item/project as the user named it ("the application"); the app matches it.'),
+      reminder_id: idRef.optional().describe('Attach to a reminder.'),
+      date_local: localDate.optional().describe('Attach to a day instead of an item: "I\'ll be travelling Friday" → that Friday. ' + DATE_DESC)
+    })
+    .refine((v) => [v.item_id, v.item_title, v.reminder_id, v.date_local].filter(Boolean).length === 1, 'Give exactly one target: item_id, item_title, reminder_id or date_local'),
+  update_note: z.object({ id: idRef.describe('The note id.'), body: z.string().min(1).max(2000) }),
+  delete_note: z.object({ id: idRef.describe('The note id.') }),
   add_checklist_item: z.object({
     project_id: idRef.describe('The project the checklist belongs to.'),
     titles: z.array(z.string().min(1).max(200)).min(1).max(20).describe('One title per checklist item, in order. "Add send first email, follow up, and attach the document" → three titles.')
@@ -208,6 +219,9 @@ const descriptions: Record<ToolName, string> = {
   attach_to_project: 'Make an existing item part of a project ("that belongs to the TISS mailing").',
   detach_from_project: 'Take an item out of its project.',
   get_project: 'Read one project: its fields, parts and history. Use for "what is left?" / "what have I done for X?".',
+  add_note: 'Attach a note to an item, project, reminder or day. "Add a note to the application that the transcript must be a PDF" → item_title "application". "I\'ll be travelling Friday" → date_local. Notes are information, never tasks.',
+  update_note: 'Change the text of an existing note.',
+  delete_note: 'Remove a note.',
   add_checklist_item: 'Add one or more checklist items to a project ("add a list: send first email, follow up, attach the document"). Checklist items are steps within the Thing, not standalone tasks.',
   complete_checklist_item: 'Tick off a checklist item when the user reports doing it ("I sent the first email", "attached the doc").',
   remove_checklist_item: 'Strike a checklist item off the list.',
@@ -234,6 +248,9 @@ const descriptions: Record<ToolName, string> = {
 }
 
 const WRITE_TOOLS: ReadonlySet<string> = new Set([
+  'add_note',
+  'update_note',
+  'delete_note',
   'create_waiting',
   'resolve_waiting',
   'add_checklist_item',
@@ -479,8 +496,72 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const id = repo.resolveItemId(x.id)
       const p = repo.getItem(id)!
       const parts = repo.projectParts(id).filter((c) => c.status !== 'cancelled' && c.status !== 'archived')
-      const history = repo.activitiesForProject(id, 30)
-      return { result: { project: publicItem(p), parts: parts.map(publicItem), history: history.map((h) => `${h.created_at.slice(0, 16).replace('T', ' ')} · ${h.actor}: ${h.summary}`) } }
+      const history = repo.activitiesForProject(id, 30).filter((h) => h.verb !== 'note_added')
+      const notes = [...repo.notesFor('item', id), ...parts.flatMap((c) => repo.notesFor('item', c.id).map((n) => ({ ...n, body: `${c.title}: ${n.body}` })))]
+      return {
+        result: {
+          project: publicItem(p),
+          parts: parts.map(publicItem),
+          notes: notes.map((n) => ({ id: shortId(n.id), body: n.body })),
+          history: history.map((h) => `${h.created_at.slice(0, 16).replace('T', ' ')} · ${h.actor}: ${h.summary}`)
+        }
+      }
+    }
+    case 'add_note': {
+      const x = a as z.infer<typeof toolSchemas.add_note>
+      let targetType: Note['target_type']
+      let targetId: string
+      let label: string
+      let projectId: string | null = null
+      if (x.date_local) {
+        targetType = 'date'
+        targetId = x.date_local
+        label = formatDue(repo.resolveDue(x.date_local, null).dueAtUtc, 'day')
+      } else if (x.reminder_id) {
+        targetType = 'reminder'
+        targetId = repo.resolveReminderId(x.reminder_id)
+        label = `the reminder for "${repo.getReminder(targetId)?.item_title ?? 'that'}"`
+      } else {
+        let item: Item | undefined
+        if (x.item_id) item = repo.getItem(repo.resolveItemId(x.item_id))
+        else {
+          // Entity resolution over everything live: projects first (they are what people name), then other items.
+          const pool = [...repo.openProjects(), ...repo.openItems(200).filter((i) => i.kind !== 'project')]
+          const res = resolveEntity(x.item_title!, pool, focusIds)
+          if (res.kind === 'none') throw new Error(`I couldn't find anything called "${x.item_title}" to note that on`)
+          item = res.entity
+        }
+        if (!item) throw new Error('No such item')
+        targetType = 'item'
+        targetId = item.id
+        label = `"${item.title}"`
+        projectId = item.kind === 'project' ? item.id : (repo.parentProjectOf(item.id)?.id ?? null)
+        pushFocus(item.id, item.title, 'note added')
+      }
+      const note = repo.insertNote(targetType, targetId, x.body, ctx.actor === 'assistant' ? 'assistant' : 'user')
+      act({ targetType: 'note', targetId: note.id, projectId, verb: 'note_added', summary: `Note on ${label}: ${note.body.slice(0, 80)}${note.body.length > 80 ? '…' : ''}`, after: note })
+      clearOffer()
+      const summary = `Note on ${label}: ${note.body}`
+      const phrase = targetType === 'date' ? `Noted for ${label}: ${note.body}. I'll bear it in mind when planning.` : `Noted on ${label}: ${note.body}.`
+      return { result: { ok: true, note_id: shortId(note.id), summary }, applied: { tool: name, summary, phrase, itemId: targetType === 'item' ? targetId : undefined } }
+    }
+    case 'update_note': {
+      const x = a as z.infer<typeof toolSchemas.update_note>
+      const id = repo.resolveNoteId(x.id)
+      const before = repo.getNote(id)!
+      const after = repo.updateNoteBody(id, x.body)
+      act({ targetType: 'note', targetId: id, verb: 'updated', summary: `Note changed: "${before.body.slice(0, 40)}" → "${after.body.slice(0, 40)}"`, before, after })
+      const summary = `Note updated: ${after.body}`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Updated the note: ${after.body}.` } }
+    }
+    case 'delete_note': {
+      const x = a as z.infer<typeof toolSchemas.delete_note>
+      const id = repo.resolveNoteId(x.id)
+      const before = repo.getNote(id)!
+      repo.deleteNoteRow(id)
+      act({ targetType: 'note', targetId: id, verb: 'deleted', summary: `Note removed: ${before.body.slice(0, 80)}`, before })
+      const summary = `Removed note: ${before.body}`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Removed that note. Say "undo" if you want it back.` } }
     }
     case 'create_waiting': {
       const x = a as z.infer<typeof toolSchemas.create_waiting>
@@ -995,11 +1076,18 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const x = a as z.infer<typeof toolSchemas.get_item>
       const item = repo.getItem(repo.resolveItemId(x.id))!
       const rs = repo.pendingRemindersForItems([item.id])
-      return { result: { item: publicItem(item), reminders: rs.map(publicReminder), history: repo.activitiesFor('item', item.id, 10).map((h) => `${h.created_at.slice(0, 10)} ${h.summary}`) } }
+      return {
+        result: {
+          item: publicItem(item),
+          reminders: rs.map(publicReminder),
+          notes: repo.notesFor('item', item.id).map((n) => ({ id: shortId(n.id), body: n.body })),
+          history: repo.activitiesFor('item', item.id, 10).map((h) => `${h.created_at.slice(0, 10)} ${h.summary}`)
+        }
+      }
     }
     case 'search_memory': {
       const x = a as z.infer<typeof toolSchemas.search_memory>
-      return { result: { items: repo.searchItems(x.query).map(publicItem) } }
+      return { result: { items: repo.searchItems(x.query).map(publicItem), notes: repo.searchNotes(x.query).map((n) => ({ id: shortId(n.id), on: n.target_type === 'date' ? n.target_id : n.target_type, body: n.body })) } }
     }
     case 'search_activity': {
       const x = a as z.infer<typeof toolSchemas.search_activity>
@@ -1047,6 +1135,20 @@ function undoActivity(a: import('../../shared/types').Activity): string {
       // Only the alarms that this very change stopped come back — never ones the user cancelled separately.
       if (wrapped.stopped?.length) repo.reviveReminders(wrapped.stopped)
       return `"${b.title}" is back to how it was${wrapped.stopped?.length ? ` and its ${plural(wrapped.stopped.length, 'reminder')} ${wrapped.stopped.length === 1 ? 'is' : 'are'} live again` : ''}`
+    }
+  }
+  if (a.target_type === 'note') {
+    if (a.verb === 'note_added') {
+      repo.deleteNoteRow(a.target_id)
+      return 'removed that note again'
+    }
+    if (a.verb === 'deleted' && before) {
+      repo.restoreNote(before as Note)
+      return 'put the note back'
+    }
+    if (a.verb === 'updated' && before) {
+      repo.updateNoteBody(a.target_id, (before as Note).body)
+      return 'restored the previous wording of the note'
     }
   }
   if (a.target_type === 'checklist') {

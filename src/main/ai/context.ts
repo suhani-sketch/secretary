@@ -52,6 +52,8 @@ function describeItem(it: Item, reminders: Reminder[]): string {
   }
   if (it.is_suggestion) bits.push('SUGGESTION — not confirmed by the user')
   if (it.details) bits.push(`— ${it.details.slice(0, 120)}`)
+  const notes = repo.notesFor('item', it.id)
+  if (notes.length) bits.push(`notes: ${notes.slice(0, 3).map((n) => `[${shortId(n.id)}] "${n.body.slice(0, 80)}"`).join('; ')}${notes.length > 3 ? ` (+${notes.length - 3})` : ''}`)
   if (it.hardness) bits.push(it.hardness === 'hard' ? 'hard deadline' : 'soft target')
   if (it.kind !== 'project') {
     const parent = repo.parentProjectOf(it.id)
@@ -93,6 +95,7 @@ export function assembleContext(userText: string): string {
   const reminders = repo.pendingRemindersForItems(all.map((i) => i.id))
   const prefs = repo.listPreferences()
   const constraints = repo.activeConstraints()
+  const dateNotes = repo.dateNotesBetween(now.minus({ days: 1 }).toISODate()!, now.plus({ days: 14 }).toISODate()!)
   const events = repo.eventsBetween(now.startOf('day').toUTC().toISO()!, now.plus({ days: 1 }).endOf('day').toUTC().toISO()!)
   const offer = getOffer()
 
@@ -139,6 +142,9 @@ export function assembleContext(userText: string): string {
     constraints.length
       ? `Availability constraints:\n${constraints.map((c) => `- ${c.kind}: ${c.label}${c.rrule ? ` (${c.rrule})` : ''} [${c.source}]`).join('\n')}`
       : `Availability constraints: none recorded.`,
+    dateNotes.length
+      ? `Notes on upcoming days (inform planning; not tasks):\n${dateNotes.map((n) => `- ${n.target_id}: [${shortId(n.id)}] ${n.body}`).join('\n')}`
+      : `Notes on upcoming days: none.`,
     offer
       ? offer.kind === 'reminder'
         ? `Standing offer: you just asked whether to add a reminder for [${shortId(offer.itemId)}]; a plain "yes" means create it.`

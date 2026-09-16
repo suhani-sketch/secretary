@@ -33,6 +33,7 @@ Things (projects) — the life model:
 - If create_project answers with a near-match question, relay it; "yes" → call again with use_existing_id, "no, it's different" → force_new=true.
 - Waiting: "they said they'll get back to me Friday" / "I emailed X and haven't heard back" → create_waiting (waiting_on = who, about = what, expected_date_local if they named a day; project_id when it belongs to a Thing in focus). Never a task. "They replied" / "heard back from X" / "the transcript arrived" → resolve_waiting.
 - Conditional follow-up: "if they haven't replied by Friday afternoon, remind me" → create_reminder on the waiting item with unless_resolved = that waiting item's id and fire_at_local = Friday 14:00 (afternoon → 14:00, morning → 09:00, evening → 18:00 when only a part of day is given). The app decides at fire time whether they replied; you never judge that.
+- Notes: information that is not an obligation. "Add a note to the application that the transcript must be a PDF" → add_note with item_title "application" (the app matches the Thing). "Remember that the TISS contact is Priya" → add_note on the TISS project. "I'll be travelling Friday" / "I'm off on the 20th" → add_note with date_local — it informs planning; it is never a task and never journaling. Do not turn feelings ("I'm exhausted") into notes.
 - Checklists: steps within a Thing are checklist items, not tasks. "Add a list of things to do" → just say you're ready for the steps (no tool). "Add send first email, follow up and attach the document" → add_checklist_item with three titles on that project. "I sent the first email" → complete_checklist_item (by title; the app matches it to the step) — never a new task. "What is left?" → get_project. Only promote_checklist_item when the user wants a step scheduled as its own task.
 
 Reference resolution:
@@ -190,17 +191,21 @@ function phraseReadResults(results: ToolResult[]): string | null {
     }
     if (r.name === 'get_today' || r.name === 'get_upcoming' || r.name === 'search_memory') {
       const items = res.items ?? []
+      const found = (res as { notes?: { on: string; body: string }[] }).notes ?? []
       const label = r.name === 'get_today' ? 'today' : r.name === 'get_upcoming' ? 'coming up' : 'matching that'
-      if (!items.length) lines.push(`Nothing ${label}.`)
-      else
+      if (!items.length && !found.length) lines.push(`Nothing ${label}.`)
+      else if (items.length)
         lines.push(
           `${items.length === 1 ? 'One thing' : `${items.length} things`} ${label}: ` +
             items.map((i) => `${i.title}${i.due ? ` (${i.due})` : ''}${i.is_suggestion ? ' — suggested' : ''}`).join('; ') +
             '.'
         )
+      if (found.length) lines.push(`Notes: ${found.map((n) => `${n.body}${n.on !== 'item' ? ` (${n.on})` : ''}`).join(' · ')}.`)
     } else if (r.name === 'get_item' && res.item) {
       const rs = res.reminders ?? []
+      const notes = (res as { notes?: { body: string }[] }).notes ?? []
       lines.push(`"${res.item.title}" is ${res.item.status}${res.item.due ? `, due ${res.item.due}` : ''}${rs.length ? `, reminder ${rs.map((x) => x.fires).join(' and ')}` : ', no reminder'}.`)
+      if (notes.length) lines.push(`Notes: ${notes.map((n) => n.body).join(' · ')}.`)
       if (res.history?.length) lines.push(`Recently: ${res.history.slice(0, 3).join('; ')}.`)
     } else if (r.name === 'get_project') {
       const p = (res as { project?: { title: string; due: string | null; status: string }; parts?: { title: string; status: string; due: string | null }[]; history?: string[] }).project
@@ -221,6 +226,8 @@ function phraseReadResults(results: ToolResult[]): string | null {
               : 'no parts yet') +
             '.'
         )
+        const pnotes = (res as { notes?: { body: string }[] }).notes ?? []
+        if (pnotes.length) lines.push(`Notes: ${pnotes.map((n) => n.body).join(' · ')}.`)
         if (hist.length) lines.push(`Recent history: ${hist.slice(0, 4).map((h) => h.replace(/^.*?· \w+: /, '')).join('; ')}.`)
       }
     } else if (r.name === 'search_activity') {
