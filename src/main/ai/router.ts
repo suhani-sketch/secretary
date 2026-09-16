@@ -203,6 +203,15 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     return [{ name: 'undo_last', args: {} }]
   }
 
+  // ---- "I haven't sent it yet" / "not yet" / "still haven't done it" → a status report, nothing to store ----
+  // The thing stays outstanding exactly as it is. Only the user's OWN undone work matches; "haven't heard back" is a wait.
+  if (
+    /^(?:no,? |nope,? )?(?:not yet|not done yet|still not done|(?:i )?(?:still )?haven'?t (?:done |sent |finished |started |submitted |written |sent off |dealt with |got (?:a)?round to )?(?:it|that|this|them|.{1,40}?) yet)\.?$/.test(text) &&
+    !/\b(?:heard|repl|got back|respond|answer|arriv)/.test(text)
+  ) {
+    return [{ name: REPLY, args: { text: 'Okay — still outstanding, then. I have left it as it is.' } }]
+  }
+
   // ---- "yes" / "no" to a standing offer or question ----
   if (/^(?:yes|yes please|yep|yeah|sure|ok|okay|please|do it|go ahead|yes do|same|same thing|yes same|(?:yes,? )?(?:book|do|put|add|move|schedule) it anyway|anyway|go ahead anyway|yes anyway|override)$/.test(text)) {
     const offer = getOffer()
@@ -300,6 +309,21 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     }
     if (!target) return null // ambiguous or nothing waiting — let the model ask
     return [{ name: 'resolve_waiting', args: { id: target.id, outcome: /arriv|came/.test(text) ? 'received' : 'replied' } }]
+  }
+
+  // ---- project questions (§11B 9–10): "what is left?" / "what have I done for X?" → get_project, phrased in code ----
+  // Deterministic so the answer always carries steps, waiting states and history together, never a from-memory summary.
+  if ((m = /^(?:so |ok |okay )?(?:what(?:'s| is| else is)? (?:still )?(?:left|remaining|outstanding|to do|still to do)|what remains|what have i done|what did i do|what'?s done|where (?:am i|are we))(?: (?:on|for|with|of) (.+?))?\??$/.exec(text))) {
+    let target: Item | null = null
+    if (m[1]) {
+      const r = resolveEntity(m[1], repo.openProjects(), getFocus().map((f) => f.itemId))
+      if (r.kind === 'match') target = r.entity
+      else return null // near-miss or unknown name — the model asks
+    } else {
+      target = checklistTarget()
+    }
+    if (!target) return null
+    return [{ name: 'get_project', args: { id: target.id } }]
   }
 
   // ---- checklists (3b) ----

@@ -4,7 +4,13 @@ Source of truth for the design is `SPEC.md`. This file tracks where the build ac
 Update it at the end of every session (spec §11).
 
 ## Current phase: Phase 4 — Companion and room (spec renumbered 2026-09-16: 4 companion, 5 living activities, 6 calendar).
-Phase 3 slices 3a–3f built; the formal §11B end-to-end run across a restart is still owed. Phase 0 reboot test unobserved.
+Phase 3 slices 3a–3f built. **§11B TISS run passed end to end 2026-09-16** (steps 1–6, real quit + relaunch, steps 7–10) on a
+scratch database via `SECRETARY_USER_DATA` — one project, no duplicates, conditional follow-up Fri 14:00 with `unless_resolved`.
+Fixes that came out of it: "I haven't sent it yet" is a tier-0 no-op reply (it used to become a waiting item, and step 6 then
+falsely "resolved" it); `record_activity` now goes through `act()` so `activities.project_id` is filled (it was null, so "what have
+I done for X" missed recorded progress — backfilled in the real DB too); "what is left / what have I done for X" are tier-0 →
+`get_project` phrased in code (steps, waiting, "Done so far", history) instead of a from-memory model answer that skipped the wait.
+Phase 0 reboot test: reminder "Check the reboot test" set for 2026-09-16 18:21 local; user to quit, restart Windows, not open the app.
 
 ## Phase 4 — design decisions (see SPEC §8 Phase 4 "Design decisions")
 - Dormouse-quokka, scarf only, unnamed, rare eye contact, a life of its own (pose changes every few minutes, never performs).
@@ -250,6 +256,11 @@ a real click (user snoozed "Call tom" on 2026-09-16). Phase 0's strict reboot te
 - **Tooling gotcha that cost an hour:** the Bash tool un-escapes `\\` before the shell sees it, so a Python heredoc containing
   `"\\b"` writes a literal BACKSPACE (0x08) into the file — the regex silently never matches. Never patch regexes through
   Python/heredocs here; use the Edit/Write tools. Scan with `grep -rnP "[\x01-\x08\x0B\x0C\x0E-\x1F]" src` if a regex "can't" fail.
+
+## Dev hooks
+- `SECRETARY_USER_DATA=<dir>` runs against a scratch database in that folder (own single-instance lock, so it runs beside the real
+  app) and skips the login item, Start Menu shortcut and protocol registration. Use it for acceptance runs; never test on the real DB.
+- `SECRETARY_CHAT`, `SECRETARY_SCREENSHOT`, `SECRETARY_VIEW` as described elsewhere in this file.
 
 ## Known quirks
 - npm 11.19 blocks package install scripts by default ("allowScripts"). After `npm install`, if

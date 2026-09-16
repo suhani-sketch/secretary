@@ -21,6 +21,11 @@ app.setAppUserModelId(APP_USER_MODEL_ID)
 // "--hidden" is passed by the Windows login entry so the app starts in the tray without a window.
 const startedHidden = process.argv.includes('--hidden')
 
+// Developer hook: SECRETARY_USER_DATA=<dir> runs against a scratch database in that folder (its own single-instance
+// lock, so it can run beside the real copy) and never touches Windows startup, the Start Menu shortcut or the protocol.
+const scratchUserData = process.env['SECRETARY_USER_DATA']
+if (scratchUserData) app.setPath('userData', scratchUserData)
+
 let mainWindow: BrowserWindow | null = null
 let quitting = false
 let provider: Provider | null = null
@@ -297,9 +302,11 @@ const trayHandlers = {
 function onReady(): void {
   openDatabase()
   log('info', 'app.start', `v${app.getVersion()} electron ${process.versions.electron} hidden=${startedHidden} db=${dbPath()}`)
-  applyStoredOpenAtLogin()
-  ensureStartMenuShortcut()
-  registerProtocol()
+  if (!scratchUserData) {
+    applyStoredOpenAtLogin()
+    ensureStartMenuShortcut()
+    registerProtocol()
+  }
   setupProvider()
   createTray(trayHandlers)
   registerIpc()

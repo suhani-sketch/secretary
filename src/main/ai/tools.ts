@@ -573,7 +573,9 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
           project: publicItem(p),
           parts: parts.map(publicItem),
           notes: notes.map((n) => ({ id: shortId(n.id), body: n.body })),
-          history: history.map((h) => `${h.created_at.slice(0, 16).replace('T', ' ')} · ${h.actor}: ${h.summary}`)
+          history: history.map((h) => `${h.created_at.slice(0, 16).replace('T', ' ')} · ${h.actor}: ${h.summary}`),
+          // The user's own progress (record_activity, ticked steps, finished tasks) — what "what have I done?" is asking about.
+          done: history.filter((h) => h.verb === 'completed').map((h) => `${h.summary} (${h.created_at.slice(0, 10)})`).reverse()
         }
       }
     }
@@ -1166,11 +1168,11 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const itemId = x.item_id ? repo.resolveItemId(x.item_id) : null
       const item = itemId ? repo.getItem(itemId) : undefined
       const today = DateTime.local().toISODate()!
-      repo.insertActivity({
+      // Through act() so project_id is filled — "what have I done for X?" reads the project timeline (fixed 2026-09-16).
+      act({
         targetType: item ? 'item' : 'date',
         targetId: item ? item.id : today,
         verb: 'completed',
-        actor: ctx.actor,
         summary: x.summary,
         reversible: false
       })
@@ -1208,7 +1210,7 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       if (!last) throw new Error('There is nothing to undo')
       const undone = undoActivity(last)
       repo.markActivityIrreversible(last.id)
-      repo.insertActivity({ targetType: last.target_type, targetId: last.target_id, verb: 'undone', actor: ctx.actor, summary: `Undid: ${last.summary}`, before: last.after_json ? JSON.parse(last.after_json) : null, after: last.before_json ? JSON.parse(last.before_json) : null, reversible: false })
+      repo.insertActivity({ targetType: last.target_type, targetId: last.target_id, projectId: last.project_id ?? null, verb: 'undone', actor: ctx.actor, summary: `Undid: ${last.summary}`, before: last.after_json ? JSON.parse(last.after_json) : null, after: last.before_json ? JSON.parse(last.before_json) : null, reversible: false })
       clearOffer()
       const summary = `Undid: ${last.summary}`
       return { result: { ok: true, summary, restored: undone }, applied: { tool: name, summary, phrase: `Undone — ${lowerFirst(undone)}.` } }

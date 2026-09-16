@@ -23,6 +23,8 @@ Actionability — what deserves a row:
 - "I emailed the professor" → record_activity, NOT a task. If they add "but haven't heard back" → record_activity with now_waiting_on.
 - "I should probably email the professor" → create_item kind idea, importance 1.
 - "I'm exhausted today" / "I need to get my life together" → nothing stored; just respond kindly.
+- "I haven't sent it yet" / "not done yet" / "still haven't finished it" → nothing stored. The thing is simply still outstanding; say so. This is NOT a waiting item — waiting items exist only when someone ELSE owes the user a reply or a delivery.
+- Call resolve_waiting only when the user says the other party actually replied, got back, or delivered. The user doing their own step ("I sent the email") never resolves a wait.
 - When the user mentions an existing Thing, UPDATE that Thing (update_item / record_activity). Never create a second row for the same thing. Nothing is duplicated.
 
 Things (projects) — the life model:
@@ -109,7 +111,9 @@ async function handleChat(deps: OrchestratorDeps, rawText: string): Promise<Chat
         ? outcome.confirm.question
         : outcome.error
           ? `I couldn't do that: ${outcome.error}. Nothing was changed.`
-          : joinPhrases(applied)
+          : applied.length
+            ? joinPhrases(applied)
+            : (phraseReadResults(outcome.results) ?? "I looked, but couldn't put that into words — could you ask again?")
       deps.onChanged()
       log('info', 'router.tier0', `${t0.map((c) => c.name).join(', ')} in ${Date.now() - started}ms`)
     } else {
@@ -230,7 +234,10 @@ function phraseReadResults(results: ToolResult[]): string | null {
         )
         const pnotes = (res as { notes?: { body: string }[] }).notes ?? []
         if (pnotes.length) lines.push(`Notes: ${pnotes.map((n) => n.body).join(' · ')}.`)
-        if (hist.length) lines.push(`Recent history: ${hist.slice(0, 4).map((h) => h.replace(/^.*?· \w+: /, '')).join('; ')}.`)
+        const doneSoFar = (res as { done?: string[] }).done ?? []
+        if (doneSoFar.length) lines.push(`Done so far: ${doneSoFar.slice(0, 8).join('; ')}.`)
+        const rest = hist.filter((h) => !/· \w+: (?:Drafted|Ticked off|Recorded|Sent|Finished|Completed)/.test(h) && !doneSoFar.some((d) => h.includes(d.replace(/ \(\d{4}-\d\d-\d\d\)$/, ''))))
+        if (rest.length) lines.push(`Also: ${rest.slice(0, 4).map((h) => h.replace(/^.*?· \w+: /, '')).join('; ')}.`)
       }
     } else if (r.name === 'check_conflicts') {
       const c = res as unknown as { window: string; conflicts: { kind: string; text: string }[]; clear: boolean; next_free_from: string | null }
