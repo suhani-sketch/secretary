@@ -65,7 +65,9 @@ export function showToast(opts: ToastOptions): boolean {
       )
       n.on('show', () => log('info', 'notify.shown', `"${opts.title}"${useXml ? ' (with buttons)' : ''}`, opts.reminderId))
       n.on('click', () => {
-        log('info', 'notify.clicked', `"${opts.title}"`, opts.reminderId)
+        // On Windows this fires for body clicks. Button presses arrive separately as secretary:// launches
+        // (logged as protocol.received / toast.received), never through this event.
+        log('info', 'notify.clicked', `"${opts.title}" (body click; buttons arrive via ${PROTOCOL}://)`, opts.reminderId)
         opts.onClick?.()
       })
       n.on('close', () => {

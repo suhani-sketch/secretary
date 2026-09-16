@@ -87,6 +87,12 @@ Update it at the end of every session (spec §11).
 4. Reply text is generated only after tool results (post-commit); text alongside tool calls is discarded.
 5. cancel_reminder never touches the item; cancel_item/complete_item stop only that item's own alarms and report the count;
    status change, never deletion. Cascade across links (Phase 3) must ask first — prompt says so.
+- **Toast activation needs TWO registrations on Windows**: the `secretary://` protocol (HKCU\Software\Classes\secretary, written by
+  `setAsDefaultProtocolClient(protocol, electron.exe, [appDir])`) AND a Start Menu shortcut carrying `System.AppUserModel.ID =
+  com.suhani.secretary` (`shell.writeShortcutLink` → `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Secretary.lnk`, written at
+  every start). Without the shortcut the toast shows but button/body clicks fail with "Get an app to open this 'secretary' link",
+  even though `Start-Process secretary://…` and `Launcher.LaunchUriAsync` both work (verified 2026-09-16). Look for
+  `toast.received action=… ` in the log when testing buttons; `notify.clicked` is only the body click.
 - Toast buttons (Done / Snooze 15 / Snooze 1 h / Reschedule): Windows `toastXml` with protocol activation `secretary://reminder/<id>/<action>`.
   Electron's `actions` option is macOS-only, hence XML. `app.setAsDefaultProtocolClient('secretary', electron.exe, [appDir])` in dev.
   The URL arrives via `second-instance` argv (or own argv on a cold start) → `handleProtocolUrl` → `applyExternalTools` → same

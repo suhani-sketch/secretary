@@ -34,8 +34,16 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on('second-instance', (_e, argv) => {
     const url = argv.find((a) => a.startsWith(`${PROTOCOL}://`))
+    log('info', 'protocol.second_instance', url ?? `(no url; argv: ${argv.slice(1).join(' ')})`)
     if (url) handleProtocolUrl(url)
     else showWindow()
+  })
+  // macOS delivers protocol launches this way; harmless on Windows, and keeps the two paths identical.
+  app.on('open-url', (e, url) => {
+    e.preventDefault()
+    log('info', 'protocol.open_url', url)
+    if (app.isReady()) handleProtocolUrl(url)
+    else app.whenReady().then(() => handleProtocolUrl(url))
   })
   app.whenReady().then(onReady)
 }
@@ -45,7 +53,33 @@ function registerProtocol(): void {
   const ok = app.isPackaged
     ? app.setAsDefaultProtocolClient(PROTOCOL)
     : app.setAsDefaultProtocolClient(PROTOCOL, process.execPath, [app.getAppPath()])
-  log(ok ? 'info' : 'warn', 'protocol.registered', `${PROTOCOL}:// → ${ok ? 'ok' : 'FAILED'}`)
+  log(ok ? 'info' : 'warn', 'protocol.registered', `${PROTOCOL}:// → ${ok ? 'ok' : 'FAILED'} (${process.execPath} ${app.isPackaged ? '' : app.getAppPath()} "%1")`)
+}
+
+/**
+ * Windows attributes toasts to an app by AppUserModelId, and for an unpackaged app it learns that id from a Start Menu
+ * shortcut. Without the shortcut the toast still displays, but activation (clicks, buttons) is treated as coming from
+ * an unknown app and protocol launches fail with "Get an app to open this link". Electron writes one for its own default
+ * identity; we need one for ours.
+ */
+function ensureStartMenuShortcut(): void {
+  if (process.platform !== 'win32') return
+  try {
+    const dir = join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs')
+    const link = join(dir, 'Secretary.lnk')
+    const ok = shell.writeShortcutLink(link, 'replace', {
+      target: process.execPath,
+      args: app.isPackaged ? '' : `"${app.getAppPath()}"`,
+      cwd: app.getAppPath(),
+      description: 'Secretary — conversational personal secretary',
+      appUserModelId: APP_USER_MODEL_ID,
+      icon: join(app.getAppPath(), 'resources', 'tray.png'),
+      iconIndex: 0
+    })
+    log(ok ? 'info' : 'warn', 'aumid.shortcut', `${link} → ${ok ? 'written' : 'FAILED'} (AppUserModelId ${APP_USER_MODEL_ID})`)
+  } catch (e) {
+    log('error', 'aumid.shortcut', (e as Error).message)
+  }
 }
 
 /**
@@ -74,6 +108,8 @@ function handleProtocolUrl(raw: string): void {
     showWindow()
     return
   }
+  // The action itself, parsed — this is the line to look for when testing toast buttons.
+  log('info', 'toast.received', `action=${action}${arg ? `/${arg}` : ''} for reminder "${rem.item_title ?? 'Reminder'}" (state ${rem.state})`, reminderId)
   const ext = (calls: { name: string; args: Record<string, unknown> }[]): void => {
     const res = applyExternalTools('toast', 'user', calls)
     log(res.applied.length ? 'info' : 'warn', 'toast.action', `${action}: ${res.applied.map((a) => a.summary).join(' | ') || res.error || 'nothing applied'}`, reminderId)
@@ -228,6 +264,7 @@ function onReady(): void {
   openDatabase()
   log('info', 'app.start', `v${app.getVersion()} electron ${process.versions.electron} hidden=${startedHidden} db=${dbPath()}`)
   applyStoredOpenAtLogin()
+  ensureStartMenuShortcut()
   registerProtocol()
   setupProvider()
   createTray(trayHandlers)
