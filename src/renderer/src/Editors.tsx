@@ -63,7 +63,17 @@ interface EditorProps<T> {
   onOpenReminder: (r: Reminder) => void
 }
 
-export function ItemEditor({ target: item, reminders, runTool, onDone, onClose, onOpenReminder }: EditorProps<Item>): React.JSX.Element {
+export function ItemEditor({
+  target: item,
+  reminders,
+  projects,
+  parentId,
+  runTool,
+  onDone,
+  onClose,
+  onOpenReminder
+}: EditorProps<Item> & { projects: Item[]; parentId: string | null }): React.JSX.Element {
+  const [parent, setParent] = useState<string>(parentId ?? '')
   const [title, setTitle] = useState(item.title)
   const [details, setDetails] = useState(item.details ?? '')
   const [kind, setKind] = useState<ItemKind>(item.kind)
@@ -98,6 +108,15 @@ export function ItemEditor({ target: item, reminders, runTool, onDone, onClose, 
   }
 
   const save = (): void => {
+    // Project membership goes through its own tools (attach/detach), then the field edits.
+    const parentChanged = (parent || null) !== (parentId || null)
+    const membership = async (): Promise<void> => {
+      if (!parentChanged) return
+      const res = parent
+        ? await runTool('attach_to_project', { item_id: item.id, project_id: parent })
+        : await runTool('detach_from_project', { item_id: item.id })
+      if (res.error) throw new Error(res.error)
+    }
     const args: Record<string, unknown> = { id: item.id }
     if (title.trim() !== item.title) args.title = title.trim()
     if ((details || null) !== (item.details || null)) args.details = details || null
@@ -119,14 +138,27 @@ export function ItemEditor({ target: item, reminders, runTool, onDone, onClose, 
       }
     }
     if (Object.keys(args).length === 1) {
-      onClose()
+      if (!parentChanged) {
+        onClose()
+        return
+      }
+      setBusy(true)
+      membership()
+        .then(() => {
+          onDone(parent ? 'Moved into the Thing.' : 'Taken out of the Thing.')
+          onClose()
+        })
+        .catch((e) => setErr((e as Error).message))
+        .finally(() => setBusy(false))
       return
     }
-    void run('update_item', args, 'Saved.')
+    membership()
+      .then(() => run('update_item', args, 'Saved.'))
+      .catch((e) => setErr((e as Error).message))
   }
 
   return (
-    <Modal title="Edit item" onClose={onClose}>
+    <Modal title={item.kind === 'project' ? 'Edit Thing' : 'Edit item'} onClose={onClose}>
       <div className="flex flex-col gap-3">
         <div>
           <span className={label}>Title</span>
@@ -180,6 +212,19 @@ export function ItemEditor({ target: item, reminders, runTool, onDone, onClose, 
             )}
           </div>
         </div>
+        {item.kind !== 'project' && projects.length > 0 && (
+          <div>
+            <span className={label}>Part of</span>
+            <select className={field} value={parent} onChange={(e) => setParent(e.target.value)}>
+              <option value="">not part of a Thing</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.title}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div>
           <span className={label}>Deadline or target?</span>
           <div className="flex gap-2">

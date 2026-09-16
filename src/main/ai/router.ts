@@ -101,9 +101,22 @@ function remindArgs(w: ParsedWhen): Record<string, unknown> {
   return w.exact ? { remind_at_local: w.dateTime } : { remind_date_local: w.date }
 }
 
-/** Strip the date phrase and a dangling preposition from a title. */
+/**
+ * Matching runs on lower-cased text, but titles must keep the user's casing ("TISS mailing", not "Tiss mailing").
+ * Find the matched fragment case-insensitively in the original message and return that slice.
+ */
+let originalText = ''
+function restoreCase(fragmentLower: string): string {
+  const idx = originalText.toLowerCase().indexOf(fragmentLower.toLowerCase())
+  return idx >= 0 ? originalText.slice(idx, idx + fragmentLower.length) : fragmentLower
+}
+
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** Strip the date phrase and a dangling preposition from a title, keeping the user's casing. */
 function cleanTitle(raw: string, dateText: string): string {
-  let t = raw.replace(dateText, ' ')
+  let t = restoreCase(raw)
+  if (dateText) t = t.replace(new RegExp(escapeRe(dateText), 'i'), ' ')
   t = t.replace(/\s+(on|at|by|for|before|until|till|around|sometime|some time)\s*$/i, '')
   t = t.replace(/^\s*(to|about|that)\s+/i, '')
   t = t.replace(/\s+/g, ' ').trim()
@@ -150,6 +163,7 @@ const DAYS: Record<string, string> = {
 }
 
 export function routeTier0(rawText: string): ToolCallSpec[] | null {
+  originalText = rawText.trim().replace(/\s+/g, ' ')
   const text = expandShorthand(norm(rawText))
   if (!text || text.length > 160 || text.includes('\n')) return null
   let m: RegExpExecArray | null
@@ -159,16 +173,33 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     return [{ name: 'undo_last', args: {} }]
   }
 
-  // ---- "yes" to a standing offer ("Want a reminder?") ----
-  if (/^(?:yes|yes please|yep|yeah|sure|ok|okay|please|do it|go ahead|yes do)$/.test(text)) {
+  // ---- "yes" / "no" to a standing offer or question ----
+  if (/^(?:yes|yes please|yep|yeah|sure|ok|okay|please|do it|go ahead|yes do|same|same thing|yes same)$/.test(text)) {
     const offer = getOffer()
     if (!offer) return null
+    if (offer.kind === 'project_match') {
+      return [{ name: 'create_project', args: { title: offer.proposedTitle, use_existing_id: offer.existingId } }]
+    }
     const item = repo.getItem(offer.itemId)
     if (!item || !item.due_at_utc || item.status !== 'open') return null
     const due = DateTime.fromISO(item.due_at_utc, { zone: 'utc' }).toLocal()
     return item.due_precision === 'exact'
       ? [{ name: 'create_reminder', args: { item_id: item.id, fire_at_local: due.toFormat("yyyy-MM-dd'T'HH:mm") } }]
       : [{ name: 'create_reminder', args: { item_id: item.id, fire_date_local: due.toFormat('yyyy-MM-dd') } }]
+  }
+
+  if (/^(?:no|nope|no,? (?:it'?s |that'?s )?(?:a )?(?:new|different|separate)(?: project| thing| one)?|(?:a )?(?:new|different|separate) (?:project|thing|one)|it'?s (?:a )?(?:new|different) (?:one|project|thing))$/.test(text)) {
+    const offer = getOffer()
+    if (offer?.kind === 'project_match') return [{ name: 'create_project', args: { title: offer.proposedTitle, force_new: true } }]
+    return null
+  }
+
+  // ---- "X is something I need to deal with" → a Thing (project), never a task named after the sentence ----
+  if ((m = /^(.+?) is (?:something|a thing|one thing|a big thing) (?:that )?i(?:'ve| have)? (?:really |also )?(?:need|have|got|want|ought) to (?:deal with|sort out|handle|figure out|look at|work on|get done|get sorted|finish|tackle|do)(?: (?:soon|this week|properly|eventually))?$/.exec(text)) ||
+      (m = /^(?:new project|start a project|start tracking|track|let'?s track)[:\s]+(.+)$/.exec(text))) {
+    const title = cleanTitle(m[1].replace(/^(?:the|my|this|that)\s+/i, ''), '')
+    if (!title || words(title).length === 0) return null
+    return [{ name: 'create_project', args: { title } }]
   }
 
   // ---- pause / resume the reminder ----

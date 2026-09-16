@@ -3,9 +3,25 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 2 complete (2026-09-16) — Tier 0 router, chrono, Flash-Lite default, wall-clock RRULE recurrence with
-restart + DST tests passing. Phase 1 complete (2026-09-15). Phase 0's strict reboot test still not observed (user choice); a
-real toast-button click is still unconfirmed by the user. Next: Phase 3 (the life model).
+## Current phase: Phase 3 in progress — slice 3a (Projects/Things) built and tested 2026-09-16; 3b–3f not started.
+Phases 0–2 complete. Test A (§11A) re-run in full 2026-09-16 including steps 4/5/7: pass. Toast buttons confirmed working by
+a real click (user snoozed "Call tom" on 2026-09-16). Phase 0's strict reboot test still not observed (user choice).
+
+## Phase 3a — Projects/Things (2026-09-16)
+- Projects are `items` with `kind='project'`; parts attach with `links` type `part_of` (child → project). No schema change.
+- `src/main/entity.ts` (pure; `node tests/entity.test.ts`): `nameSimilarity` = max(word Dice, trigram Dice, containment×0.9);
+  `resolveEntity(name, pool, recentIds)` → match (≥0.75) / maybe (≥0.45) / none; focus-stack ids get +0.1.
+- Tools: `create_project` (resolves first: match → returns the existing project, no row; maybe → confirm question + a
+  `project_match` Offer so tier-0 "yes"/"no, new project" answers it; none/force_new → create), `archive_project` (confirm,
+  archives parts), `attach_to_project`, `detach_from_project`, `get_project`. `create_item` takes `project_id` or `project_title`
+  (resolves or infers the project). `act()` fills `activities.project_id` (denormalised) for parts and projects;
+  `repo.activitiesForProject` powers "what have I done for X" via `get_project`/`search_activity`, phrased in code.
+- Context lists every open project with its parts and last activity; items show "part of [id]". Prompt has a Things section.
+- Tier 0: "X is something I need to deal with" / "start tracking X" → create_project; Tier 0 titles keep the user's casing via
+  `restoreCase` (matching is lower-cased). Window: "thing" badge with open-part count, "part of X" on children, "Part of"
+  selector in the item editor (attach/detach through the tool layer).
+- Verified: TISS opening lines (create → task attached → activity on project → typo'd rename resolves → due set) and
+  "IIM app" matching "IIM application"; persists across restart; one project each, no duplicates.
 
 ## What works (verified 2026-09-15)
 - Electron 44 + React 19 + Vite 7 + Tailwind 4 + TypeScript, built with `electron-vite`.
@@ -164,11 +180,11 @@ real toast-button click is still unconfirmed by the user. Next: Phase 3 (the lif
 - `npm run typecheck`
 
 ## Next
-- Phase 3 — the life model: projects/Things inferred from conversation, checklists (kind=checklist_item + part_of links),
-  notes on anything, activity history surfaced in the UI, waiting items, dependencies (links blocks/part_of/relates_to),
-  constraints + conflict detection, natural-language project updates. Tools still missing from the spec list:
-  create/update/archive_project, add/complete/remove/reorder checklist, add/update/delete_note, add/remove_link,
-  add/remove_constraint, check_conflicts, get_project, search over notes. Done when acceptance test B (TISS) passes across a restart.
+- Phase 3b — checklists: kind=checklist_item, sort_order, part_of a project; "add a list…" / "add A, B and C" → N items;
+  "I sent the first email" completes the matching item (entity resolution over the project's parts). Then 3c waiting +
+  conditional reminders (`condition_json`, evaluated in the scheduler), 3d notes, 3e project timeline view, 3f blocks/constraints.
+  Done when §11B passes across a restart with one project and no duplicates.
+- Undo does not yet cover attach/detach/archive (recorded as irreversible).
 - Phase 2 leftovers, not blocking: recurring alarms can't yet be described with an end ("until December") or count; the
   `tier` column shows ~40% tier 0 so far — keep widening Tier 0 as real phrasing accumulates; tomorrow/yesterday edge cases
   around midnight untested.

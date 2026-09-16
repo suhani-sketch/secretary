@@ -7,6 +7,7 @@ import type {
   ChatStatus,
   ExtractionEntry,
   Item,
+  Link,
   Reminder,
   SchedulerLogEntry,
   ToolRunResult
@@ -31,6 +32,7 @@ type Editing = { kind: 'item'; item: Item } | { kind: 'reminder'; reminder: Remi
 
 export default function App(): React.JSX.Element {
   const [items, setItems] = useState<Item[]>([])
+  const [links, setLinks] = useState<Link[]>([])
   const [reminders, setReminders] = useState<Reminder[]>([])
   const [logs, setLogs] = useState<SchedulerLogEntry[]>([])
   const [aiCalls, setAiCalls] = useState<SchedulerLogEntry[]>([])
@@ -48,16 +50,18 @@ export default function App(): React.JSX.Element {
 
   const refresh = useCallback(async () => {
     try {
-      const [i, r, l, a, x, ac, act] = await Promise.all([
+      const [i, r, l, a, x, ac, act, lk] = await Promise.all([
         window.api.listItems(),
         window.api.listReminders(),
         window.api.listLog(50),
         window.api.getAppInfo(),
         window.api.listExtractions(20),
         window.api.listAiCalls(20),
-        window.api.listActivities(40)
+        window.api.listActivities(40),
+        window.api.listLinks()
       ])
       setItems(i)
+      setLinks(lk)
       setReminders(r)
       setLogs(l)
       setInfo(a)
@@ -147,6 +151,17 @@ export default function App(): React.JSX.Element {
   const openItems = items.filter(live)
   const pending = reminders.filter((r) => r.state === 'pending' || r.state === 'snoozed' || r.state === 'paused')
   const itemById = new Map(items.map((i) => [i.id, i]))
+  // Things: which project each item belongs to (part_of), and how many live parts each project has.
+  const parentOf = new Map<string, Item>()
+  const partsOf = new Map<string, number>()
+  for (const l of links) {
+    if (l.type !== 'part_of') continue
+    const p = itemById.get(l.to_item)
+    if (p) parentOf.set(l.from_item, p)
+    const child = itemById.get(l.from_item)
+    if (child && live(child)) partsOf.set(l.to_item, (partsOf.get(l.to_item) ?? 0) + 1)
+  }
+  const projects = openItems.filter((i) => i.kind === 'project')
 
   // Overdue is its own list (spec §7 Today: "live obligations, blockers"), never mixed into Coming Up.
   const now = Date.now()
@@ -324,13 +339,17 @@ export default function App(): React.JSX.Element {
               <ul className="flex flex-col gap-1 overflow-y-auto">
                 {openItems.slice(0, 30).map((it) => (
                   <li key={it.id} className="group text-sm flex items-start gap-2 rounded-lg px-1 py-1 hover:bg-white/80 cursor-pointer" onClick={() => setEditing({ kind: 'item', item: it })}>
-                    <span className="text-[10px] mt-1 rounded px-1 bg-stone-200 text-stone-600">{it.is_suggestion ? 'suggested' : it.kind.replace('_', ' ')}</span>
+                    <span className={`text-[10px] mt-1 rounded px-1 ${it.kind === 'project' ? 'bg-[#B5836D]/25 text-[#3A2E28]' : 'bg-stone-200 text-stone-600'}`}>
+                      {it.is_suggestion ? 'suggested' : it.kind === 'project' ? 'thing' : it.kind.replace('_', ' ')}
+                    </span>
                     <div className="min-w-0 flex-1">
-                      <div className={`truncate ${it.is_suggestion ? 'italic text-stone-500' : ''}`}>{it.title}</div>
-                      {(it.due_at_utc || it.status !== 'open') && (
-                        <div className="text-xs text-stone-500">
+                      <div className={`truncate ${it.is_suggestion ? 'italic text-stone-500' : ''} ${it.kind === 'project' ? 'font-medium' : ''}`}>{it.title}</div>
+                      {(it.due_at_utc || it.status !== 'open' || it.kind === 'project' || parentOf.has(it.id)) && (
+                        <div className="text-xs text-stone-500 truncate">
                           {it.status !== 'open' && <span className="mr-1">{it.status.replace('_', ' ')}</span>}
                           {it.due_at_utc && <>due {formatDue(it.due_at_utc, it.due_precision)}{it.hardness === 'hard' ? ' · hard' : ''}</>}
+                          {it.kind === 'project' && <span>{it.due_at_utc ? ' · ' : ''}{partsOf.get(it.id) ?? 0} open {(partsOf.get(it.id) ?? 0) === 1 ? 'part' : 'parts'}</span>}
+                          {parentOf.has(it.id) && <span>{it.due_at_utc ? ' · ' : ''}part of {parentOf.get(it.id)!.title}</span>}
                         </div>
                       )}
                     </div>
@@ -358,6 +377,8 @@ export default function App(): React.JSX.Element {
         <ItemEditor
           target={itemById.get(editing.item.id) ?? editing.item}
           reminders={reminders}
+          projects={projects}
+          parentId={parentOf.get(editing.item.id)?.id ?? null}
           runTool={runTool}
           onDone={say}
           onClose={() => setEditing(null)}

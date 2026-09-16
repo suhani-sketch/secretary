@@ -25,6 +25,13 @@ Actionability — what deserves a row:
 - "I'm exhausted today" / "I need to get my life together" → nothing stored; just respond kindly.
 - When the user mentions an existing Thing, UPDATE that Thing (update_item / record_activity). Never create a second row for the same thing. Nothing is duplicated.
 
+Things (projects) — the life model:
+- When the user names something they are dealing with that has, or will have, parts ("TISS mailing is something I need to deal with", "my IIM application", "the wedding"), call create_project with the name they used. The context lists every project you already track with its id: if the Thing is there, DO NOT create it again — use its id.
+- A task that belongs to a Thing gets project_id (or project_title if the Thing is not in the context yet). "I need to email TISS about the mailing" → create_item with project_id of the TISS mailing.
+- Progress on a Thing ("I worked on the TISS mailing today", "I drafted the first email") → record_activity with item_id = the project. Never a task named after the sentence.
+- Changing a Thing's date or details → update_item on the project id. "That belongs to X" → attach_to_project.
+- If create_project answers with a near-match question, relay it; "yes" → call again with use_existing_id, "no, it's different" → force_new=true.
+
 Reference resolution:
 - "it", "that", "the earlier one" usually mean the most recently touched item listed in the context. When the user gives a new time for something just created ("actually make it 4"), update THAT item — never create a second one. Its reminder moves with it automatically.
 
@@ -186,9 +193,30 @@ function phraseReadResults(results: ToolResult[]): string | null {
       const rs = res.reminders ?? []
       lines.push(`"${res.item.title}" is ${res.item.status}${res.item.due ? `, due ${res.item.due}` : ''}${rs.length ? `, reminder ${rs.map((x) => x.fires).join(' and ')}` : ', no reminder'}.`)
       if (res.history?.length) lines.push(`Recently: ${res.history.slice(0, 3).join('; ')}.`)
+    } else if (r.name === 'get_project') {
+      const p = (res as { project?: { title: string; due: string | null; status: string }; parts?: { title: string; status: string; due: string | null }[]; history?: string[] }).project
+      const parts = (res as { parts?: { title: string; status: string; due: string | null }[] }).parts ?? []
+      const hist = (res as { history?: string[] }).history ?? []
+      if (p) {
+        const open = parts.filter((x) => !['done', 'cancelled', 'archived'].includes(x.status))
+        lines.push(
+          `"${p.title}"${p.due ? ` is due ${p.due}` : ''}: ${parts.length ? `${open.length} of ${parts.length} parts still open${open.length ? ` (${open.map((x) => x.title).join(', ')})` : ''}` : 'no parts yet'}.`
+        )
+        if (hist.length) lines.push(`History: ${hist.slice(0, 6).map((h) => h.replace(/^.*?· \w+: /, '')).join('; ')}.`)
+      }
     } else if (r.name === 'search_activity') {
       const h = res.history ?? []
-      lines.push(h.length ? `Here's what happened: ${h.slice(0, 6).join('; ')}.` : 'No history recorded for that yet.')
+      // Entries arrive newest first as "yyyy-mm-dd hh:mm · actor: summary"; tell it oldest first, by day, without the plumbing.
+      const tidy = [...h]
+        .reverse()
+        .slice(-8)
+        .map((e) => {
+          const m = /^(\d{4}-\d{2}-\d{2}) \d{2}:\d{2} · \w+: (.*)$/.exec(e)
+          if (!m) return e
+          const day = new Date(m[1] + 'T00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
+          return `${day}: ${m[2]}`
+        })
+      lines.push(tidy.length ? `Here's what happened, oldest first. ${tidy.join('. ')}.` : 'No history recorded for that yet.')
     }
   }
   return lines.length ? lines.join(' ') : null

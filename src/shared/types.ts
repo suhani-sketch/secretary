@@ -50,6 +50,12 @@ export interface Reminder {
   item_title?: string | null
 }
 
+export interface Link {
+  from_item: string
+  to_item: string
+  type: 'part_of' | 'blocks' | 'relates_to' | string
+}
+
 export interface Activity {
   id: string
   target_type: TargetType | string
@@ -178,6 +184,8 @@ export interface SecretaryApi {
   listActivities(limit?: number): Promise<Activity[]>
   /** Last N AI calls (from the scheduler log), for the debug panel. */
   listAiCalls(limit?: number): Promise<SchedulerLogEntry[]>
+  /** All part_of / blocks / relates_to links, so the window can show which items belong to which project. */
+  listLinks(): Promise<Link[]>
 }
 
 export const IPC = {
@@ -200,5 +208,6 @@ export const IPC = {
   chatPrefill: 'chat:prefill',
   runTool: 'tools:run',
   listActivities: 'activities:list',
-  listAiCalls: 'ai:calls'
+  listAiCalls: 'ai:calls',
+  listLinks: 'links:list'
 } as const

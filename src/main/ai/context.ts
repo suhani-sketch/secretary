@@ -25,10 +25,10 @@ export function getFocus(): FocusEntry[] {
 }
 
 /** A standing offer the assistant just made ("Want a reminder?") that a plain "yes" answers. */
-export interface Offer {
-  kind: 'reminder'
-  itemId: string
-}
+export type Offer =
+  | { kind: 'reminder'; itemId: string }
+  /** "Is X the same as your existing project Y?" — a plain yes/no answers it. */
+  | { kind: 'project_match'; existingId: string; proposedTitle: string }
 let offer: Offer | null = null
 export const setOffer = (o: Offer): void => {
   offer = o
@@ -47,6 +47,10 @@ function describeItem(it: Item, reminders: Reminder[]): string {
   if (it.is_suggestion) bits.push('SUGGESTION — not confirmed by the user')
   if (it.details) bits.push(`— ${it.details.slice(0, 120)}`)
   if (it.hardness) bits.push(it.hardness === 'hard' ? 'hard deadline' : 'soft target')
+  if (it.kind !== 'project') {
+    const parent = repo.parentProjectOf(it.id)
+    if (parent) bits.push(`part of [${shortId(parent.id)}] "${parent.title}"`)
+  }
   const rs = reminders.filter((r) => r.target_type === 'item' && r.target_id === it.id)
   for (const r of rs) bits.push(`reminder [${shortId(r.id)}] ${r.state} ${formatClock(r.fire_at_utc)}`)
   if (rs.length === 0) bits.push('no reminder')
@@ -89,6 +93,20 @@ export function assembleContext(userText: string): string {
   const section = (title: string, items: Item[]): string =>
     items.length ? `${title}:\n${items.map((i) => describeItem(i, reminders)).join('\n')}` : `${title}: none`
 
+  // Things: always listed in full with their parts, so mentions resolve to the existing project (spec §8 3a).
+  const projects = repo.openProjects(30)
+  const projectLines = projects.map((p) => {
+    const parts = repo.projectParts(p.id)
+    const open = parts.filter((c) => !['done', 'cancelled', 'archived'].includes(c.status))
+    const last = repo.activitiesForProject(p.id, 1)[0]
+    return (
+      `- [${shortId(p.id)}] "${p.title}"` +
+      (p.due_at_utc ? ` · due ${formatDue(p.due_at_utc, p.due_precision)}${p.hardness === 'hard' ? ' (hard)' : ''}` : '') +
+      ` · ${parts.length ? `${open.length} open of ${parts.length} parts: ${parts.map((c) => `[${shortId(c.id)}] ${c.title}${c.status !== 'open' ? ` (${c.status})` : ''}`).join(', ')}` : 'no parts yet'}` +
+      (last ? ` · last: ${last.summary}` : '')
+    )
+  })
+
   return [
     `Current local time: ${now.toFormat('cccc d LLLL yyyy, HH:mm')} (${now.zoneName}). Tomorrow is ${now.plus({ days: 1 }).toFormat('cccc d LLLL yyyy')}.`,
     ``,
@@ -97,6 +115,8 @@ export function assembleContext(userText: string): string {
           .map((f) => `- [${shortId(f.itemId)}] "${f.title}" — ${f.action}`)
           .join('\n')}`
       : `Recently touched in this conversation: nothing yet.`,
+    ``,
+    projects.length ? `Projects / Things you are tracking (use these ids; never create a second one for the same Thing):\n${projectLines.join('\n')}` : `Projects / Things you are tracking: none yet.`,
     ``,
     section('Items just touched (full detail)', focused),
     section('Overdue open items', overdue),
@@ -111,7 +131,11 @@ export function assembleContext(userText: string): string {
     constraints.length
       ? `Availability constraints:\n${constraints.map((c) => `- ${c.kind}: ${c.label}${c.rrule ? ` (${c.rrule})` : ''} [${c.source}]`).join('\n')}`
       : `Availability constraints: none recorded.`,
-    offer ? `Standing offer: you just asked whether to add a reminder for [${shortId(offer.itemId)}]; a plain "yes" means create it.` : '',
+    offer
+      ? offer.kind === 'reminder'
+        ? `Standing offer: you just asked whether to add a reminder for [${shortId(offer.itemId)}]; a plain "yes" means create it.`
+        : `Standing question: you asked whether "${offer.proposedTitle}" is the same Thing as project [${shortId(offer.existingId)}]. "yes" → create_project with use_existing_id; "no"/"different" → create_project with force_new=true.`
+      : '',
     ``,
     prefs.length
       ? `User preferences:\n${prefs.map((p) => `- ${p.key} = ${p.value} (${p.source})`).join('\n')}`

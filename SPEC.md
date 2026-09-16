@@ -51,7 +51,7 @@ Not features. These hold in every phase and are never deferred or simplified.
 5. **Task ≠ reminder ≠ deadline ≠ calendar event.** Cancelling one never silently destroys another.
 6. **No dead-end information.** Anything displayed can be inspected and edited directly. See §7.
 7. **One data model.** Manual edits and AI edits write to the same rows. Never two parallel systems.
-8. **Actionability threshold.** "I need to get my life together" does not become a task called *Get life together*. See §5.
+8. **Actionability threshold.** "I need to get my life together" does not become a task called *Get life together*. See §4.
 9. **Nothing is duplicated.** One "IIM application" Thing, referenced everywhere, not re-created on each mention.
 
 ### The standard
@@ -138,7 +138,7 @@ CREATE TABLE items (
   due_at_utc      TEXT,
   due_tz          TEXT,
   due_precision   TEXT,            -- exact|day|week|vague
-  hardness        TEXT,            -- hard|soft   (deadline vs target — see §5)
+  hardness        TEXT,            -- hard|soft   (deadline vs target — see notes below)
   effort_minutes  INTEGER,
   importance      INTEGER DEFAULT 2,
   sort_order      INTEGER,         -- checklist ordering
@@ -287,9 +287,9 @@ The free tier allows **5 requests/minute**. A design where every user message co
 
 **Tier 0 — deterministic, no model call, instant.** `chrono-node` for dates, keyword matching for done / cancel / snooze / complete, all manual UI edits, all reads (Today, Coming Up, calendar, project views), all dependency and blocker computation. Target: the clear majority of interactions.
 
-**Tier 1 — Flash-Lite.** Classification, single-item extraction, simple edits, reference resolution.
+**Tier 1 — `gemini-3.5-flash-lite`.** Classification, single-item extraction, simple edits, reference resolution.
 
-**Tier 2 — Flash.** Brain dumps, replanning, the two signature questions, cross-project reasoning.
+**Tier 2 — `gemini-3.6-flash`, escalating to `gemini-3.8-flash` only where reasoning depth genuinely earns the tighter quota.** Brain dumps, replanning, the two signature questions, cross-project reasoning.
 
 **One user message must cost at most one API call.** If classification and extraction are separate calls, merge them. Count calls per message and assert it in a test.
 
@@ -440,27 +440,43 @@ Each phase has a hard completion test. Do not begin the next until the current o
 Electron + React + SQLite. Tray. Migrations. Scheduler, notifier, startup sweep, debug panel. Reminders fire with the window closed; missed ones are recovered.
 *Outstanding: the strict reboot test has not been observed.*
 
-### Phase 1 — Conversation, tools, and the spine
+### Phase 1 — Conversation, tools, and the spine ✅ complete
 Orchestrator, provider abstraction, Zod-validated tool layer, transactional execution, `extractions` log, `activities` recorder, focus stack, confidence tiers, actionability threshold. Create / edit / complete / cancel tasks and reminders conversationally **and manually**. Notification actions. Undo.
 
 Split freely — 1a create and read with invariants enforced, 1b edit/cancel/complete and reference resolution, 1c manual editing surfaces. Reference resolution is the hardest part and deserves its own pass.
 
-**Done when:** "remind me to call the bank Thursday at 3" then "actually make it 4" edits *one row*; "cancel the reminder" leaves the task; "tomorrow" stores as `day` precision; every visible item opens and edits; "undo that" reverses the last change; and one user message costs at most one API call.
+**Done when:** "remind me to call the bank Thursday at 3" then "actually make it 4" edits *one row*; "cancel the reminder" leaves the task; "tomorrow" stores as `day` precision; every visible item opens and edits; "undo that" reverses the last change; and one user message costs at most one API call. Test A in §11 is the full check.
 
-### Phase 2 — Fast path, dates, recurrence
-Tier 0 router. `chrono-node`. Timezone-correct storage. RRULE for reminders. Flash-Lite as default model.
+### Phase 2 — Fast path, dates, recurrence ✅ complete
+Tier 0 router. `chrono-node`. Timezone-correct storage. RRULE for reminders. `gemini-3.5-flash-lite` as default model.
 
 **Done when:** simple messages respond instantly with no API call; "every Sunday" recurs and survives restart; "in two hours" lands correctly; and normal testing no longer trips the rate limit.
 
 ### Phase 3 — The life model
-Projects/Things, inferred from conversation rather than created by hand. Checklists. Notes on anything. Activity history surfaced. Waiting items. Dependencies. Constraints. Natural-language project updates ("I worked on the TISS mailing today", "I sent it", "they haven't replied").
+The largest phase. Build it in slices, each independently testable, in this order:
 
-**Done when:** the TISS acceptance test in §10 passes end to end, across an app restart.
+**3a — Projects/Things.** `items` with `kind='project'`. Inferred from conversation, never created by hand. Tasks and deadlines attach via `links` (`part_of`).
+
+**3b — Checklists.** `kind='checklist_item'`, ordered by `sort_order`, part_of a project. "Add send first email, follow up, and attach the document" creates three. Checklist items do not become standalone tasks unless promoted.
+
+**3c — Waiting items.** `kind='waiting'` with `waiting_on`. Visually distinct from open tasks. Conditional follow-ups ("if they haven't replied by Friday, remind me") create a reminder with `condition_json`, evaluated deterministically against item state — never by asking the model whether the condition is met.
+
+**3d — Notes on anything.** The `notes` table, attachable to items, events, reminders and bare dates. "Add a note to the application that the transcript must be a PDF" attaches without navigating to a form. Date-attached notes ("I'll be travelling Friday") inform planning without becoming journaling.
+
+**3e — Activity history in the UI.** A project view showing its timeline, and answers to "what have I done for X?" read from `activities` rather than from the model's memory.
+
+**3f — Dependencies and constraints.** `links` of type `blocks`. Availability constraints. Blocker computation in code.
+
+**Entity resolution is the thing most likely to break this phase.** "TISS mailing" mentioned across three conversations must resolve to one project. Before creating any project, match against existing ones by name similarity and recent focus; on a near-match, use the existing one; when genuinely unsure and the action is consequential, ask. A second orphaned "TISS mailing" is the failure that makes the whole life model worthless.
+
+**Natural-language updates must update, not create.** "I worked on the TISS mailing today" is an activity on an existing project. "I sent it" completes a checklist item. "They haven't replied" is a waiting state. None of these create a task named after the sentence.
+
+**Done when:** the TISS acceptance test in §11B passes end to end, across an app restart, with one project and no duplicates.
 
 ### Phase 4 — Calendar
 Month / week / day / agenda. Events, recurrence, exceptions. Drag, resize, edit, delete. Two-way with the assistant. Obligations displayed alongside events. Conflict detection and free-slot finding.
 
-**Done when:** the calendar acceptance test in §10 passes, including manual drag updating what the assistant knows.
+**Done when:** the calendar acceptance test in §11C passes, including manual drag updating what the assistant knows.
 
 ### Phase 5 — Intelligence
 Brain dump. Voice notes. Deadline intelligence and component bottlenecks. "What should I do right now?" "What am I forgetting?" Time estimates. Smart scheduling.
@@ -472,7 +488,7 @@ Brain dump. Voice notes. Deadline intelligence and component bottlenecks. "What 
 ### Phase 6 — Proactivity
 Daily briefing. Deadline preparation. Missed-task and waiting-item follow-up. Adaptive intensity, quiet hours. Conversational replanning.
 
-**Done when:** the application acceptance test in §10 passes end to end.
+**Done when:** the application acceptance test in §11D passes end to end.
 
 ### Phase 7 — Aesthetic pass
 Companion redesign and state machine. Room and time-of-day lighting. Typography, visual hierarchy, calendar and project aesthetics, notification personality.
@@ -484,7 +500,16 @@ Use it daily for two weeks. Fix what actually annoys you. Add nothing.
 
 ---
 
-## 9. Risks
+## 9. Known gaps
+
+Carried forward deliberately. Not bugs — decisions deferred or work not yet done.
+
+- **Recurring reminders cannot end.** No "until December", no "five times". RRULE supports `UNTIL` and `COUNT`; the editor and parser do not yet. Add when it bites.
+- **Reboot test still unobserved.** Phase 0's strict test — quit, restart Windows, reminder fires unaided — has never been watched. All pieces are in place.
+- **Due date without a reminder is still the default.** §5 says decide this deliberately. It has not been decided. A dated item currently notifies nobody.
+- **Wrong-year guard is narrow.** Past times are refused and obvious year slips corrected. Other date misreadings are not caught.
+
+## 10. Risks
 
 **Scope.** This is the largest risk by a distance. The spec has grown substantially in three revisions while Phase 1 is half-built. Phases 3 through 6 are each multi-week. The calendar alone is three to four weeks and now sits ahead of the intelligence features. Freeze scope until Phase 1 passes.
 
@@ -504,7 +529,7 @@ Use it daily for two weeks. Fix what actually annoys you. Add nothing.
 
 ---
 
-## 10. Acceptance tests
+## 11. Acceptance tests
 
 Each must pass **across an app restart**, and at no point may the assistant claim something happened that did not.
 
@@ -553,7 +578,7 @@ Close the app. Restart Windows. Reminders still fire. Missed ones recovered. Not
 
 ---
 
-## 11. Working with Claude Code on this
+## 12. Working with Claude Code on this
 
 - This file is the only phase numbering that exists. Fold new plans in; never run two schemes.
 - Keep `CLAUDE.md` beside it: current phase, what works, what's broken, what's next. Update every session.

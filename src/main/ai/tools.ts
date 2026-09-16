@@ -4,7 +4,8 @@ import { describeRRule as describeRule, firstOccurrence, normalizeRRule } from '
 import { getDb } from '../db'
 import { log } from '../log'
 import * as repo from '../repo'
-import { clearOffer, pushFocus, setOffer, shortId } from './context'
+import { clearOffer, getFocus, pushFocus, setOffer, shortId } from './context'
+import { resolveEntity } from '../entity'
 import { formatClock, formatDue } from '../../shared/format'
 import type { ToolDefinition } from './provider'
 import type { Actor, AppliedChange, Item, Reminder } from '../../shared/types'
@@ -62,6 +63,8 @@ export const toolSchemas = {
       remind_at_local: localDateTime.optional().describe('Only if the user asked to be reminded AND gave a clock time. ' + DT_DESC),
       remind_date_local: localDate.optional().describe('Only if the user asked to be reminded on a day without a clock time; the reminder fires at their default reminder time. ' + DATE_DESC),
       remind_rrule: rruleStr.optional().describe('For a RECURRING reminder ("every Sunday", "daily at 8"): the RRULE, e.g. "FREQ=WEEKLY;BYDAY=SU". Give remind_at_local as the first occurrence. Leave due fields empty for recurring chores.'),
+      project_id: idRef.optional().describe('If this belongs to an existing project/Thing listed in the context, its id — the item becomes part of it.'),
+      project_title: z.string().max(200).optional().describe('If it belongs to a project the user named that is NOT yet in the context, the project name; the app matches an existing project by name or creates it.'),
       is_suggestion: z.boolean().optional().describe('true if YOU are proposing this and the user did not state it. Suggestions are not obligations until confirmed.'),
       confidence: z.number().min(0).max(1).optional().describe('For suggestions: how sure you are the user meant this.')
     })
@@ -85,6 +88,25 @@ export const toolSchemas = {
       confirm_suggestion: z.boolean().optional().describe('true when the user confirms a suggested item — it becomes a real obligation.')
     })
     .refine(noBothDue, 'Give either due_at_local or due_date_local, not both'),
+  create_project: z
+    .object({
+      title: z.string().min(1).max(200).describe('The Thing\'s name as the user says it, e.g. "TISS mailing", "IIM application".'),
+      details: z.string().max(2000).optional(),
+      ...dueFields,
+      use_existing_id: idRef.optional().describe('After the app asked whether a near-match is the same Thing and the user said yes: the existing project id.'),
+      force_new: z.boolean().optional().describe('Only after the user explicitly said it is a DIFFERENT Thing from the near-match.')
+    })
+    .refine(noBothDue, 'Give either due_at_local or due_date_local, not both'),
+  archive_project: z.object({
+    id: idRef,
+    confirmed: z.boolean().optional().describe('Archiving is consequential: first call returns a question naming the parts; call again with confirmed=true after a yes.')
+  }),
+  attach_to_project: z.object({
+    item_id: idRef,
+    project_id: idRef
+  }),
+  detach_from_project: z.object({ item_id: idRef }),
+  get_project: z.object({ id: idRef }).describe('A project with its parts and history.'),
   complete_item: z.object({ id: idRef }),
   cancel_item: z.object({
     id: idRef,
@@ -142,6 +164,11 @@ export type ToolName = keyof typeof toolSchemas
 const descriptions: Record<ToolName, string> = {
   create_item: 'Record a NEW obligation or piece of information the user stated (task, deadline, waiting-on, note, idea, commitment, project). Never for something already in memory — update that instead. Never for a completed action — use record_activity.',
   update_item: 'Change fields on an existing item: title, details, due day/time, hardness, importance, kind, status. Use for "move it to 4", "actually make it Tuesday", renames, confirming a suggestion, "I started on it".',
+  create_project: 'Start tracking a Thing the user is dealing with that has, or will have, parts ("TISS mailing is something I need to deal with", "my IIM application"). The app first matches existing projects by name — never make a second project for the same Thing.',
+  archive_project: 'Put a finished or abandoned project away (status archived). Asks first, naming its parts.',
+  attach_to_project: 'Make an existing item part of a project ("that belongs to the TISS mailing").',
+  detach_from_project: 'Take an item out of its project.',
+  get_project: 'Read one project: its fields, parts and history.',
   complete_item: 'Mark an item done ("done", "finished the CV"). Its own pending reminders stop.',
   cancel_item: 'Cancel ONE item the user no longer wants (status becomes cancelled, nothing is deleted). Its own reminders stop. Projects with parts require confirmation first.',
   delete_item: 'Permanently delete an item. Always requires confirmation. Prefer cancel_item.',
@@ -161,6 +188,10 @@ const descriptions: Record<ToolName, string> = {
 }
 
 const WRITE_TOOLS: ReadonlySet<string> = new Set([
+  'create_project',
+  'archive_project',
+  'attach_to_project',
+  'detach_from_project',
   'create_item',
   'update_item',
   'complete_item',
@@ -264,11 +295,109 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
     throw new ToolValidationError(`Invalid arguments for ${name}: ${issues}`)
   }
   const a = parsed.data as never
+  /** Record an activity; project_id is denormalised so project timelines are one query (spec §3). */
   const act = (n: Omit<repo.NewActivity, 'actor'>): void => {
-    repo.insertActivity({ ...n, actor: ctx.actor })
+    let projectId = n.projectId ?? null
+    if (!projectId && n.targetType === 'item') {
+      const it = repo.getItem(n.targetId)
+      projectId = it?.kind === 'project' ? it.id : (repo.parentProjectOf(n.targetId)?.id ?? null)
+    }
+    repo.insertActivity({ ...n, projectId, actor: ctx.actor })
+  }
+  const focusIds = getFocus().map((f) => f.itemId)
+
+  /** Entity resolution for a project named in conversation (spec §8): match → existing; none → create (inferred). */
+  const projectForTitle = (title: string): Item => {
+    const res = resolveEntity(title, repo.openProjects(), focusIds)
+    if (res.kind !== 'none') return res.entity
+    const p = repo.insertItem({ kind: 'project', title, sourceMsgId: ctx.sourceMsgId })
+    act({ targetType: 'item', targetId: p.id, projectId: p.id, verb: 'created', summary: `Started tracking "${p.title}"`, after: p })
+    return p
   }
 
   switch (name as ToolName) {
+    case 'create_project': {
+      const x = a as z.infer<typeof toolSchemas.create_project>
+      const pool = repo.openProjects()
+      const existing = x.use_existing_id ? repo.getItem(repo.resolveItemId(x.use_existing_id)) : undefined
+      const res = existing ? ({ kind: 'match', entity: existing, score: 1 } as const) : x.force_new ? ({ kind: 'none' } as const) : resolveEntity(x.title, pool, focusIds)
+      if (res.kind === 'match') {
+        pushFocus(res.entity.id, res.entity.title, 'referred to')
+        clearOffer()
+        const summary = `Matched existing project "${res.entity.title}" (no duplicate created)`
+        return {
+          result: { ok: true, project_id: shortId(res.entity.id), matched_existing: true, title: res.entity.title, summary },
+          applied: { tool: name, summary, phrase: `That's your existing "${res.entity.title}" — I'll keep everything under it.`, itemId: res.entity.id }
+        }
+      }
+      if (res.kind === 'maybe') {
+        setOffer({ kind: 'project_match', existingId: res.entity.id, proposedTitle: x.title })
+        return {
+          result: { ok: false, needs_confirmation: true, near_match_id: shortId(res.entity.id), near_match_title: res.entity.title, question: `Is "${x.title}" the same as the existing project "${res.entity.title}"? If yes call again with use_existing_id; if the user says it is different, call again with force_new=true.` },
+          confirm: { question: `Is "${x.title}" the same as your "${res.entity.title}" project? Say yes to keep them together, or "no, new project".`, wouldAffect: [res.entity.title] }
+        }
+      }
+      const due = repo.resolveDue(x.due_date_local, x.due_at_local, x.due_looseness)
+      const p = repo.insertItem({ kind: 'project', title: x.title, details: x.details ?? null, dueAtUtc: due.dueAtUtc, duePrecision: due.precision, hardness: x.hardness ?? null, sourceMsgId: ctx.sourceMsgId })
+      act({ targetType: 'item', targetId: p.id, projectId: p.id, verb: 'created', summary: `Started tracking "${p.title}"${p.due_at_utc ? `, due ${dueText(p)}` : ''}`, after: p })
+      pushFocus(p.id, p.title, 'created')
+      clearOffer()
+      const summary = `Started project "${p.title}"` + (p.due_at_utc ? ` · due ${dueText(p)}` : '')
+      return {
+        result: { ok: true, project_id: shortId(p.id), matched_existing: false, summary },
+        applied: { tool: name, summary, phrase: `Got it — I'm tracking "${p.title}" as a Thing now${p.due_at_utc ? `, due ${dueText(p)}` : ''}. Tell me its parts as they come up.`, itemId: p.id }
+      }
+    }
+    case 'archive_project': {
+      const x = a as z.infer<typeof toolSchemas.archive_project>
+      const id = repo.resolveItemId(x.id)
+      const before = repo.getItem(id)!
+      const parts = repo.projectParts(id, false)
+      if (!x.confirmed) {
+        const would = [`"${before.title}"`, ...parts.map((c) => `"${c.title}"`)]
+        return {
+          result: { ok: false, needs_confirmation: true, would_affect: would, question: `Archive ${would.join(', ')}? Say yes to confirm.` },
+          confirm: { question: `Archive "${before.title}"${parts.length ? ` and its ${plural(parts.length, 'open part')}` : ''}? Nothing is deleted; it just leaves your active list.`, wouldAffect: would }
+        }
+      }
+      const tx = repo.updateItem(id, { status: 'archived' })
+      for (const c of parts) repo.updateItem(c.id, { status: 'archived' })
+      act({ targetType: 'item', targetId: id, projectId: id, verb: 'status_changed', summary: `Archived "${before.title}"${parts.length ? ` with ${plural(parts.length, 'part')}` : ''}`, before: { item: before, parts }, after: tx.item, reversible: false })
+      clearOffer()
+      const summary = `Archived "${before.title}"${parts.length ? ` and ${plural(parts.length, 'part')}` : ''}`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Archived "${before.title}"${parts.length ? ` and its ${plural(parts.length, 'part')}` : ''}. It's out of the way but still in history.`, itemId: id } }
+    }
+    case 'attach_to_project': {
+      const x = a as z.infer<typeof toolSchemas.attach_to_project>
+      const itemId = repo.resolveItemId(x.item_id)
+      const projectId = repo.resolveItemId(x.project_id)
+      const project = repo.getItem(projectId)!
+      if (project.kind !== 'project') throw new ToolValidationError(`"${project.title}" is not a project`)
+      const item = repo.getItem(itemId)!
+      const prev = repo.setParentProject(itemId, projectId)
+      act({ targetType: 'item', targetId: itemId, projectId, verb: 'updated', summary: `"${item.title}" is now part of "${project.title}"${prev ? ` (was in "${prev.title}")` : ''}`, before: { parent: prev?.id ?? null }, after: { parent: projectId }, reversible: false })
+      pushFocus(project.id, project.title, 'referred to')
+      const summary = `"${item.title}" → part of "${project.title}"`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Filed "${item.title}" under "${project.title}".`, itemId } }
+    }
+    case 'detach_from_project': {
+      const x = a as z.infer<typeof toolSchemas.detach_from_project>
+      const itemId = repo.resolveItemId(x.item_id)
+      const item = repo.getItem(itemId)!
+      const prev = repo.setParentProject(itemId, null)
+      if (!prev) throw new Error(`"${item.title}" is not part of any project`)
+      act({ targetType: 'item', targetId: itemId, projectId: prev.id, verb: 'updated', summary: `"${item.title}" taken out of "${prev.title}"`, before: { parent: prev.id }, after: { parent: null }, reversible: false })
+      const summary = `"${item.title}" no longer part of "${prev.title}"`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Took "${item.title}" out of "${prev.title}".`, itemId } }
+    }
+    case 'get_project': {
+      const x = a as z.infer<typeof toolSchemas.get_project>
+      const id = repo.resolveItemId(x.id)
+      const p = repo.getItem(id)!
+      const parts = repo.projectParts(id)
+      const history = repo.activitiesForProject(id, 30)
+      return { result: { project: publicItem(p), parts: parts.map(publicItem), history: history.map((h) => `${h.created_at.slice(0, 16).replace('T', ' ')} · ${h.actor}: ${h.summary}`) } }
+    }
     case 'create_item': {
       const x = a as z.infer<typeof toolSchemas.create_item>
       const due = repo.resolveDue(x.due_date_local, x.due_at_local, x.due_looseness)
@@ -303,7 +432,13 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
         } else reminder = repo.insertReminder(item.id, r.fireAtUtc)
         reminderNote = ` ${r.note}`
       }
-      act({ targetType: 'item', targetId: item.id, verb: 'created', summary: `Created ${item.kind} "${item.title}"${item.due_at_utc ? `, due ${dueText(item)}` : ''}`, after: item })
+      // Belongs to a Thing? Resolve or infer the project, then attach via part_of (spec §8 3a).
+      let project: Item | null = null
+      if (x.project_id) project = repo.getItem(repo.resolveItemId(x.project_id)) ?? null
+      else if (x.project_title) project = projectForTitle(x.project_title)
+      if (project && project.kind !== 'project') project = null
+      if (project) repo.setParentProject(item.id, project.id)
+      act({ targetType: 'item', targetId: item.id, projectId: project?.id ?? null, verb: 'created', summary: `Created ${item.kind} "${item.title}"${item.due_at_utc ? `, due ${dueText(item)}` : ''}${project ? ` (part of "${project.title}")` : ''}`, after: item })
       if (reminder) {
         act({ targetType: 'reminder', targetId: reminder.id, verb: 'created', summary: `Reminder set for "${item.title}" ${formatClock(reminder.fire_at_utc)}`, after: strip(reminder), reversible: false })
       }
@@ -317,6 +452,7 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       }
       const summary =
         `${x.is_suggestion ? 'Suggested' : 'Created'} ${item.kind} "${item.title}"` +
+        (project ? ` · part of "${project.title}"` : '') +
         (item.due_at_utc ? ` · due ${dueText(item)}` : '') +
         (reminder ? ` · reminder ${formatClock(reminder.fire_at_utc)}${describeRRule(reminder.rrule)}${reminderNote}` : '')
       const phrase = x.is_suggestion
@@ -326,8 +462,8 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
             ? `Noted — I'll remind you about "${item.title}" ${describeRule(reminder.rrule)}, starting ${formatClock(reminder.fire_at_utc)}${reminderNote}.`
             : `Noted — I'll remind you about "${item.title}" ${formatClock(reminder.fire_at_utc)}${reminderNote}.`
           : item.due_at_utc
-            ? `Noted "${item.title}", due ${dueText(item)}${item.due_precision === 'day' ? ' (no time set)' : ''}.${offer}`
-            : `Noted "${item.title}".`
+            ? `Noted "${item.title}"${project ? ` under "${project.title}"` : ''}, due ${dueText(item)}${item.due_precision === 'day' ? ' (no time set)' : ''}.${offer}`
+            : `Noted "${item.title}"${project ? ` under "${project.title}"` : ''}.`
       return {
         result: {
           ok: true,
@@ -564,7 +700,12 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
         pushFocus(waiting.id, waiting.title, 'created')
       }
       const summary = `Recorded: ${x.summary}` + (item ? ` (on "${item.title}")` : '') + (waiting ? ` · now waiting on ${x.now_waiting_on}` : '')
-      const phrase = `Got it — noted that you ${lowerFirst(x.summary)}${item ? ` on "${item.title}"` : ''}.${waiting ? ` I'll keep track that you're waiting on ${x.now_waiting_on}.` : ''}`
+      // Don't say the project's name twice ("worked on the TISS mailing on TISS mailing").
+      const mentionsItem = item ? x.summary.toLowerCase().includes(item.title.toLowerCase()) : false
+      const phrase =
+        `Got it — noted that you ${lowerFirst(x.summary)}${item && !mentionsItem ? ` on "${item.title}"` : ''}.` +
+        (item && item.kind === 'project' ? ` It's in the "${item.title}" history.` : '') +
+        (waiting ? ` I'll keep track that you're waiting on ${x.now_waiting_on}.` : '')
       return { result: { ok: true, summary, waiting_item_id: waiting ? shortId(waiting.id) : null }, applied: { tool: name, summary, phrase, itemId: item?.id ?? waiting?.id } }
     }
     case 'set_preference': {

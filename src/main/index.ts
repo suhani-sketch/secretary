@@ -439,6 +439,7 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.listActivities, (_e, limit?: number) => repo.listActivities(limit ?? 50))
   ipcMain.handle(IPC.listAiCalls, (_e, limit?: number) => listAiCalls(limit ?? 20))
+  ipcMain.handle(IPC.listLinks, () => repo.listLinks())
 
   // Conversation (Phase 1)
   ipcMain.handle(IPC.sendChat, (_e, text: string) => {

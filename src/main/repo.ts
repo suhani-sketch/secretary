@@ -293,6 +293,59 @@ export function childItems(id: string): Item[] {
     .all(id) as Item[]
 }
 
+// ---------- Projects / Things and links (spec §8 Phase 3a) ----------
+
+const LIVE = "status NOT IN ('done','cancelled','archived')"
+
+export function openProjects(limit = 100): Item[] {
+  return getDb().prepare(`SELECT * FROM items WHERE kind = 'project' AND ${LIVE} ORDER BY updated_at DESC LIMIT ?`).all(limit) as Item[]
+}
+
+/** Items attached to a project via part_of, in checklist order then creation order. */
+export function projectParts(projectId: string, includeClosed = true): Item[] {
+  return getDb()
+    .prepare(
+      `SELECT i.* FROM links l JOIN items i ON i.id = l.from_item
+       WHERE l.to_item = ? AND l.type = 'part_of' ${includeClosed ? '' : `AND i.${LIVE}`}
+       ORDER BY COALESCE(i.sort_order, 1000000), i.created_at`
+    )
+    .all(projectId) as Item[]
+}
+
+export function parentProjectOf(itemId: string): Item | undefined {
+  return getDb()
+    .prepare(`SELECT p.* FROM links l JOIN items p ON p.id = l.to_item WHERE l.from_item = ? AND l.type = 'part_of' AND p.kind = 'project' LIMIT 1`)
+    .get(itemId) as Item | undefined
+}
+
+export function addLink(fromItem: string, toItem: string, type: 'part_of' | 'blocks' | 'relates_to'): boolean {
+  if (fromItem === toItem) throw new Error('An item cannot be linked to itself')
+  const res = getDb()
+    .prepare(`INSERT OR IGNORE INTO links (id, from_item, to_item, type, created_at) VALUES (?, ?, ?, ?, ?)`)
+    .run(randomUUID(), fromItem, toItem, type, nowIso())
+  return res.changes === 1
+}
+
+export function removeLink(fromItem: string, toItem: string, type: string): boolean {
+  return getDb().prepare(`DELETE FROM links WHERE from_item = ? AND to_item = ? AND type = ?`).run(fromItem, toItem, type).changes > 0
+}
+
+/** Move an item to a (different) project, or detach it when projectId is null. Returns the previous parent, if any. */
+export function setParentProject(itemId: string, projectId: string | null): Item | undefined {
+  const before = parentProjectOf(itemId)
+  if (before) removeLink(itemId, before.id, 'part_of')
+  if (projectId) addLink(itemId, projectId, 'part_of')
+  return before
+}
+
+export function listLinks(): { from_item: string; to_item: string; type: string }[] {
+  return getDb().prepare(`SELECT from_item, to_item, type FROM links`).all() as never
+}
+
+export function linksFor(itemId: string): { from_item: string; to_item: string; type: string }[] {
+  return getDb().prepare(`SELECT from_item, to_item, type FROM links WHERE from_item = ? OR to_item = ?`).all(itemId, itemId) as never
+}
+
 // ---------- Context queries (spec §4 "Context assembly") ----------
 
 export function itemsModifiedSince(utcIso: string, limit = 40): Item[] {
@@ -571,6 +624,16 @@ export function insertActivity(a: NewActivity): Activity {
 
 export function listActivities(limit = 50): Activity[] {
   return getDb().prepare('SELECT * FROM activities ORDER BY created_at DESC, rowid DESC LIMIT ?').all(limit) as Activity[]
+}
+
+/** Everything that happened on a project or any of its parts (denormalised project_id, plus the project row itself). */
+export function activitiesForProject(projectId: string, limit = 50): Activity[] {
+  return getDb()
+    .prepare(
+      `SELECT * FROM activities WHERE project_id = ? OR (target_type = 'item' AND target_id = ?)
+       ORDER BY created_at DESC, rowid DESC LIMIT ?`
+    )
+    .all(projectId, projectId, limit) as Activity[]
 }
 
 export function activitiesFor(targetType: string, targetId: string, limit = 50): Activity[] {
