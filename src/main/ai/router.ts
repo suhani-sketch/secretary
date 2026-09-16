@@ -204,10 +204,24 @@ const DAYS: Record<string, string> = {
   mon: 'monday', tue: 'tuesday', tues: 'tuesday', wed: 'wednesday', thu: 'thursday', thur: 'thursday', thurs: 'thursday', fri: 'friday', sat: 'saturday', sun: 'sunday'
 }
 
+/**
+ * A brain dump (7a): several clauses in one message. Tier 0 must not grab the first clause it recognises and drop the
+ * rest, so anything that reads as a dump goes to the model whole. Two-clause compounds the router handles itself
+ * ("I'm making dinner, remind me to check it in 20 minutes") stay below the threshold.
+ */
+export const looksLikeDump = (raw: string): boolean => {
+  const s = raw.trim()
+  if (s.includes('\n')) return true
+  if (s.length > 220) return true
+  const clauses = s.split(/(?<=[.!?;])\s+|,?\s+(?:also|and then|plus|oh and|btw|by the way|and also|then)\s+|\s+[-–—]\s+/i).filter((c) => c.trim().length > 12)
+  return clauses.length >= 3
+}
+
 export function routeTier0(rawText: string): ToolCallSpec[] | null {
   originalText = rawText.trim().replace(/\s+/g, ' ')
   const text = expandShorthand(norm(rawText))
   if (!text || text.length > 160 || text.includes('\n')) return null
+  if (looksLikeDump(rawText)) return null
   let m: RegExpExecArray | null
 
   // ---- undo ----

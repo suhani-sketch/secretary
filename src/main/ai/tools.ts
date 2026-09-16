@@ -9,7 +9,7 @@ import { getDb } from '../db'
 import { log } from '../log'
 import * as repo from '../repo'
 import { clearOffer, getFocus, pushFocus, setOffer, shortId } from './context'
-import { resolveEntity } from '../entity'
+import { resolveEntity, tokens } from '../entity'
 import { afterConflicts, blockingConflicts, bookingWindowForDue, conflictsFor, describeConflict, describeConstraint } from '../planning'
 import { formatClock, formatDue, isOverdue } from '../../shared/format'
 import { assessSlot, bufferRules, describeBuffer } from '../planning'
@@ -204,6 +204,10 @@ export const toolSchemas = {
     occurrence_start_local: localDateTime.optional().describe('For a recurring series: skip only this occurrence (added to exdates). Omit to remove the whole event.'),
     confirmed: z.boolean().optional().describe('Cancelling a recurring series (or an event that has moved occurrences) is consequential: the first call returns a confirmation question; call again with confirmed=true after the user says yes.')
   }),
+  ask_clarification: z.object({
+    question: z.string().min(3).max(300).describe('The one short question, in the user\'s words where possible.'),
+    about: z.string().max(200).optional().describe('Which clause of the message it concerns.')
+  }),
   get_calendar: z.object({
     from_date_local: localDate.describe('First day, inclusive.'),
     to_date_local: localDate.describe('Last day, inclusive.')
@@ -365,6 +369,7 @@ const descriptions: Record<ToolName, string> = {
   create_event: 'Put something on the calendar that occupies time: "meeting with Professor X Thursday at 3", "dentist Friday 10:30", "class every Tuesday 2–4". NOT for tasks (a task due Thursday is create_item). The app checks clashes.',
   update_event: 'Move or change an existing event ("move it to 4", "make it an hour"). For one occurrence of a recurring series pass occurrence_start_local.',
   delete_event: 'Cancel an event ("cancel the meeting") or skip one occurrence of a series.',
+  ask_clarification: 'Brain dumps (7a): ask the ONE clarifying question that would change an action, alongside the tool calls for every clear part of the message. Only one per message is ever asked; never use it instead of acting, never for wording or priority.',
   get_calendar: 'Events between two days, expanded. Use for "what have I got this week?".',
   get_day: 'Everything about one day, aggregated: priorities, due, schedule, reminders, notes, completed. Use for "what am I doing Thursday?".',
   create_plan: 'A multi-day plan that GENERATES sessions on the calendar: "study econometrics two hours every Monday, Wednesday and Friday until October 15". One plan; the app creates the sessions. Not for a single event.',
@@ -509,6 +514,21 @@ function futureReminderTime(utcIso: string): { utc: string; note: string } {
   throw new ToolValidationError(`${formatClock(utcIso)} is already in the past — tell me a future time`)
 }
 const plural = (n: number, w: string): string => `${n} ${w}${n === 1 ? '' : 's'}`
+
+/**
+ * The same thing under a slightly different name (invariant 11). Stricter than project matching: a confident name match
+ * (≥ 0.9) or one title's content words all inside the other's. Near-misses that differ in a content word are NOT twins.
+ */
+const findTwin = (title: string, pool: Item[]): Item | null => {
+  const res = resolveEntity(title, pool)
+  if (res.kind === 'none') return null
+  const a = new Set(tokens(title))
+  const b = new Set(tokens(res.entity.title))
+  if (!a.size || !b.size) return null
+  // Containment needs substance on both sides: "TISS" inside "Email TISS about the mailing" is not the same thing.
+  const contained = Math.min(a.size, b.size) >= 2 && ([...a].every((w) => b.has(w)) || [...b].every((w) => a.has(w)))
+  return res.kind === 'match' && (res.score >= 0.9 || contained) ? res.entity : null
+}
 const strip = (r: Reminder): Omit<Reminder, 'item_title'> => {
   const { item_title: _t, ...rest } = r
   return rest
@@ -972,6 +992,11 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const detail = seriesInvolved ? ` — the whole series${movedGone ? ` and ${plural(movedGone, 'moved occurrence')}` : ''}` : ''
       return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Cancelled "${ev.title}"${detail}. Nothing else was touched.` } }
     }
+    case 'ask_clarification': {
+      // The orchestrator lifts this out of the round and appends the question to the reply; nothing is stored.
+      const x = a as z.infer<typeof toolSchemas.ask_clarification>
+      return { result: { ok: true, asked: x.question } }
+    }
     case 'get_calendar': {
       const x = a as z.infer<typeof toolSchemas.get_calendar>
       const zone = DateTime.local().zoneName
@@ -1390,6 +1415,43 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
     }
     case 'create_item': {
       const x = a as z.infer<typeof toolSchemas.create_item>
+      // Invariant 11 — nothing is duplicated (7a). An open item that is plainly the same thing is updated with whatever
+      // new detail arrived (a date, a reminder, a promise, a Thing) and never created a second time. Strict on purpose:
+      // "Email TISS about the mailing" and "Email TISS about the invoice" are two tasks, "attach the document" and
+      // "Attach the document" are one.
+      const twin = x.kind === 'project' ? null : findTwin(x.title, [...repo.openItems(1000), ...repo.openChecklistItems()].filter((i) => i.kind !== 'project' && i.kind !== 'waiting'))
+      if (twin) {
+        const patch: Record<string, unknown> = { id: twin.id }
+        if (twin.kind === 'idea' && (x.kind === 'task' || x.kind === 'deadline')) patch.kind = x.kind
+        if (x.due_at_local) patch.due_at_local = x.due_at_local
+        else if (x.due_date_local) patch.due_date_local = x.due_date_local
+        if (x.due_looseness) patch.due_looseness = x.due_looseness
+        if (x.details && !(twin.details ?? '').toLowerCase().includes(x.details.toLowerCase())) patch.details = twin.details ? `${twin.details}\n${x.details}` : x.details
+        if (x.hardness && x.hardness !== twin.hardness) patch.hardness = x.hardness
+        if (x.kind === 'commitment' && x.committed_to && twin.committed_to !== x.committed_to) {
+          patch.kind = 'commitment'
+          patch.committed_to = x.committed_to
+        }
+        if (x.override_conflicts) patch.override_conflicts = true
+        const changes = Object.keys(patch).length - 1
+        let out: ToolOutcome = { result: { ok: true, existing_id: shortId(twin.id), note: 'already tracked — nothing created' } }
+        if (changes) {
+          out = executeTool('update_item', patch, ctx)
+          if (out.confirm) return out
+        }
+        const project = x.project_id ? repo.getItem(repo.resolveItemId(x.project_id)) : x.project_title ? projectForTitle(x.project_title) : null
+        if (project?.kind === 'project') repo.setParentProject(twin.id, project.id)
+        let remPhrase = ''
+        if (x.remind_at_local || x.remind_date_local) {
+          const rem = executeTool('create_reminder', { item_id: twin.id, ...(x.remind_at_local ? { fire_at_local: x.remind_at_local } : { fire_date_local: x.remind_date_local }), ...(x.remind_rrule ? { rrule: x.remind_rrule } : {}) }, ctx)
+          remPhrase = rem.applied ? ` ${rem.applied.phrase}` : ''
+        }
+        pushFocus(twin.id, twin.title, 'matched')
+        const fresh = repo.getItem(twin.id) ?? twin
+        const summary = `Matched existing ${fresh.kind} "${fresh.title}"${changes ? ' · updated' : ''}${project?.kind === 'project' ? ` · part of "${project.title}"` : ''}`
+        const phrase = changes && out.applied ? `Already had "${fresh.title}" — ${lowerFirst(out.applied.phrase)}${remPhrase}` : `"${fresh.title}" is already on your list — I haven't added a second one.${remPhrase}`
+        return { result: { ...(out.result as Record<string, unknown>), matched_existing: shortId(twin.id) }, applied: { tool: name, itemId: twin.id, summary, phrase } }
+      }
       const due = repo.resolveDue(x.due_date_local, x.due_at_local, x.due_looseness)
       const gate = conflictGate(due.dueAtUtc, due.precision, x.override_conflicts, `"${x.title}" at ${due.dueAtUtc ? formatDue(due.dueAtUtc, due.precision) : ''}`, { toolName: name, args: rawArgs })
       if (gate.confirm) return { result: { ok: false, needs_confirmation: true, question: gate.confirm.question }, confirm: gate.confirm }

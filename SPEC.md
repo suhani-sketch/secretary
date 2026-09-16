@@ -679,11 +679,30 @@ Conflict detection gains **levels** rather than being binary: *hard conflict* (g
 **Done when:** the calendar acceptance test in §11C passes.
 
 ### Phase 7 — Intelligence
-Brain dump. Voice notes. Deadline intelligence and component bottlenecks. "What should I do right now?" "What am I forgetting?" Time estimates. Smart scheduling.
 
-*Voice belongs here because Gemini accepts audio directly — record in the renderer, send to the same key with the same tool schema. It is a record button plus an audio branch, not a subsystem. And a chaotic ramble is exactly what voice is for; a microphone that only creates one flat task is not worth having.*
+The reasoning layer over everything built in Phases 1–6. **Do not create a second planning or task system.** `items`, `links`, `events`, `reminders`, `constraints`, context, commitments, `plans` and the Day View Model are the source of truth.
 
-**Done when:** a messy multi-clause dump — typed or spoken — produces sensible structure with at most one clarifying question, and the two signature questions give real answers rather than list dumps.
+**Compute, then phrase — the rule that governs this whole phase.** Urgency, importance, hardness, overdue state, blockers, free capacity, conflict levels, plan shortfall and day load are *already calculated deterministically* by Phases 3 and 6. The model does not weigh them. It receives the computed ranking and writes the sentence. This is both the accuracy fix — Flash-class models are poor at multi-step reasoning over a graph — and the cost fix, at 5 requests a minute. If a slice here needs several model calls to answer one question, the computation is in the wrong place.
+
+**7a — Brain dump and messy input.** From chaotic typed or spoken input, extract obligations, deadlines, reminders, commitments, notes, context, status updates, waiting states, dependencies and project associations — distinguishing between them per §4's actionability threshold. Resolve against existing entities before creating anything (invariant 11). At most one clarifying question, and only where ambiguity materially changes an action.
+
+**7b — Deadline intelligence.** Reason backwards from a deadline over its existing components and `links`. Identify what remains, what blocks what, which component is the bottleneck, and whether the trajectory is still feasible given remaining capacity. Surface it before the deadline is urgent, not on the day. Never invent a requirement the user did not state.
+
+**7c — "What should I do right now?"** One concrete next action, or a very small number. The ranking is computed in code from urgency, importance, hardness, overdue state, blockers, available time now, effort estimate, today's context, commitments and whether the thing can actually be started at this moment. Never an unranked list. Brief reasoning where it helps: *"the transcript upload takes ten minutes and unblocks Monday's application."*
+
+**7d — "What am I forgetting?"** Inspect overdue items, approaching deadlines, incomplete components, commitments, waiting items needing follow-up, unscheduled obligations, plans falling behind, and things recently discussed but unresolved. **Separate definite from possible**, explicitly — "you said you'd email your professor Sunday" is not the same claim as "you may want to review this before submitting", and the second never silently becomes a task.
+
+**7e — Smart scheduling.** Over the calendar's existing availability, conflicts, constraints, buffers, effort estimates, deadlines, dependencies and plan sessions, propose real times for work. Grade proposals feasible, tight or infeasible — and say so rather than scheduling something that cannot happen.
+
+**7f — Replanning.** When work is missed, a deadline moves, availability changes or a plan falls behind: compute remaining workload against remaining capacity, identify the consequences, propose a revised schedule showing exactly what would move. Existing commitments are never moved silently (invariant 10); consequential changes need approval.
+
+**7g — Conversational planning.** One evolving plan across turns, not a new one each time: propose → user modifies → recalculate → show consequences → approve → commit. "Plan my week", then "nothing Tuesday", then "I have a presentation Thursday", then "keep Saturday free", then "okay, do it" must refine a single proposal.
+
+**Time estimates.** Prefer what the user gave. Otherwise an estimate, labelled as one. An assistant's guess is never stored or presented as the user's figure (invariant 2).
+
+**Voice.** Audio goes to Gemini directly through the same provider and tool schema — a record button and an audio branch, not a subsystem. A spoken dump runs the same 7a pipeline as a typed one. Audio stays local.
+
+**Done when:** the intelligence acceptance test in §11G passes.
 
 ### Phase 8 — Proactivity
 Daily briefing. Deadline preparation. Missed-task and waiting-item follow-up. Adaptive intensity, quiet hours. Conversational replanning.
@@ -827,6 +846,23 @@ Proves understanding rather than cooking-equals-timer pattern matching.
 5. "I told Priya I'd send the draft tonight." → commitment, with Priya attached. It appears in "what am I forgetting?" ahead of an equivalent plain task.
 6. "I'm making tea." → at most an offer. A "no" is remembered for tea.
 
+
+### G. Intelligence (Phase 7)
+
+1. A messy multi-clause dump — typed — produces sensible structure, resolves against existing projects rather than duplicating, and asks at most one clarifying question.
+2. The same dump spoken produces the same structure.
+3. A dump containing "I'm exhausted" and "I told Priya I'd send the draft" separates context from commitment.
+4. With a deadline whose components are partly done, the assistant names the bottleneck without being asked which component matters.
+5. It does not invent a component the user never mentioned.
+6. "What should I do right now?" returns one action with a reason, not a list — and a different one at 9am than at 11pm.
+7. Asked when nothing can be started (no free time, everything blocked), it says so rather than inventing something.
+8. "What am I forgetting?" surfaces genuine outstanding items, with definite and possible visibly separated.
+9. Nothing it labelled "possible" appears in Open afterwards.
+10. "I need two hours for the case study before Friday" proposes a real slot that respects existing events, constraints and buffers.
+11. An impossible request is called infeasible rather than scheduled anyway.
+12. A plan two sessions behind can be replanned, showing what would move, and nothing moves until approved.
+13. "Plan my week", then three modifications, then "do it" — one evolving proposal, not four competing plans.
+14. Every answer above costs at most one model call.
 
 ## 12. Working with Claude Code on this
 

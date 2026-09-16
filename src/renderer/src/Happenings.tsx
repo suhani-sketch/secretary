@@ -17,7 +17,7 @@ export function RightNow({ happenings, onFinish }: { happenings: Happening[]; on
   const running = happenings.filter((h) => h.state === 'running')
   const ended = happenings.filter((h) => h.state !== 'running')
   return (
-    <section className="rounded-2xl bg-[#F3EADF]/80 p-4 flex flex-col gap-2 min-h-0">
+    <section className="rounded-2xl bg-paper-2/80 p-4 flex flex-col gap-2 min-h-0">
       <h2 className="text-xs font-medium uppercase tracking-wide text-stone-500">Right now</h2>
       <ul className="flex flex-col gap-1.5">
         {running.map((h) => {

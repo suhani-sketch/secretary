@@ -48,11 +48,11 @@ export function MonthView({ days, ym, weekStart, todayLocal, onOpenDay }: Props)
                 <button
                   key={d.date}
                   onClick={() => onOpenDay(d.date)}
-                  className={`relative text-left rounded-xl p-2 min-h-0 overflow-hidden flex flex-col gap-1 border ${d.date === todayLocal ? 'border-[#8B6A55]' : 'border-transparent'} ${status ? STATUS_BG[status] : 'bg-white/30'} ${inMonth ? '' : 'opacity-45'} hover:ring-1 hover:ring-[#3A2E28]/30`}
+                  className={`relative text-left rounded-xl p-2 min-h-0 overflow-hidden flex flex-col gap-1 border ${d.date === todayLocal ? 'border-mocha' : 'border-transparent'} ${status ? STATUS_BG[status] : 'bg-white/30'} ${inMonth ? '' : 'opacity-45'} hover:ring-1 hover:ring-cocoa/30`}
                   title={status ? `${d.date}: ${status} · ${Math.round(s.scheduled_minutes / 6) / 10} h booked · ${s.due} due · ${s.overdue} overdue · ${s.hard_deadlines} hard deadline${s.hard_deadlines === 1 ? '' : 's'}` : `${d.date}: past`}
                 >
                   <div className="flex items-center gap-1.5 text-xs">
-                    <span className={`tabular-nums ${d.date === todayLocal ? 'font-semibold text-[#3A2E28]' : 'text-stone-700'}`}>{Number(d.date.slice(8, 10))}</span>
+                    <span className={`tabular-nums ${d.date === todayLocal ? 'font-semibold text-cocoa' : 'text-stone-700'}`}>{Number(d.date.slice(8, 10))}</span>
                     {status && (
                       <span className="inline-flex items-center gap-1 text-[10px] text-stone-500">
                         <span className={`inline-block w-1.5 h-1.5 rounded-full ${STATUS_DOT[status]}`} aria-hidden />
@@ -68,7 +68,7 @@ export function MonthView({ days, ym, weekStart, todayLocal, onOpenDay }: Props)
                     .map((o) => (
                       <div
                         key={`${o.id}:${o.occurrence_start_utc}`}
-                        className={`text-[10px] px-1.5 py-0.5 truncate bg-[#8B6A55] text-[#FAF6F0] ${o.span === 'single' ? 'rounded' : o.span === 'starts' ? 'rounded-l -mr-3' : o.span === 'ends' ? 'rounded-r -ml-3' : '-mx-3'}`}
+                        className={`text-[10px] px-1.5 py-0.5 truncate bg-mocha text-cream ${o.span === 'single' ? 'rounded' : o.span === 'starts' ? 'rounded-l -mr-3' : o.span === 'ends' ? 'rounded-r -ml-3' : '-mx-3'}`}
                         title={`${o.title}${o.span !== 'single' ? ` · ${o.span}` : ''}`}
                       >
                         {o.span === 'starts' || o.span === 'single' ? `▬ ${o.title}` : o.span === 'ends' ? `… ${o.title}` : '…'}

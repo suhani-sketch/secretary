@@ -77,9 +77,9 @@ export function WeekView({ weekStartDate, days, weekStart, todayLocal, onOpenDay
           const d = byDate.get(date)
           const s = d?.summary
           return (
-            <button className={`w-full text-left px-1 py-0.5 rounded-lg hover:bg-white/70 ${date === todayLocal ? 'ring-1 ring-[#8B6A55]' : ''}`} onClick={() => onOpenDay(date)} title="Open this day">
+            <button className={`w-full text-left px-1 py-0.5 rounded-lg hover:bg-white/70 ${date === todayLocal ? 'ring-1 ring-mocha' : ''}`} onClick={() => onOpenDay(date)} title="Open this day">
               <div className="flex items-baseline gap-1.5">
-                <span className={`text-xs ${date === todayLocal ? 'font-semibold text-[#3A2E28]' : 'text-stone-700'}`}>{label}</span>
+                <span className={`text-xs ${date === todayLocal ? 'font-semibold text-cocoa' : 'text-stone-700'}`}>{label}</span>
                 {s?.status && <span className={`text-[10px] ${STATUS_TONE[s.status]}`}>{s.status}</span>}
                 {s?.is_past && s.completed > 0 && <span className="text-[10px] text-stone-400">✓ {s.completed}</span>}
               </div>

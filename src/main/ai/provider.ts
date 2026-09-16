@@ -36,6 +36,8 @@ export interface CompletionRequest {
   tools: ToolDefinition[]
   /** Groups the rounds of one user message so a provider can keep them on one model. */
   turnId?: string
+  /** A hard message (a brain dump): start on the second model in the chain rather than the lite one. Still one call. */
+  preferStrong?: boolean
 }
 
 export interface CompletionResponse {

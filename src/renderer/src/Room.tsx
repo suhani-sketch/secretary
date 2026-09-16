@@ -191,11 +191,11 @@ export function Room({ state, gaze, environment, time, happening, onChangeEnviro
         scene
       </button>
       {menu && (
-        <div className="absolute top-9 right-3 left-3 rounded-2xl bg-[#FAF6F0]/95 shadow-lg p-3 text-xs flex flex-col gap-2 z-10" onMouseLeave={() => setMenu(false)}>
+        <div className="absolute top-9 right-3 left-3 rounded-2xl bg-cream/95 shadow-lg p-3 text-xs flex flex-col gap-2 z-10" onMouseLeave={() => setMenu(false)}>
           <div className="text-stone-500">Window</div>
           <div className="flex flex-wrap gap-1">
             {ENVIRONMENTS.map((e) => (
-              <button key={e.id} onClick={() => onChangeEnvironment(e.id)} className={`rounded-lg px-2 py-1 ${environment === e.id ? 'bg-[#3A2E28] text-[#FAF6F0]' : 'bg-white/70 text-stone-700 hover:bg-white'}`}>
+              <button key={e.id} onClick={() => onChangeEnvironment(e.id)} className={`rounded-lg px-2 py-1 ${environment === e.id ? 'bg-cocoa text-cream' : 'bg-white/70 text-stone-700 hover:bg-white'}`}>
                 {e.emoji} {e.label}
               </button>
             ))}
@@ -203,7 +203,7 @@ export function Room({ state, gaze, environment, time, happening, onChangeEnviro
           <div className="text-stone-500 mt-1">Light</div>
           <div className="flex flex-wrap gap-1">
             {TIMES.map((t) => (
-              <button key={t.id} onClick={() => onChangeTime(t.id)} className={`rounded-lg px-2 py-1 ${time === t.id ? 'bg-[#3A2E28] text-[#FAF6F0]' : 'bg-white/70 text-stone-700 hover:bg-white'}`}>
+              <button key={t.id} onClick={() => onChangeTime(t.id)} className={`rounded-lg px-2 py-1 ${time === t.id ? 'bg-cocoa text-cream' : 'bg-white/70 text-stone-700 hover:bg-white'}`}>
                 {t.label}
               </button>
             ))}

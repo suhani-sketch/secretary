@@ -1,9 +1,93 @@
 @import "tailwindcss";
 
+/* Named palette → Tailwind utilities (bg-cocoa, text-cream, bg-paper/70 …). Every colour the UI uses is a variable, so
+   dark mode is one block of overrides on [data-theme="dark"], not a second set of class names. The room's art keeps its
+   own colours: it is a picture, lit by its own time of day. */
+@theme {
+  --color-cream: #FAF6F0;
+  --color-cocoa: #3A2E28;
+  --color-accent: #B5836D;
+  --color-cocoa-soft: #5E4636;
+  --color-mocha: #8B6A55;
+  --color-paper: #F1E9DF;
+  --color-paper-2: #F3EADF;
+  --color-paper-3: #F3E9DD;
+  --color-paper-4: #F2EBDD;
+  --color-sand: #D8CDBF;
+  --color-ash: #8A8078;
+  --color-ash-2: #6E6259;
+  --color-pure: #FFFFFF;
+  --color-tan: #D9B79F;
+  --color-slate-soft: #8FA3B5;
+  --color-rust: #9C6E5A;
+  --color-ink-muted: #7a6a60;
+  --color-ink-muted-2: #8a7b6e;
+}
 :root {
-  --cream: #FAF6F0;
-  --cocoa: #3A2E28;
-  --accent: #B5836D;
+  --cream: var(--color-cream);
+  --cocoa: var(--color-cocoa);
+  --accent: var(--color-accent);
+  color-scheme: light;
+}
+/* Dark mode: the same warm room after the lamps come on. Stone/amber/rose/emerald scales are inverted so existing
+   utilities (text-stone-500, bg-amber-50 …) keep their meaning — muted stays muted, a badge stays a badge. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-cream: #1B1715;
+  --color-cocoa: #EFE6DB;
+  --color-accent: #C99A82;
+  --color-cocoa-soft: #D9CCC0;
+  --color-mocha: #B08C74;
+  --color-paper: #2A2320;
+  --color-paper-2: #2E2622;
+  --color-paper-3: #2E2622;
+  --color-paper-4: #2C2521;
+  --color-sand: #4A403A;
+  --color-ash: #9A8E85;
+  --color-ash-2: #B3A69C;
+  --color-pure: #221D1A;
+  --color-tan: #7A5F49;
+  --color-slate-soft: #5F7588;
+  --color-rust: #9C6E5A;
+  --color-ink-muted: #A69A90;
+  --color-ink-muted-2: #A69A90;
+  --color-white: #262120;
+  --color-black: #F3ECE4;
+  --color-stone-50: #1F1B19;
+  --color-stone-100: #2A2522;
+  --color-stone-200: #3A332F;
+  --color-stone-300: #4E4540;
+  --color-stone-400: #8E837B;
+  --color-stone-500: #A89C93;
+  --color-stone-600: #C2B6AC;
+  --color-stone-700: #D6CBC1;
+  --color-stone-800: #E8DFD6;
+  --color-stone-900: #F3ECE4;
+  --color-amber-50: #33270F;
+  --color-amber-100: #3F3013;
+  --color-amber-300: #C89A3E;
+  --color-amber-400: #D8A94A;
+  --color-amber-700: #F0C46A;
+  --color-amber-800: #F5D289;
+  --color-amber-900: #F8DFA6;
+  --color-rose-50: #3A1F22;
+  --color-rose-100: #47262A;
+  --color-rose-500: #E28A96;
+  --color-rose-900: #F6C9D0;
+  --color-emerald-50: #16302A;
+  --color-emerald-100: #1D3B33;
+  --color-emerald-200: #2B5548;
+  --color-emerald-300: #4E8A76;
+  --color-emerald-400: #66A58E;
+  --color-emerald-600: #8FD1B7;
+  --color-emerald-700: #A5DCC6;
+  --color-emerald-800: #BBE6D4;
+  --color-emerald-900: #D2EFE2;
+  --color-sky-50: #1C2A36;
+  --color-sky-900: #CBE0F2;
+  --color-red-50: #3A1F1F;
+  --color-red-700: #F09A9A;
+  --color-red-800: #F5B0B0;
 }
 
 html, body, #root { height: 100%; }
@@ -17,42 +101,42 @@ body {
 
 /* ---- Calendar (Phase 6): FullCalendar 6 themed through its CSS variables, so it sits in the cream room. ---- */
 .cal-grid {
-  --fc-border-color: rgba(58, 46, 40, 0.10);
+  --fc-border-color: color-mix(in srgb, var(--color-cocoa) 10%, transparent);
   --fc-page-bg-color: transparent;
-  --fc-neutral-bg-color: rgba(58, 46, 40, 0.04);
-  --fc-today-bg-color: rgba(181, 131, 109, 0.10);
-  --fc-now-indicator-color: #B5836D;
-  --fc-event-bg-color: #8B6A55;
-  --fc-event-border-color: #8B6A55;
-  --fc-event-text-color: #FAF6F0;
-  --fc-bg-event-color: #9C6E5A;
+  --fc-neutral-bg-color: color-mix(in srgb, var(--color-cocoa) 4%, transparent);
+  --fc-today-bg-color: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  --fc-now-indicator-color: var(--color-accent);
+  --fc-event-bg-color: var(--color-mocha);
+  --fc-event-border-color: var(--color-mocha);
+  --fc-event-text-color: var(--color-cream);
+  --fc-bg-event-color: var(--color-rust);
   --fc-bg-event-opacity: 0.14;
   --fc-small-font-size: 0.72rem;
-  --fc-list-event-hover-bg-color: rgba(255,255,255,0.6);
+  --fc-list-event-hover-bg-color: color-mix(in srgb, var(--color-white) 60%, transparent);
   font-size: 0.8rem;
-  color: #3A2E28;
+  color: var(--color-cocoa);
   height: 100%;
 }
 .cal-grid .fc { height: 100%; }
 .cal-grid .fc .fc-timegrid-slot { height: 2.2rem; }
-.cal-grid .fc .fc-timegrid-slot-label-cushion, .cal-grid .fc .fc-col-header-cell-cushion { color: #7a6a60; font-weight: 500; text-decoration: none; }
-.cal-grid .fc .fc-timegrid-event, .cal-grid .fc .fc-daygrid-event { border-radius: 0.6rem; border-width: 0; box-shadow: 0 1px 2px rgba(58,46,40,0.12); }
-.cal-grid .fc .fc-event.k-work_block { background: #D9B79F; color: #3A2E28; }
-.cal-grid .fc .fc-event.k-session { background: #8FA3B5; color: #FAF6F0; }
-.cal-grid .fc .fc-event.k-commitment { background: #9C6E5A; }
-.cal-grid .fc .fc-event.k-happening { background: transparent; color: #7a6a60; border: 1px dashed #B5836D; box-shadow: none; }
-.cal-grid .fc .fc-event.k-due { background: #F3EADF; color: #3A2E28; }
-.cal-grid .fc .fc-bg-event.k-constraint { background: repeating-linear-gradient(135deg, rgba(156,110,90,0.18) 0 6px, rgba(156,110,90,0.06) 6px 12px); }
+.cal-grid .fc .fc-timegrid-slot-label-cushion, .cal-grid .fc .fc-col-header-cell-cushion { color: var(--color-ink-muted); font-weight: 500; text-decoration: none; }
+.cal-grid .fc .fc-timegrid-event, .cal-grid .fc .fc-daygrid-event { border-radius: 0.6rem; border-width: 0; box-shadow: 0 1px 2px color-mix(in srgb, var(--color-cocoa) 12%, transparent); }
+.cal-grid .fc .fc-event.k-work_block { background: var(--color-tan); color: var(--color-cocoa); }
+.cal-grid .fc .fc-event.k-session { background: var(--color-slate-soft); color: var(--color-cream); }
+.cal-grid .fc .fc-event.k-commitment { background: var(--color-rust); }
+.cal-grid .fc .fc-event.k-happening { background: transparent; color: var(--color-ink-muted); border: 1px dashed var(--color-accent); box-shadow: none; }
+.cal-grid .fc .fc-event.k-due { background: var(--color-paper-2); color: var(--color-cocoa); }
+.cal-grid .fc .fc-bg-event.k-constraint { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--color-rust) 18%, transparent) 0 6px, color-mix(in srgb, var(--color-rust) 6%, transparent) 6px 12px); }
 .cal-grid .fc .fc-timegrid-now-indicator-line { border-width: 1.5px 0 0; }
 .cal-grid .fc .fc-scrollgrid { border-radius: 0.75rem; overflow: hidden; }
 .cal-grid .fc-theme-standard td, .cal-grid .fc-theme-standard th { border-color: var(--fc-border-color); }
-.cal-grid .fc .fc-daygrid-day-number { color: #3A2E28; }
+.cal-grid .fc .fc-daygrid-day-number { color: var(--color-cocoa); }
 .cal-grid .fc-daycell { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
 /* Week view due strip: date-bound markers, readable on the light chip (the library's default event text is cream). */
-.cal-grid .fc .fc-event.k-due, .cal-grid .fc .fc-event.k-due .fc-event-main { background: #F3EADF; color: #3A2E28; border: 1px solid rgba(58,46,40,0.15); box-shadow: none; }
-.cal-grid .fc .fc-event.k-due.t-critical { background: #FAF6F0; border-color: #3A2E28; }
+.cal-grid .fc .fc-event.k-due, .cal-grid .fc .fc-event.k-due .fc-event-main { background: var(--color-paper-2); color: var(--color-cocoa); border: 1px solid color-mix(in srgb, var(--color-cocoa) 15%, transparent); box-shadow: none; }
+.cal-grid .fc .fc-event.k-due.t-critical { background: var(--color-cream); border-color: var(--color-cocoa); }
 .cal-grid .fc .fc-col-header-cell { vertical-align: top; }
 .cal-grid .fc .fc-col-header-cell-cushion { display: block; width: 100%; padding: 2px 4px; }
 /* Plan sessions: missed ones read as gone-by, never as failure — muted, struck, still on the record. */
-.cal-grid .fc .fc-event.k-session.t-muted { background: transparent; color: #8a7b6e; border: 1px dashed #8FA3B5; box-shadow: none; text-decoration: line-through; }
+.cal-grid .fc .fc-event.k-session.t-muted { background: transparent; color: var(--color-ink-muted-2); border: 1px dashed var(--color-slate-soft); box-shadow: none; text-decoration: line-through; }
 .cal-grid .fc .fc-event.k-session.t-low { opacity: 0.75; }

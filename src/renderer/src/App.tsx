@@ -62,6 +62,25 @@ export default function App(): React.JSX.Element {
   const [showDebug, setShowDebug] = useState(false)
   const [flash, setFlash] = useState<string | null>(null)
   const [editing, setEditing] = useState<Editing>(null)
+  // Light / dark: one setting (`ui.theme`), applied as data-theme on <html>; the stylesheet does the rest.
+  const [theme, setThemeState] = useState<'light' | 'dark'>(() => {
+    try {
+      const t = localStorage.getItem('ui.theme')
+      return t === 'dark' ? 'dark' : 'light'
+    } catch {
+      return 'light'
+    }
+  })
+  const setTheme = (t: 'light' | 'dark', persist = true): void => {
+    setThemeState(t)
+    document.documentElement.dataset['theme'] = t
+    try {
+      localStorage.setItem('ui.theme', t)
+    } catch {
+      /* ignore */
+    }
+    if (persist) void window.api.setSetting('ui.theme', t)
+  }
   // Calendar (Phase 6): a secondary view over the same records; conversation stays home.
   const [surface, setSurface] = useState<Surface>('conversation')
   const [calMode, setCalMode] = useState<CalendarMode>(() => {
@@ -117,6 +136,7 @@ export default function App(): React.JSX.Element {
     }
     void window.api.getSetting('scene.environment').then((v) => v && setEnvironment(v as EnvironmentId))
     void window.api.getSetting('scene.timeOfDay').then((v) => v && setTimeChoice(v as TimeChoice))
+    void window.api.getSetting('ui.theme').then((v) => (v === 'dark' || v === 'light') && setTheme(v, false))
   }, [])
   // Dev hook: "#state:working,light:night,env:rain" forces creature state / light band / environment for screenshots.
   const hashParts = Object.fromEntries(window.location.hash.replace('#', '').split(',').map((p) => p.split(':') as [string, string]))
@@ -188,6 +208,8 @@ export default function App(): React.JSX.Element {
     const hash = window.location.hash.replace('#', '')
     const light = /^light:(\w+)$/.exec(hash)
     if (light) setTimeChoice(light[1] as TimeChoice)
+    const th = /(?:^|,)theme:(dark|light)/.exec(hash)
+    if (th) setTheme(th[1] as 'dark' | 'light', false)
     if (hash === 'calendar' || hash.startsWith('calendar:')) {
       setSurface('calendar')
       const d = /^calendar:(\d{4}-\d{2}-\d{2})/.exec(hash)
@@ -415,10 +437,18 @@ export default function App(): React.JSX.Element {
             ['settings', 'Settings']
           ] as [Surface, string][]
         ).map(([id, label]) => (
-          <button key={id} onClick={() => setSurface(id)} className={`rounded-full px-3 py-1 ${surface === id ? 'bg-[#3A2E28] text-[#FAF6F0]' : 'text-stone-500 hover:bg-white/60 hover:text-stone-800'}`} aria-current={surface === id ? 'page' : undefined}>
+          <button key={id} onClick={() => setSurface(id)} className={`rounded-full px-3 py-1 ${surface === id ? 'bg-cocoa text-cream' : 'text-stone-500 hover:bg-white/60 hover:text-stone-800'}`} aria-current={surface === id ? 'page' : undefined}>
             {label}
           </button>
         ))}
+        <button
+          onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+          className="ml-auto rounded-full px-3 py-1 text-stone-500 hover:bg-white/60 hover:text-stone-800"
+          title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          aria-pressed={theme === 'dark'}
+        >
+          {theme === 'dark' ? '☀ light' : '☾ dark'}
+        </button>
       </nav>
 
       {surface === 'calendar' && (
@@ -513,7 +543,7 @@ export default function App(): React.JSX.Element {
           {messages.map((m) => (
             <Bubble key={m.id} m={m} />
           ))}
-          {status.kind !== 'idle' && <div className="self-start rounded-2xl bg-[#F1E9DF] px-4 py-2 text-sm text-stone-500 animate-pulse">…</div>}
+          {status.kind !== 'idle' && <div className="self-start rounded-2xl bg-paper px-4 py-2 text-sm text-stone-500 animate-pulse">…</div>}
         </div>
 
         <div className="mt-3 rounded-2xl bg-white shadow-sm flex items-end gap-2 p-2">
@@ -529,7 +559,7 @@ export default function App(): React.JSX.Element {
             placeholder="type or dump here — Enter to send, Shift+Enter for a new line"
             className="flex-1 resize-none bg-transparent px-3 py-2 outline-none text-[15px] leading-relaxed"
           />
-          <button onClick={() => void send()} disabled={!draft.trim() || status.kind !== 'idle'} className="rounded-xl bg-[#3A2E28] text-[#FAF6F0] px-4 py-2 text-sm disabled:opacity-30">
+          <button onClick={() => void send()} disabled={!draft.trim() || status.kind !== 'idle'} className="rounded-xl bg-cocoa text-cream px-4 py-2 text-sm disabled:opacity-30">
             Send
           </button>
         </div>
@@ -682,7 +712,7 @@ export default function App(): React.JSX.Element {
                     onClick={() => setEditing(it.kind === 'project' ? { kind: 'project', project: it } : { kind: 'item', item: it })}
                   >
                   <div className="flex items-start gap-2">
-                    <span className={`text-[10px] mt-1 rounded px-1 ${it.kind === 'project' ? 'bg-[#B5836D]/25 text-[#3A2E28]' : it.kind === 'commitment' ? 'bg-rose-100 text-rose-900' : 'bg-stone-200 text-stone-600'}`} title={it.kind === 'commitment' ? `Promised to ${it.committed_to ?? 'someone'}` : undefined}>
+                    <span className={`text-[10px] mt-1 rounded px-1 ${it.kind === 'project' ? 'bg-accent/25 text-cocoa' : it.kind === 'commitment' ? 'bg-rose-100 text-rose-900' : 'bg-stone-200 text-stone-600'}`} title={it.kind === 'commitment' ? `Promised to ${it.committed_to ?? 'someone'}` : undefined}>
                       {it.is_suggestion ? 'suggested' : it.kind === 'project' ? 'thing' : it.kind === 'commitment' ? `to ${it.committed_to ?? 'someone'}` : it.kind.replace('_', ' ')}
                     </span>
                     <div className="min-w-0 flex-1">
@@ -789,7 +819,7 @@ function Bubble({ m }: { m: UiMessage }): React.JSX.Element {
   return (
     <div className={`flex flex-col gap-1 max-w-[85%] ${user ? 'self-end items-end' : 'self-start items-start'}`}>
       <div
-        className={`rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap ${user ? 'bg-[#3A2E28] text-[#FAF6F0]' : 'bg-[#F1E9DF] text-[#3A2E28]'} ${m.pending ? 'opacity-60' : ''}`}
+        className={`rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap ${user ? 'bg-cocoa text-cream' : 'bg-paper text-cocoa'} ${m.pending ? 'opacity-60' : ''}`}
       >
         {m.content}
       </div>
@@ -860,7 +890,7 @@ function DebugPanel(props: {
       </section>
       <div className="flex gap-1 flex-wrap">
         {tabs.map(([k, l]) => (
-          <button key={k} onClick={() => setTab(k)} className={`rounded-lg px-2 py-0.5 text-[11px] ${tab === k ? 'bg-[#3A2E28] text-[#FAF6F0]' : 'bg-white/60 text-stone-600'}`}>
+          <button key={k} onClick={() => setTab(k)} className={`rounded-lg px-2 py-0.5 text-[11px] ${tab === k ? 'bg-cocoa text-cream' : 'bg-white/60 text-stone-600'}`}>
             {l}
           </button>
         ))}
@@ -893,7 +923,7 @@ function DebugPanel(props: {
             {activities.map((a) => (
               <li key={a.id} className="flex gap-2">
                 <span className="text-stone-400 whitespace-nowrap">{fmtLogTime(a.created_at)}</span>
-                <span className={`rounded px-1 text-[10px] ${a.actor === 'system' ? 'bg-stone-100 text-stone-500' : a.actor === 'assistant' ? 'bg-[#B5836D]/20' : 'bg-emerald-100'}`}>{a.actor}</span>
+                <span className={`rounded px-1 text-[10px] ${a.actor === 'system' ? 'bg-stone-100 text-stone-500' : a.actor === 'assistant' ? 'bg-accent/20' : 'bg-emerald-100'}`}>{a.actor}</span>
                 <span className={a.reversible ? '' : 'text-stone-500'}>{a.summary}</span>
               </li>
             ))}
@@ -928,7 +958,7 @@ function DebugPanel(props: {
 
 function Btn({ onClick, children }: { onClick: () => void; children: React.ReactNode }): React.JSX.Element {
   return (
-    <button type="button" onClick={onClick} className="rounded-lg bg-[#B5836D]/15 hover:bg-[#B5836D]/30 px-2 py-0.5 text-[11px] text-[#3A2E28]">
+    <button type="button" onClick={onClick} className="rounded-lg bg-accent/15 hover:bg-accent/30 px-2 py-0.5 text-[11px] text-cocoa">
       {children}
     </button>
   )

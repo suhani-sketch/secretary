@@ -24,18 +24,18 @@ export const isHard = (i: Item): boolean => i.hardness === 'hard' || i.kind === 
 /** Type grammar for anything that can appear on a calendar surface. */
 export type Grammar = 'event' | 'commitment' | 'work_block' | 'session' | 'deadline' | 'task' | 'reminder' | 'happening' | 'constraint' | 'waiting' | 'note' | 'project' | 'checklist_item' | 'idea'
 export const TYPE: Record<Grammar, { glyph: string; word: string; chip: string }> = {
-  event: { glyph: '▪', word: 'event', chip: 'bg-[#8B6A55] text-[#FAF6F0]' },
-  commitment: { glyph: '🤝', word: 'appointment', chip: 'bg-[#9C6E5A] text-[#FAF6F0]' },
-  work_block: { glyph: '▤', word: 'work block', chip: 'bg-[#D9B79F] text-[#3A2E28]' },
-  session: { glyph: '📘', word: 'session', chip: 'bg-[#8FA3B5] text-[#FAF6F0]' },
-  deadline: { glyph: '◆', word: 'deadline', chip: 'bg-[#3A2E28] text-[#FAF6F0]' },
-  task: { glyph: '☐', word: 'task', chip: 'bg-white text-[#3A2E28] ring-1 ring-stone-200' },
-  reminder: { glyph: '🔔', word: 'reminder', chip: 'bg-white text-[#3A2E28] ring-1 ring-stone-200' },
-  happening: { glyph: '⏱', word: 'happening', chip: 'border border-dashed border-[#B5836D] text-stone-600' },
+  event: { glyph: '▪', word: 'event', chip: 'bg-mocha text-cream' },
+  commitment: { glyph: '🤝', word: 'appointment', chip: 'bg-rust text-cream' },
+  work_block: { glyph: '▤', word: 'work block', chip: 'bg-tan text-cocoa' },
+  session: { glyph: '📘', word: 'session', chip: 'bg-slate-soft text-cream' },
+  deadline: { glyph: '◆', word: 'deadline', chip: 'bg-cocoa text-cream' },
+  task: { glyph: '☐', word: 'task', chip: 'bg-white text-cocoa ring-1 ring-stone-200' },
+  reminder: { glyph: '🔔', word: 'reminder', chip: 'bg-white text-cocoa ring-1 ring-stone-200' },
+  happening: { glyph: '⏱', word: 'happening', chip: 'border border-dashed border-accent text-stone-600' },
   constraint: { glyph: '▨', word: 'unavailable', chip: 'bg-stone-200/60 text-stone-500' },
   waiting: { glyph: '⏳', word: 'waiting on', chip: 'bg-sky-50 text-sky-900' },
   note: { glyph: '📝', word: 'note', chip: 'bg-white text-stone-600 ring-1 ring-stone-200' },
-  project: { glyph: '◼', word: 'thing', chip: 'bg-[#B5836D]/25 text-[#3A2E28]' },
+  project: { glyph: '◼', word: 'thing', chip: 'bg-accent/25 text-cocoa' },
   checklist_item: { glyph: '☐', word: 'step', chip: 'bg-white text-stone-600 ring-1 ring-stone-200' },
   idea: { glyph: '○', word: 'idea', chip: 'bg-white text-stone-400 ring-1 ring-stone-200' }
 }
@@ -58,7 +58,7 @@ export function Marks({ item, overdue, className = '' }: { item: Item; overdue?:
         {imp.word}
       </span>
       {isHard(item) && (
-        <span className="inline-flex items-center gap-0.5 rounded px-1 text-[10px] bg-[#3A2E28] text-[#FAF6F0]" title="hard deadline — the date is not negotiable">
+        <span className="inline-flex items-center gap-0.5 rounded px-1 text-[10px] bg-cocoa text-cream" title="hard deadline — the date is not negotiable">
           <span aria-hidden>◆</span>hard
         </span>
       )}
@@ -78,7 +78,7 @@ export function TypeGlyph({ item, overdue }: { item: Item; overdue?: boolean }):
   const imp = IMPORTANCE[importanceOf(item)]
   const glyph = overdue ? '⚠' : TYPE[g].glyph
   return (
-    <span className={`w-5 text-center shrink-0 ${overdue ? 'text-amber-800' : g === 'deadline' ? 'text-[#3A2E28] font-bold' : imp.text} ${imp.weight}`} title={`${TYPE[g].word} · ${imp.word}${isHard(item) ? ' · hard' : ''}${overdue ? ' · overdue' : ''}`} aria-label={`${TYPE[g].word}, ${imp.word}${isHard(item) ? ', hard deadline' : ''}${overdue ? ', overdue' : ''}`}>
+    <span className={`w-5 text-center shrink-0 ${overdue ? 'text-amber-800' : g === 'deadline' ? 'text-cocoa font-bold' : imp.text} ${imp.weight}`} title={`${TYPE[g].word} · ${imp.word}${isHard(item) ? ' · hard' : ''}${overdue ? ' · overdue' : ''}`} aria-label={`${TYPE[g].word}, ${imp.word}${isHard(item) ? ', hard deadline' : ''}${overdue ? ', overdue' : ''}`}>
       {glyph}
     </span>
   )
@@ -97,11 +97,11 @@ export function PrioritySummary({ summary, priorities, compact }: { summary: Day
   if (summary.overdue && (summary.is_today || !compact)) chips.push({ glyph: '⚠', text: `${summary.overdue} overdue`, cls: 'bg-amber-100 text-amber-900', title: 'unresolved from earlier' })
   const critical = priorities?.filter((p) => importanceOf(p.item) === 0 && (!compact || summary.is_today || !p.overdue)).length ?? 0
   if (critical) chips.push({ glyph: '‼', text: `${critical} critical`, cls: 'bg-rose-100 text-rose-900', title: 'critical importance' })
-  if (summary.hard_deadlines) chips.push({ glyph: '◆', text: `${summary.hard_deadlines} hard deadline${summary.hard_deadlines === 1 ? '' : 's'}`, cls: 'bg-[#3A2E28] text-[#FAF6F0]', title: 'dates that are not negotiable' })
+  if (summary.hard_deadlines) chips.push({ glyph: '◆', text: `${summary.hard_deadlines} hard deadline${summary.hard_deadlines === 1 ? '' : 's'}`, cls: 'bg-cocoa text-cream', title: 'dates that are not negotiable' })
   if (summary.commitments) chips.push({ glyph: '🤝', text: `${summary.commitments} promise${summary.commitments === 1 ? '' : 's'}`, cls: 'bg-rose-50 text-rose-900', title: 'commitments to named people' })
   if (summary.high_importance) chips.push({ glyph: '!', text: `${summary.high_importance} high`, cls: 'bg-amber-50 text-amber-900', title: 'high importance' })
   if (summary.conflicts) chips.push({ glyph: '✕', text: `${summary.conflicts} clash${summary.conflicts === 1 ? '' : 'es'}`, cls: 'bg-rose-100 text-rose-900', title: 'overlapping bookings' })
-  if (summary.scheduled_minutes) chips.push({ glyph: '▪', text: `${Math.round(summary.scheduled_minutes / 6) / 10} h booked`, cls: 'bg-[#8B6A55]/15 text-[#3A2E28]', title: 'time already scheduled' })
+  if (summary.scheduled_minutes) chips.push({ glyph: '▪', text: `${Math.round(summary.scheduled_minutes / 6) / 10} h booked`, cls: 'bg-mocha/15 text-cocoa', title: 'time already scheduled' })
   if (summary.due && !compact) chips.push({ glyph: '☐', text: `${summary.due} due`, cls: 'bg-white text-stone-700 ring-1 ring-stone-200', title: 'date-bound, no time set aside' })
   if (summary.reminders && !compact) chips.push({ glyph: '🔔', text: `${summary.reminders}`, cls: 'bg-white text-stone-700 ring-1 ring-stone-200', title: 'reminders' })
   const top = (priorities ?? []).filter((p) => !compact || summary.is_today || !p.overdue).slice(0, compact ? 1 : 3)

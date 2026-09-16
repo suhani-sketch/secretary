@@ -88,6 +88,7 @@ export class GeminiProvider implements Provider {
     const turn = req.turnId ?? `t${Date.now()}`
     let modelIdx = Math.max(0, this.models.indexOf(this.turnModel.get(turn) ?? ''))
     const pinned = this.turnModel.has(turn)
+    if (!pinned && req.preferStrong && this.models.length > 1 && modelIdx === 0) modelIdx = 1
     let attempt = 0
     for (;;) {
       const model = this.models[modelIdx]

@@ -23,7 +23,7 @@ const clock = (iso: string): string => new Date(iso).toLocaleTimeString(undefine
 
 const actorStyle: Record<string, string> = {
   user: 'bg-emerald-100 text-emerald-900',
-  assistant: 'bg-[#B5836D]/25 text-[#3A2E28]',
+  assistant: 'bg-accent/25 text-cocoa',
   system: 'bg-stone-200 text-stone-600'
 }
 const verbIcon: Record<string, string> = {
@@ -58,7 +58,7 @@ export function Timeline({ activities, hideSystem }: { activities: Activity[]; h
       {groups.map((g) => (
         <li key={g.day}>
           <div className="text-[11px] uppercase tracking-wide text-stone-500 mb-1">{g.day}</div>
-          <ul className="flex flex-col gap-1 border-l-2 border-[#B5836D]/30 pl-3">
+          <ul className="flex flex-col gap-1 border-l-2 border-accent/30 pl-3">
             {g.rows.map((a) => (
               <li key={a.id} className={`text-sm flex items-start gap-2 ${a.reversible ? '' : 'text-stone-500'}`}>
                 <span className="w-4 text-center shrink-0" title={a.verb}>
@@ -117,7 +117,7 @@ export function ProjectView({ project, parts, notes, reminders, runTool, onOpenI
     <Modal title={project.title} onClose={onClose}>
       <div className="flex flex-col gap-3 -mt-2">
         <div className="text-xs text-stone-500 flex flex-wrap gap-x-3">
-          <span className="rounded px-1 bg-[#B5836D]/25 text-[#3A2E28]">thing</span>
+          <span className="rounded px-1 bg-accent/25 text-cocoa">thing</span>
           {project.due_at_utc && (
             <span>
               due {formatDue(project.due_at_utc, project.due_precision)}
@@ -133,7 +133,7 @@ export function ProjectView({ project, parts, notes, reminders, runTool, onOpenI
         </div>
         <div className="flex gap-1">
           {(['overview', 'timeline'] as const).map((t) => (
-            <button key={t} onClick={() => setTab(t)} className={`rounded-lg px-2.5 py-1 text-xs ${tab === t ? 'bg-[#3A2E28] text-[#FAF6F0]' : 'bg-white/70 text-stone-600'}`}>
+            <button key={t} onClick={() => setTab(t)} className={`rounded-lg px-2.5 py-1 text-xs ${tab === t ? 'bg-cocoa text-cream' : 'bg-white/70 text-stone-600'}`}>
               {t === 'overview' ? 'Overview' : `Timeline${activities ? ` (${activities.length})` : ''}`}
             </button>
           ))}

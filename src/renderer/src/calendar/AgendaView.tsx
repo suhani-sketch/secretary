@@ -76,9 +76,9 @@ export function AgendaView({ days, todayLocal, onOpenDay, onSelectOn }: Props): 
         lines.sort((a, b) => (a.at === null && b.at === null ? 0 : a.at === null ? -1 : b.at === null ? 1 : a.at.localeCompare(b.at)))
         const empty = lines.length === 0 && d.overdue.length === 0 && d.completed.length === 0
         return (
-          <section key={d.date} className={`rounded-2xl p-3 ${d.date === todayLocal ? 'bg-white/80 ring-1 ring-[#8B6A55]/40' : 'bg-white/50'}`}>
+          <section key={d.date} className={`rounded-2xl p-3 ${d.date === todayLocal ? 'bg-white/80 ring-1 ring-mocha/40' : 'bg-white/50'}`}>
             <div className="flex items-center gap-2 flex-wrap">
-              <button className="font-medium hover:text-[#8B6A55] text-left" onClick={() => onOpenDay(d.date)} title="Open this day">
+              <button className="font-medium hover:text-mocha text-left" onClick={() => onOpenDay(d.date)} title="Open this day">
                 {longDate(d.date)}
                 {d.date === todayLocal ? <span className="text-xs text-stone-400 font-normal"> · today</span> : s.is_past ? <span className="text-xs text-stone-400 font-normal"> · past</span> : null}
               </button>

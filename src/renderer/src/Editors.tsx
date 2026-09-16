@@ -33,8 +33,8 @@ const RECURRENCE: { label: string; rrule: string | null }[] = [
 
 export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }): React.JSX.Element {
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#3A2E28]/30" onMouseDown={onClose}>
-      <div className="w-[520px] max-w-[92vw] max-h-[90vh] overflow-y-auto rounded-3xl bg-[#FAF6F0] shadow-xl p-6" onMouseDown={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-cocoa/30" onMouseDown={onClose}>
+      <div className="w-[520px] max-w-[92vw] max-h-[90vh] overflow-y-auto rounded-3xl bg-cream shadow-xl p-6" onMouseDown={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">{title}</h2>
           <button onClick={onClose} className="text-stone-500 hover:text-stone-800 text-sm">
@@ -47,11 +47,11 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
   )
 }
 
-const field = 'w-full rounded-xl bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#B5836D]/40'
+const field = 'w-full rounded-xl bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-accent/40'
 const label = 'text-xs text-stone-500 mb-1 block'
 const btn = 'rounded-xl px-3 py-1.5 text-sm'
-const primary = `${btn} bg-[#3A2E28] text-[#FAF6F0] disabled:opacity-40`
-const quiet = `${btn} bg-[#B5836D]/15 hover:bg-[#B5836D]/30 text-[#3A2E28]`
+const primary = `${btn} bg-cocoa text-cream disabled:opacity-40`
+const quiet = `${btn} bg-accent/15 hover:bg-accent/30 text-cocoa`
 const danger = `${btn} text-red-800 hover:bg-red-50`
 
 interface EditorProps<T> {
@@ -244,7 +244,7 @@ export function ItemEditor({
           <span className={label}>Deadline or target?</span>
           <div className="flex gap-2">
             {(['hard', 'soft'] as const).map((h) => (
-              <button key={h} type="button" onClick={() => setHardness(hardness === h ? '' : h)} className={`${btn} ${hardness === h ? 'bg-[#3A2E28] text-[#FAF6F0]' : 'bg-white'}`}>
+              <button key={h} type="button" onClick={() => setHardness(hardness === h ? '' : h)} className={`${btn} ${hardness === h ? 'bg-cocoa text-cream' : 'bg-white'}`}>
                 {h === 'hard' ? 'hard deadline' : 'soft target'}
               </button>
             ))}

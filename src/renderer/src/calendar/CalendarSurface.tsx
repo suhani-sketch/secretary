@@ -150,7 +150,7 @@ export function CalendarSurface(p: Props): React.JSX.Element {
             ›
           </button>
         </div>
-        <button className="text-xl font-semibold tracking-tight truncate min-w-0 text-left hover:text-[#8B6A55]" onClick={() => selectOn(p.dateLocal, selection?.kind === 'date' && panelDate === p.dateLocal ? ({ kind: 'date' } as Selection) : { kind: 'date' })} title="Open the day panel">
+        <button className="text-xl font-semibold tracking-tight truncate min-w-0 text-left hover:text-mocha" onClick={() => selectOn(p.dateLocal, selection?.kind === 'date' && panelDate === p.dateLocal ? ({ kind: 'date' } as Selection) : { kind: 'date' })} title="Open the day panel">
           {title}
           {summary?.is_past && <span className="text-sm text-stone-400 font-normal"> · looking back</span>}
         </button>
@@ -172,7 +172,7 @@ export function CalendarSurface(p: Props): React.JSX.Element {
           </label>
           <div className="flex rounded-xl bg-white/80 p-0.5" role="tablist" aria-label="Calendar view">
             {MODES.map((m) => (
-              <button key={m.id} role="tab" aria-selected={p.mode === m.id} onClick={() => p.onChangeMode(m.id)} className={`rounded-lg px-3 py-1 text-sm ${p.mode === m.id ? 'bg-[#3A2E28] text-[#FAF6F0]' : 'text-stone-600 hover:bg-white'}`} title={m.job}>
+              <button key={m.id} role="tab" aria-selected={p.mode === m.id} onClick={() => p.onChangeMode(m.id)} className={`rounded-lg px-3 py-1 text-sm ${p.mode === m.id ? 'bg-cocoa text-cream' : 'text-stone-600 hover:bg-white'}`} title={m.job}>
                 {m.label}
               </button>
             ))}

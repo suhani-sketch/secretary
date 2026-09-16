@@ -3,7 +3,8 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 6 — Calendar and temporal planning. 6a–6f built 2026-09-16. **§11C run 2026-09-17 on scratch DB c7 across
+## Current phase: Phase 7 — Intelligence. 7a (brain dump) built 2026-09-17, testable; 7b–7g not started. Governing rule: compute in
+code, the model only phrases — every answer costs at most ONE model call (§11G 14). Phase 6: 6a–6f built. **§11C run 2026-09-17 on scratch DB c7 across
 several real quit + relaunch cycles: 24 of 27 steps pass outright; 4 and 12 pass on the tool path the drag calls but the mouse gesture itself
 was not performed; 25 passes against planted history (see below).** Phase 5 complete (§11F passed).
 **Restart (Phase 0 reboot) test is DEFERRED at the user's request — do not raise it.** The user registered a Task Scheduler logon task
@@ -23,6 +24,46 @@ was not performed; 25 passes against planted history (see below).** Phase 5 comp
   reuse all of it. `src/main/calendar.ts` is the SQLite glue (`buildDay`, `occurrencesBetween`); `planning.ts` (conflicts) still
   imports repo and moves to core when 6f touches it.
 - **Migration 7:** `plans` table; `events.plan_id`, `events.session_state`; index on `events.starts_at_utc`.
+
+## Phase 7a — brain dump and messy input (2026-09-17)
+- **Routing:** `router.looksLikeDump(text)` (newline, > 220 chars, or ≥ 3 clauses split on sentence ends / "also" / "and then" /
+  "plus" / "oh and" / dashes) → tier 0 bails out entirely so it cannot grab the first clause and drop the rest. The whole
+  message goes to the model ONCE with `preferStrong` (provider starts on the second model in the chain — 3.6-flash — instead
+  of flash-lite; still one call). `ai.response` logs "(model, dump)".
+- **Extraction is the existing tool set**, no second pipeline: the prompt's "Brain dumps (7a)" section maps clause → tool
+  (obligation → create_item, deadline → kind deadline, remind → remind_*, promise → commitment + committed_to, note → add_note,
+  feeling/location → note_context, done → record_activity / complete_checklist_item, "haven't heard back" → create_waiting,
+  "can't X until Y" → add_link (+ create_waiting when Y is a wait), Thing mentioned → update / project_id) and says: resolve by
+  id before creating; do every clear part; at most one question.
+- **One clarifying question, enforced in code:** new read tool `ask_clarification {question, about}`. The orchestrator lifts
+  it out of the round, applies every other call, appends "One question: …" to the composed reply; a second/third ask is dropped
+  and logged (`ai.clarify_capped`), logged to `extractions` like any proposal. A response that is ONLY a question replies with
+  the question.
+- **Invariant 11 in the tool layer:** `create_item` runs `findTwin(title, open items + checklist steps, not projects/waits)`
+  (`resolveEntity` match ≥ 0.9, or content-word containment with ≥ 2 tokens on the shorter side) and, on a twin, UPDATES it
+  through `update_item` (due, details appended, hardness, commitment, idea → task) + attaches the project + adds any reminder
+  via `create_reminder`; phrase "Already had "X" — …". "Email TISS about the invoice" vs "… about the mailing" stay separate.
+- **Reply shape:** ≥ 3 applied changes → "Got it — N things:" + one "• phrase" line each (bubbles are `whitespace-pre-wrap`).
+- **Verified on scratch c8** (project "TISS mailing" with 3 steps, event "Umar Khalid screening"): a 9-clause dump → ONE call
+  (gemini-3.6-flash, 23 s, 17k tokens in), 10 changes: step "Send first email" ticked off (resolved, not re-created), waiting
+  on Priya under TISS mailing, "Attach the document" resolved to the existing step (promoted, due Friday), reminder, commitment
+  to Rahul, today's context "exhausted" (nothing stored), task "Book room…" due before the 26th, waiting on the department, note
+  attached to the screening event, an idea (not a task) for "should probably start reading". "What am I forgetting?" then
+  listed promise → waits → coming up and reflected the exhaustion. §11G 1 and 3 exercised (typed); 2 (spoken) is later.
+- Seen: "remind me thursday evening" on a Thursday after midnight → the model chose NEXT Thursday (ambiguous; left). The
+  "can't book until the dept confirms" clause became a wait but no `blocks` link on the first run — prompt now spells out
+  wait + link together; re-verify.
+
+## Light / dark mode (2026-09-17)
+- Every colour the UI uses is a Tailwind theme variable: `@theme` in `styles.css` names the palette (`cocoa`, `cream`, `accent`,
+  `cocoa-soft`, `mocha`, `paper`, `paper-2/3/4`, `sand`, `ash`, `ash-2`, `pure`, `tan`, `slate-soft`, `rust`, `ink-muted`) and the
+  renderer uses `bg-cocoa` / `text-cream` etc. instead of `bg-[#3A2E28]` (all bracketed hex utilities were renamed). The
+  FullCalendar block uses the same variables (`color-mix` for the translucent ones).
+- `:root[data-theme="dark"]` overrides the palette AND inverts the stone/amber/rose/emerald/sky/red scales + `--color-white`,
+  so the ~250 existing `text-stone-500`-style utilities keep their meaning. The room/companion SVG art keeps its own colours.
+- Setting `ui.theme` (light|dark) in `settings` (whitelisted in `index.ts`), mirrored in localStorage (`main.tsx` applies it
+  before first paint). Toggle: "☾ dark / ☀ light" at the right of the top nav. Dev hook: `SECRETARY_VIEW=…,theme:dark`.
+- Not done: following the OS preference automatically (an "auto" option) — the user asked for a two-way switch.
 
 ## §11C calendar acceptance run (2026-09-17, scratch c7, fresh DB, ~9 electron launches = restarts between groups)
 - Pass by conversation: 2, 3, 5, 6, 7 (Thursday meeting → moved → task due Thu with no time → reminder 14:30 separate → date note);

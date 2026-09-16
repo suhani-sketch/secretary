@@ -3,7 +3,7 @@ import { log } from '../log'
 import * as repo from '../repo'
 import { assembleContext, getOffer, setOffer } from './context'
 import { ProviderUnavailableError, type Provider, type ProviderMessage, type ToolCall, type ToolResult } from './provider'
-import { REPLY, routeTier0 } from './router'
+import { REPLY, looksLikeDump, routeTier0 } from './router'
 import { executeTool, inTransaction, isWriteTool, toolDefinitions, type ExecContext } from './tools'
 import { formatDue } from '../../shared/format'
 import { personalityLine } from '../personality'
@@ -41,6 +41,13 @@ Living activities (happenings) — four different things, keep them apart:
 Context and commitments (5d) — the last two things to keep apart:
 - CONTEXT: "I'm exhausted today", "feeling low", "I'm at TISS until 5", "I'm free this evening" → note_context. It shapes what you recommend today and disappears tonight. NEVER a task, note, activity or preference. A durable pattern stated as such ("I work better on analytical writing in the afternoon", "no mornings") IS a preference → set_preference / add_constraint.
 - COMMITMENT: an obligation with another person's expectation attached. "I should email Professor X" → a task (intention). "I told Professor X I'd email him tonight" / "I promised Priya the draft by Friday" → create_item kind=commitment, committed_to = the person, title = what was promised, due from their words. Commitments come first in "what am I forgetting?" and are shown with who they were made to. Never invent a person.
+
+Brain dumps (7a) — one messy message, everything handled in this ONE response:
+- Split the message into its clauses and deal with EVERY clause with the right tool, all in this single response: an obligation → create_item; a deadline → create_item kind=deadline (hardness hard if they said so); "remind me …" → the item's remind_* fields or create_reminder; a promise to someone → create_item kind=commitment with committed_to; "note:" / a fact to keep → add_note; how they feel or where they are → note_context; something they did → record_activity, or complete_checklist_item / complete_item when it is a listed step or item; "haven't heard back" / "waiting for X" → create_waiting (or record_activity.now_waiting_on); "can't do Y until X" → add_link (from = X, to = Y; when X is something you are waiting on, create_waiting for it AND add_link from that waiting item to Y in the same response); a clause about a Thing in the context → update that Thing, or pass project_id so the new item belongs to it.
+- RESOLVE BEFORE CREATING (invariant 11): if a clause names something already in the context — an item, a step, a project, a wait — act on THAT row by its id (update, complete, attach). Never create a near-duplicate. The app merges same-named items as a backstop; do not lean on it.
+- At most ONE clarifying question per message, through ask_clarification, and only where the ambiguity would change an action (which of two Things it belongs to; a date that cannot be read for something that plainly needs one). Never ask about wording, priority or detail. Never ask INSTEAD of acting: do every clear part in the same response and ask about the one unclear part.
+- Ambiguous but harmless → pick the plain reading and act. Ambiguous and consequential → the one question.
+- Time estimates: keep the user's figure as theirs; never invent one and present it as what they said.
 
 Things (projects) — the life model:
 - When the user names something they are dealing with that has, or will have, parts ("TISS mailing is something I need to deal with", "my IIM application", "the wedding"), call create_project with the name they used. The context lists every project you already track with its id: if the Thing is there, DO NOT create it again — use its id.
@@ -106,7 +113,9 @@ export function enqueueChat(deps: OrchestratorDeps, text: string): Promise<ChatR
   return run
 }
 
-const joinPhrases = (applied: AppliedChange[]): string => applied.map((a) => a.phrase).join(' ')
+/** One or two changes read as a sentence; a brain dump's worth reads as a list, one line per thing (7a). */
+const joinPhrases = (applied: AppliedChange[]): string =>
+  applied.length >= 3 ? `Got it — ${applied.length} things:\n${applied.map((a) => `• ${a.phrase}`).join('\n')}` : applied.map((a) => a.phrase).join(' ')
 
 async function handleChat(deps: OrchestratorDeps, rawText: string): Promise<ChatResponse> {
   const text = rawText.trim()
@@ -160,21 +169,31 @@ async function handleChat(deps: OrchestratorDeps, rawText: string): Promise<Chat
       )
       messages.push({ role: 'user', text: `Context:\n${assembleContext(text)}\n\nUser message:\n${text}` })
 
-      const res = await deps.provider.complete({ system: SYSTEM_PROMPT, messages, tools: toolDefinitions(), turnId: userMessage.id }, (s) =>
+      // A brain dump (7a) is the one place the lite model reliably falls short; start one model up the chain. Still one call.
+      const dump = looksLikeDump(text)
+      const res = await deps.provider.complete({ system: SYSTEM_PROMPT, messages, tools: toolDefinitions(), turnId: userMessage.id, preferStrong: dump }, (s) =>
         deps.onStatus({ kind: 'throttled', retryInSeconds: s })
       )
       modelCalls++
       log(
         'info',
         'ai.response',
-        `call ${modelCalls} (${res.model ?? '?'}): ${res.toolCalls.length} tool call(s)${res.text ? ', text' : ''}; tokens in=${res.usage?.input ?? '?'} out=${res.usage?.output ?? '?'}`
+        `call ${modelCalls} (${res.model ?? '?'}${dump ? ', dump' : ''}): ${res.toolCalls.length} tool call(s)${res.text ? ', text' : ''}; tokens in=${res.usage?.input ?? '?'} out=${res.usage?.output ?? '?'}`
       )
 
-      if (res.toolCalls.length === 0) {
-        replyText = res.text ?? "I'm not sure what you'd like me to do with that — could you say a bit more?"
+      // 7a: at most ONE clarifying question per message. It rides alongside the actions in the same response; the
+      // clear parts are applied, the question is appended. Extra questions are dropped (and logged), never asked.
+      const asks = res.toolCalls.filter((c) => c.name === 'ask_clarification')
+      const calls = res.toolCalls.filter((c) => c.name !== 'ask_clarification')
+      const question = asks.length ? String((asks[0].args as { question?: string }).question ?? '').trim() : ''
+      if (asks.length) repo.insertExtraction(userMessage.id, JSON.stringify(asks.map((c) => ({ name: c.name, args: c.args }))), true, asks.length > 1 ? `${asks.length - 1} extra question(s) dropped — one per message` : null)
+      if (asks.length > 1) log('warn', 'ai.clarify_capped', `${asks.length} clarifying questions proposed; asked the first only`)
+
+      if (calls.length === 0) {
+        replyText = question || res.text || "I'm not sure what you'd like me to do with that — could you say a bit more?"
       } else {
-        deps.onStatus({ kind: 'tools', count: res.toolCalls.length })
-        const outcome = runToolRound(res.toolCalls, { actor: 'assistant', sourceMsgId: userMessage.id }, applied)
+        deps.onStatus({ kind: 'tools', count: calls.length })
+        const outcome = runToolRound(calls, { actor: 'assistant', sourceMsgId: userMessage.id }, applied)
         deps.onChanged()
         if (outcome.confirm) {
           replyText = (applied.length ? joinPhrases(applied) + ' ' : '') + outcome.confirm.question
@@ -189,6 +208,7 @@ async function handleChat(deps: OrchestratorDeps, rawText: string): Promise<Chat
           // Read-only round: phrase the answer in code rather than spend a second call.
           replyText = phraseReadResults(outcome.results) ?? res.text ?? "I looked, but couldn't put that into words — could you ask again?"
         }
+        if (question && !outcome.confirm) replyText += `\n\nOne question: ${question}`
       }
     }
   } catch (e) {

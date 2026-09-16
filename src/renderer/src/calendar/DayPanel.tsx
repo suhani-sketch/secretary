@@ -41,7 +41,7 @@ const addDays = (d: string, n: number): string => {
 }
 
 const btn = 'rounded-lg px-2.5 py-1 text-xs bg-white/80 hover:bg-white text-stone-700 disabled:opacity-40'
-const btnDark = 'rounded-lg px-2.5 py-1 text-xs bg-[#3A2E28] text-[#FAF6F0] hover:opacity-90 disabled:opacity-40'
+const btnDark = 'rounded-lg px-2.5 py-1 text-xs bg-cocoa text-cream hover:opacity-90 disabled:opacity-40'
 const field = 'rounded-lg bg-white/80 px-2 py-1 text-xs text-stone-800 outline-none focus:bg-white'
 const IMPORTANCE: { v: number; label: string; glyph: string }[] = [
   { v: 0, label: 'critical', glyph: '‼' },
@@ -58,7 +58,7 @@ export function DayPanel({ day, selection, onSelect, onQuick, onOpenEditor, onCl
   const long = new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })
 
   return (
-    <aside className="flex flex-col min-h-0 h-full rounded-3xl bg-[#F3EADF]/70 p-4 gap-3 overflow-hidden">
+    <aside className="flex flex-col min-h-0 h-full rounded-3xl bg-paper-2/70 p-4 gap-3 overflow-hidden">
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="text-xs uppercase tracking-wide text-stone-500">Day panel</div>
@@ -190,7 +190,7 @@ function ItemDetail({ item, day, onQuick, onOpenEditor }: { item: Item; day: Day
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-[11px] text-stone-500 w-16">Importance</span>
             {IMPORTANCE.map((x) => (
-              <button key={x.v} className={`${btn} ${(item.importance ?? 2) === x.v ? 'ring-1 ring-[#3A2E28] bg-white' : ''}`} onClick={() => void onQuick('update_item', { id: item.id, importance: x.v })} title={x.label}>
+              <button key={x.v} className={`${btn} ${(item.importance ?? 2) === x.v ? 'ring-1 ring-cocoa bg-white' : ''}`} onClick={() => void onQuick('update_item', { id: item.id, importance: x.v })} title={x.label}>
                 {x.glyph} {x.label}
               </button>
             ))}
@@ -391,7 +391,7 @@ function PlanProgress({ planId, sessionState }: { planId: string; sessionState: 
   const p = view.progress
   const hours = (min: number): string => `${Math.round(min / 6) / 10} h`
   return (
-    <div className="rounded-xl bg-[#8FA3B5]/15 p-2 text-[11px] text-stone-700">
+    <div className="rounded-xl bg-slate-soft/15 p-2 text-[11px] text-stone-700">
       <div className="flex items-baseline gap-2">
         <span className="font-medium">📘 {view.plan.title}</span>
         <span className="text-stone-500">{view.plan.status !== 'active' ? view.plan.status : ''}</span>
@@ -455,7 +455,7 @@ function Group({ title, count, children }: { title: string; count: number; child
 
 function Row({ active, glyph, title, sub, muted, onClick, onDone }: { active: boolean; glyph: string; title: string; sub?: string; muted?: boolean; onClick: () => void; onDone?: () => void }): React.JSX.Element {
   return (
-    <li className={`group text-xs flex items-start gap-2 rounded-lg px-1.5 py-1 cursor-pointer ${active ? 'bg-white ring-1 ring-[#3A2E28]/30' : 'hover:bg-white/70'} ${muted ? 'text-stone-400' : 'text-stone-800'}`} onClick={onClick}>
+    <li className={`group text-xs flex items-start gap-2 rounded-lg px-1.5 py-1 cursor-pointer ${active ? 'bg-white ring-1 ring-cocoa/30' : 'hover:bg-white/70'} ${muted ? 'text-stone-400' : 'text-stone-800'}`} onClick={onClick}>
       <span className="w-4 text-center shrink-0">{glyph}</span>
       <div className="min-w-0 flex-1">
         <div className={`break-words leading-snug ${muted ? 'line-through' : ''}`}>{title}</div>
