@@ -201,7 +201,8 @@ export const toolSchemas = {
     .describe('Change one event. For a recurring series pass occurrence_start_local to change a single occurrence.'),
   delete_event: z.object({
     id: idRef,
-    occurrence_start_local: localDateTime.optional().describe('For a recurring series: skip only this occurrence (added to exdates). Omit to remove the whole event.')
+    occurrence_start_local: localDateTime.optional().describe('For a recurring series: skip only this occurrence (added to exdates). Omit to remove the whole event.'),
+    confirmed: z.boolean().optional().describe('Cancelling a recurring series (or an event that has moved occurrences) is consequential: the first call returns a confirmation question; call again with confirmed=true after the user says yes.')
   }),
   get_calendar: z.object({
     from_date_local: localDate.describe('First day, inclusive.'),
@@ -921,7 +922,8 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
         patch.startsAtUtc = newStart
         patch.endsAtUtc = newEnd
       }
-      const before = target
+      // For a moved occurrence, `before` also carries the series row as it was (pre-exdate) so undo can put both back.
+      const before = occurrenceNote ? { ...target, occurrence_of: ev } : target
       const after = repo.updateEvent(target.id, patch)
       const moved = before.starts_at_utc !== after.starts_at_utc || before.ends_at_utc !== after.ends_at_utc
       act({ targetType: 'event', targetId: after.id, projectId: after.project_id, verb: 'updated', summary: `Event "${after.title}"${moved ? ` moved ${formatClock(before.starts_at_utc)} → ${formatClock(after.starts_at_utc)}` : ' changed'}${occurrenceNote}`, before, after })
@@ -945,11 +947,30 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
         const summary = `Skipped "${ev.title}" on ${formatClock(occUtc)}`
         return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Skipped "${ev.title}" on ${formatClock(occUtc)}. The series carries on.` } }
       }
-      repo.deleteEventRow(ev.id)
-      act({ targetType: 'event', targetId: ev.id, projectId: ev.project_id, verb: 'deleted', summary: `Cancelled event "${ev.title}" (${ev.all_day ? formatDue(ev.starts_at_utc, 'day') : formatClock(ev.starts_at_utc)})`, before: ev })
+      // A series, or an event whose title is shared with a series / moved occurrences ("cancel the econometrics class"
+      // when the class repeats weekly and next week's was moved): ask first, then remove the lot together. Cancelling
+      // just the moved occurrence while the series carried on is exactly the silent half-change invariant 10 forbids.
+      const horizon = DateTime.utc().plus({ days: 366 }).toISO()!
+      const sameTitle = occurrencesBetween(DateTime.utc().minus({ days: 1 }).toISO()!, horizon)
+        .filter((o) => o.id !== ev.id && o.title.trim().toLowerCase() === ev.title.trim().toLowerCase())
+      const siblingIds = [...new Set(sameTitle.map((o) => o.id))]
+      const siblings = siblingIds.map((id) => repo.getEvent(id)).filter((e): e is NonNullable<typeof e> => !!e)
+      const seriesInvolved = !!ev.rrule || siblings.some((s) => !!s.rrule)
+      if (seriesInvolved && !x.confirmed) {
+        const moved = [ev, ...siblings].filter((e) => !e.rrule).length
+        const question = `"${ev.title}" is a repeating series${moved ? ` (plus ${plural(moved, 'moved occurrence')})` : ''}. Cancel the whole thing? To skip only one, tell me which date.`
+        return { result: { ok: false, needs_confirmation: true, question }, confirm: { question, wouldAffect: [ev, ...siblings].map((e) => `${e.title} · ${e.rrule ? describeRule(e.rrule) : formatClock(e.starts_at_utc)}`) } }
+      }
+      const doomed = seriesInvolved ? [ev, ...siblings] : [ev]
+      for (const e of doomed) {
+        repo.deleteEventRow(e.id)
+        act({ targetType: 'event', targetId: e.id, projectId: e.project_id, verb: 'deleted', summary: `Cancelled event "${e.title}" (${e.rrule ? describeRule(e.rrule) : e.all_day ? formatDue(e.starts_at_utc, 'day') : formatClock(e.starts_at_utc)})`, before: e })
+      }
       clearOffer()
-      const summary = `Cancelled event "${ev.title}"`
-      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Cancelled "${ev.title}"${ev.rrule ? ' — the whole series' : ''}. Nothing else was touched.` } }
+      const summary = `Cancelled event "${ev.title}"${doomed.length > 1 ? ` (${doomed.length} rows)` : ''}`
+      const movedGone = doomed.filter((e) => !e.rrule).length
+      const detail = seriesInvolved ? ` — the whole series${movedGone ? ` and ${plural(movedGone, 'moved occurrence')}` : ''}` : ''
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Cancelled "${ev.title}"${detail}. Nothing else was touched.` } }
     }
     case 'get_calendar': {
       const x = a as z.infer<typeof toolSchemas.get_calendar>
@@ -1819,6 +1840,28 @@ function undoActivity(a: import('../../shared/types').Activity): string {
     if (a.verb === 'deleted') {
       repo.addLink(l.from, l.to, l.type)
       return 'restored the dependency'
+    }
+  }
+  if (a.target_type === 'event') {
+    type Ev = import('../../shared/types').CalendarEvent & { occurrence_of?: import('../../shared/types').CalendarEvent }
+    if (a.verb === 'created') {
+      repo.deleteEventRow(a.target_id)
+      return 'removed that event again'
+    }
+    if (a.verb === 'deleted' && before) {
+      repo.restoreEvent(before as Ev)
+      return 'put the event back on the calendar'
+    }
+    if (before && (before as Ev).id) {
+      const b = before as Ev
+      if (b.occurrence_of) {
+        // A moved occurrence: drop the standalone copy and restore the series row (its exdates as they were).
+        repo.deleteEventRow(a.target_id)
+        repo.restoreEvent(b.occurrence_of)
+        return 'put that occurrence back into its series'
+      }
+      repo.restoreEvent(b)
+      return a.verb === 'updated' && /Skipped/.test(a.summary) ? 'un-skipped that occurrence' : `"${b.title}" is back to how it was`
     }
   }
   if (a.target_type === 'constraint') {

@@ -224,6 +224,20 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     return [{ name: REPLY, args: { text: 'Okay — still outstanding, then. I have left it as it is.' } }]
   }
 
+  // ---- a pending confirmation question ("cancel the whole series?") is answered here, never by the model ----
+  {
+    const offer = getOffer()
+    if (offer?.kind === 'confirm') {
+      if (/^(?:yes|yeah|yep|sure|ok|okay|go ahead|do it|please do|yes please)(?:[,.!]? (?:cancel|delete|remove|archive|drop|scrap|go ahead|do it|all of it|the whole (?:thing|series|lot)|everything|it|them).*)?$/.test(text)) {
+        return [{ name: offer.toolName, args: offer.args }]
+      }
+      if (/^(?:no|nope|nah|no thanks|never ?mind|cancel that|forget it|stop|wait|hold on|don'?t|do not|leave it|keep it|keep them|leave them|no,? (?:keep|leave|don'?t|do not|stop|wait|never ?mind|not).*|(?:keep|leave) (?:it|them|everything)(?: as (?:it is|they are|is))?|don'?t (?:cancel|delete|remove|touch|change|do) .*|not (?:the whole|all|everything).*)$/.test(text)) {
+        clearOffer()
+        return [{ name: REPLY, args: { text: 'Okay — nothing changed.' } }]
+      }
+    }
+  }
+
   // ---- "yes" / "no" to a standing offer or question ----
   if (/^(?:yes|yes please|yep|yeah|sure|ok|okay|please|do it|go ahead|yes do|same|same thing|yes same|(?:yes,? )?(?:book|do|put|add|move|schedule) it anyway|anyway|go ahead anyway|yes anyway|override)$/.test(text)) {
     const offer = getOffer()
@@ -497,7 +511,13 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     if (when && !when.exact) return [{ name: 'get_day', args: { date_local: when.date } }]
     if (when?.exact) return [{ name: 'get_day', args: { date_local: when.dateTime!.slice(0, 10) } }]
   }
-  if ((m = /^(?:i(?:'ve| have) (?:got )?|i've got |there'?s |there is |put |add |book )?(?:a |an |my |the )?(?:quick |short |brief |long )?(meeting|call|appointment|dentist|doctor|gp|class|lecture|tutorial|seminar|workshop|interview|viva|lunch|dinner|coffee|drinks|catch[- ]?up|standup|stand-up|sync|review|presentation|exam|test|flight|train|haircut|gym|gym class|rehearsal|session|walk|run)\b(.*)$/.exec(text))) {
+  if (
+    (m = /^(?:i(?:'ve| have) (?:got )?|i've got |there'?s |there is |put |add |book )?(?:a |an |my |the )?(?:quick |short |brief |long )?(?:([a-z][\w-]*(?: [a-z][\w-]*)?) )?(meeting|call|appointment|dentist|doctor|gp|class|lecture|tutorial|seminar|workshop|interview|viva|lunch|dinner|coffee|drinks|catch[- ]?up|standup|stand-up|sync|review|presentation|exam|test|flight|train|haircut|gym|gym class|rehearsal|session|walk|run)\b(.*)$/.exec(text)) &&
+    // An optional one/two-word qualifier before the noun ("econometrics class", "team standup") — but never a verb or a
+    // preposition, so "prepare for the meeting tomorrow" stays a task for the ordinary rules.
+    !(m[1] && /\b(?:for|to|about|before|after|prepare|prep|plan|book|schedule|cancel|move|remind|finish|do|with|of|in|on|at|my|the|a|an|i|need|want|have|got|skip|miss)\b/.test(m[1]))
+  ) {
+    m = [m[0], `${m[1] ? m[1] + ' ' : ''}${m[2]}`, m[3]] as unknown as RegExpExecArray
     // Recurring series in natural language (6e): "class every tuesday 2-4", "standup every weekday at 9:30".
     const rec = parseRecurrencePhrase(m[2])
     if (rec) {
@@ -733,6 +753,38 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     if (top) rem = fired.find((r) => r.target_type === 'item' && r.target_id === top.itemId) ?? null
     if (!rem && fired.length === 1) rem = fired[0]
     return rem ? [{ name: 'snooze_reminder', args: { id: rem.id, minutes } }] : null
+  }
+
+  // ---- move ONE dated event / occurrence: "move next tuesday's class to 3", "move the class on october 13 to 5" (6e/6f) ----
+  {
+    const DAY = String.raw`(?:next |this |last )?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)`
+    const a = new RegExp(String.raw`^(?:actually,? )?(?:move|push|shift|reschedule) (?:the |my )?(${DAY})(?:'s)? (.+?) to (?:at )?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$`).exec(text)
+    const b = new RegExp(String.raw`^(?:actually,? )?(?:move|push|shift|reschedule) (?:the |my )?(.+?) (?:on|for) (${DAY}|(?:the )?\d{1,2}(?:st|nd|rd|th)?(?: of)? \w+|\w+ \d{1,2}(?:st|nd|rd|th)?) to (?:at )?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$`).exec(text)
+    m = a ?? (b ? ([b[0], b[2], b[1], b[3], b[4], b[5]] as unknown as RegExpExecArray) : null)
+  }
+  if (m) {
+    const [, dayText, ref, hh, mm, ap] = m
+    const when = parseWhen(dayText)
+    const date = when?.exact ? when.dateTime!.slice(0, 10) : when?.date
+    const refWords = words(ref.replace(/ (?:meeting|appointment|event|session)$/, '') || ref)
+    if (date && refWords.length) {
+      const zone = DateTime.local().zoneName
+      const from = DateTime.fromISO(date, { zone }).startOf('day')
+      const hits = occurrencesBetween(from.toUTC().toISO()!, from.plus({ days: 1 }).toUTC().toISO()!).filter((o) => !o.all_day && refWords.every((w) => o.title.toLowerCase().includes(w)))
+      if (hits.length === 1) {
+        const o = hits[0]
+        let hour = Number(hh)
+        const minute = mm ? Number(mm) : 0
+        const base = DateTime.fromISO(o.occurrence_start_utc, { zone: 'utc' }).toLocal()
+        if (ap === 'pm' && hour < 12) hour += 12
+        else if (ap === 'am' && hour === 12) hour = 0
+        else if (!ap && hour <= 12 && (hour <= 6 || (hour < 12 && base.hour >= 12))) hour += 12
+        const startsAtLocal = from.set({ hour, minute }).toFormat("yyyy-MM-dd'T'HH:mm")
+        const args: Record<string, unknown> = { id: o.id, starts_at_local: startsAtLocal }
+        if (o.is_recurring_instance) args.occurrence_start_local = base.toFormat("yyyy-MM-dd'T'HH:mm")
+        return [{ name: 'update_event', args }]
+      }
+    }
   }
 
   // ---- move / make it <time> ----

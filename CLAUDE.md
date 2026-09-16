@@ -3,8 +3,9 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 6 — Calendar and temporal planning. 6a–6f built 2026-09-16 (6f testable). Phase 5 complete (§11F passed).
-Phase 6 "Done when" = §11C end to end across a restart; steps 15–21 exercised on scratch DB c6 (see 6f). Steps 4, 12, 13 need a real mouse.
+## Current phase: Phase 6 — Calendar and temporal planning. 6a–6f built 2026-09-16. **§11C run 2026-09-17 on scratch DB c7 across
+several real quit + relaunch cycles: 24 of 27 steps pass outright; 4 and 12 pass on the tool path the drag calls but the mouse gesture itself
+was not performed; 25 passes against planted history (see below).** Phase 5 complete (§11F passed).
 **Restart (Phase 0 reboot) test is DEFERRED at the user's request — do not raise it.** The user registered a Task Scheduler logon task
 `Secretary` (20 s delay) after Explorer's Shell-Core log showed the HKCU Run entry being skipped; `<userData>/startup.log` logs each launch.
 
@@ -22,6 +23,47 @@ Phase 6 "Done when" = §11C end to end across a restart; steps 15–21 exercised
   reuse all of it. `src/main/calendar.ts` is the SQLite glue (`buildDay`, `occurrencesBetween`); `planning.ts` (conflicts) still
   imports repo and moves to core when 6f touches it.
 - **Migration 7:** `plans` table; `events.plan_id`, `events.session_state`; index on `events.starts_at_utc`.
+
+## §11C calendar acceptance run (2026-09-17, scratch c7, fresh DB, ~9 electron launches = restarts between groups)
+- Pass by conversation: 2, 3, 5, 6, 7 (Thursday meeting → moved → task due Thu with no time → reminder 14:30 separate → date note);
+  14 (dentist cancelled, "what am I doing friday?" no longer lists it); 13 (series 14:00–16:00, "move next tuesday's class to 3" →
+  exdate + standalone, series row untouched); 15 (plan → 12 sessions, 24 h against 30 h target, "8 h not yet placed" after a skip);
+  16 ("skip friday's econometrics session" → missed, plan active, shortfall stated); 17 (one session moved by `update_event`, plan
+  "next session Mon 18:00", others untouched); 18 (progress = hours done/target/missed — no streak, no score); 19 (5:15 over the
+  17:00 meeting → refused, "18:00 onwards"); 20 (coffee at 18:00 straight after → booked, "tight fit: 0 min gap"); 21 (buffer 30 min
+  after TISS → call 10 min after the TISS meeting booked with "poor fit"); 22 (Friday "busy" in Month, descriptive word + dot);
+  24 (Delhi = one all-day event, band Mon–Wed in Month and Week, "continues" on Tue/Wed in get_day); 26 (Mon start; setting 0 → Sun);
+  27 (after relaunch: plan progress, moved + missed sessions, series + moved occurrence, Delhi, buffers all read back identically).
+- Pass by screenshot: 1 (own full-width surface, no rail), 8 (priority strip under the header with no panel open), 9 (glyph + word:
+  "! high", "◆ hard deadline", "☐"), 10 (panel with priorities/due/schedule/reminders/notes/completed), 11 (`complete_item` = the
+  panel's ✓ → item under Completed, `completed` activity in history, gone from Due), 25 (Sep 16: "looking back", no Priorities
+  section, missed reminder listed, Completed + What happened).
+- 4 and 12: the drop handlers call exactly `update_event {id, starts_at_local, ends_at_local}` and `create_event {kind:work_block,
+  item_id}`; both ran and the assistant read the new state back ("Meeting … 17:00–18:00", "Submit the report — time set aside").
+  The mouse gesture itself was not performed (cannot be automated here) — the user should drag once to close 4 and 12 for real.
+- 25's data: the fresh DB had no past-dated rows, so one completed item, its activity and a missed reminder dated 2026-09-16 were
+  planted by SQL (`scratchpad/backdate.cjs`) — the rendering is real, the history was staged.
+- 23 (nothing moved without approval): the `activities` audit shows every event change traces to an explicit request — EXCEPT
+  two defects found and fixed during the run (below). Both are now deterministic.
+- **Defects found and fixed during the run:**
+  1. "econometrics class every tuesday 2-4" went to the model (router noun rule needed the noun first) and the model dropped the
+     end time → 1 h. Router now accepts a one/two-word qualifier before the noun ("econometrics class", "team standup"), never a
+     verb/preposition; tier 0 builds the 2 h series.
+  2. "cancel the econometrics class" with a series + a moved occurrence: the model picked the moved occurrence's id and deleted just
+     that, leaving the series (invariant 10 violation). `delete_event` on a series (or an event sharing its title with a series)
+     now returns a confirmation question first; `confirmed=true` removes the series AND its same-titled moved occurrences together.
+  3. Worse: answering that question with "no, keep it" made the model SKIP an occurrence instead. Confirmation questions now set a
+     `confirm` Offer (orchestrator, when a write round is rolled back for confirmation and the tool set no offer of its own); tier 0
+     answers it: yes/"yes, cancel the whole series"/go ahead → replay with confirmed=true; no/keep it/leave it/don't/never mind →
+     "Okay — nothing changed." The model never sees the yes/no. Prompt also says a decline means call nothing.
+  4. `undo` could not undo any event change ("Cannot undo …"). Undo now covers events: created → removed; deleted → restored;
+     moved/skipped → restored; a moved occurrence → standalone removed + series row (pre-exdate) restored (`before` carries
+     `occurrence_of`). Whole-series cancels write one `deleted` activity per row, so undo restores one row at a time.
+  5. "move the class on october 13 to 5" made the model read the calendar instead of moving. New tier-0 rule: "move <day>'s X to
+     <time>" / "move the X on <date> to <time>" → the single matching timed occurrence that day → `update_event`
+     (+ `occurrence_start_local` for a series instance).
+- Still open from this run: the DayPanel "Cancel series…" button now relies on the tool's own confirmation (its window.confirm was
+  removed); the live missed-session sweep was not observed (no session passed during the run).
 
 ## Phase 6f — plans and conflict levels (2026-09-16)
 - **Plans** (`plans` table, migration 7; `events.plan_id` + `events.session_state` planned|done|missed, migration 8 adds

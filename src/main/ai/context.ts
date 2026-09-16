@@ -40,6 +40,9 @@ export type Offer =
   | { kind: 'conflict_override'; toolName: string; args: Record<string, unknown> }
   /** Micro-ritual (Phase 5): "Want a 5-minute steep timer?" for an open-ended happening. "yes" times it; "no" is remembered per kind. */
   | { kind: 'ritual'; happeningId: string | null; happeningKind: string; minutes: number; label: string; metaphor: string | null }
+  /** A write tool asked a confirmation question (cancel a series, a project with parts, delete). A plain "yes" replays it
+   *  with confirmed=true; any "no" clears it and changes nothing — deterministically, never via the model. */
+  | { kind: 'confirm'; toolName: string; args: Record<string, unknown>; question: string }
 let offer: Offer | null = null
 export const setOffer = (o: Offer): void => {
   offer = o

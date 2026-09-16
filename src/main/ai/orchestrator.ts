@@ -1,7 +1,7 @@
 import { DateTime } from 'luxon'
 import { log } from '../log'
 import * as repo from '../repo'
-import { assembleContext } from './context'
+import { assembleContext, getOffer, setOffer } from './context'
 import { ProviderUnavailableError, type Provider, type ProviderMessage, type ToolCall, type ToolResult } from './provider'
 import { REPLY, routeTier0 } from './router'
 import { executeTool, inTransaction, isWriteTool, toolDefinitions, type ExecContext } from './tools'
@@ -82,7 +82,7 @@ Reminders are alarms, tasks are obligations:
 - Create a reminder only when the user asks for one ("remind me", "ping me", "alarm"). A task with a due date and no reminder is normal; the app itself offers a reminder when it makes sense.
 - If they ask to be reminded on a day without a clock time, use remind_date_local; the app picks their default reminder time and tells them. If they give a time, use remind_at_local.
 - Recurring ("every Sunday", "daily at 8", "each weekday"): set remind_rrule (RFC 5545, e.g. FREQ=WEEKLY;BYDAY=SU / FREQ=DAILY / FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR) and remind_at_local = the FIRST occurrence. Leave the due fields empty; a recurring chore has no single due date. For an existing item use create_reminder with rrule.
-- "Cancel the reminder" → cancel_reminder only; the item stays. "I'm not doing X" → cancel_item for that one item only. cancel_item on a project (or delete_item ever) returns a confirmation question — relay it; when the user then says yes, call again with confirmed=true.
+- "Cancel the reminder" → cancel_reminder only; the item stays. "I'm not doing X" → cancel_item for that one item only. cancel_item on a project, delete_event on a repeating series, or delete_item ever returns a confirmation question — relay it; when the user then says yes, call again with confirmed=true. If they decline ("no", "keep it", "leave it"), call NOTHING and say nothing changed — never reinterpret a "no" as a different, smaller change.
 - "Undo" / "undo that" → undo_last.
 
 Importance is inferred, never asked: read it from their wording and deadline pressure. If they override ("that's not actually important"), update importance.
@@ -371,6 +371,7 @@ function runToolRound(calls: ToolCall[], ctx: ExecContext, applied: AppliedChang
   const proposed = JSON.stringify(calls.map((c) => ({ name: c.name, args: c.args })))
   let error: string | null = null
   let confirm: RoundOutcome['confirm'] = null
+  const offerBefore = getOffer()
 
   if (writes.length) {
     const roundApplied: AppliedChange[] = []
@@ -391,6 +392,9 @@ function runToolRound(calls: ToolCall[], ctx: ExecContext, applied: AppliedChang
     } catch (e) {
       if (e instanceof NeedsConfirmation) {
         confirm = e.confirm
+        // Remember the question so a plain "yes" replays the call with confirmed=true and any "no" changes nothing —
+        // both in tier 0, never left to the model. A tool that set its own offer (the conflict gate) keeps it.
+        if (getOffer() === offerBefore && writes.length === 1) setOffer({ kind: 'confirm', toolName: writes[0].name, args: { ...(writes[0].args as Record<string, unknown>), confirmed: true }, question: e.confirm.question })
         repo.insertExtraction(ctx.sourceMsgId, proposed, false, 'awaiting confirmation')
         log('info', 'tools.confirm', confirm.question)
         for (const c of writes) results.push({ callId: c.id, name: c.name, result: { ok: false, needs_confirmation: true, question: confirm.question } })

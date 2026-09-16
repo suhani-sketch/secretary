@@ -268,7 +268,7 @@ function EventDetail({ occ, day, onQuick }: { occ: EventOccurrence; day: DayBund
             <button className={btn} onClick={() => void onQuick('delete_event', { id: occ.id, ...occurrenceArg })} title="Skip only this occurrence; the series continues">
               Skip this one
             </button>
-            <button className={btn} onClick={() => window.confirm(`Cancel the whole "${occ.title}" series?`) && void onQuick('delete_event', { id: occ.id })}>
+            <button className={btn} onClick={() => void onQuick('delete_event', { id: occ.id })}>
               Cancel series…
             </button>
           </>
