@@ -3,7 +3,26 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 3 in progress — 3a (Projects/Things) and 3b (Checklists) built and tested 2026-09-16; 3c–3f not started.
+## Current phase: Phase 3 in progress — 3a (Things), 3b (Checklists), 3c (Waiting + conditional follow-ups) built and tested 2026-09-16; 3d–3f not started.
+
+## Phase 3c — Waiting items and conditional follow-ups (2026-09-16)
+- Waiting item = `items` kind `waiting`, `waiting_on` = who, `details` = about, expected reply as a SOFT due date (day
+  precision), `part_of` the Thing in focus. `createWaiting` helper (tools.ts) reuses an open wait on the same person within
+  the same project instead of duplicating; `record_activity.now_waiting_on` routes through it.
+- Tools: `create_waiting`, `resolve_waiting {id | waiting_on, outcome replied|received|no_longer_needed, note}` (completes the
+  item, stops its alarms AND cancels every reminder whose `condition_json` watches it), `create_reminder.unless_resolved`
+  (→ `condition_json {"unless_resolved": "<item id>"}`; refused if the watched item is already resolved).
+- **Deterministic evaluation** (spec 3c): `scheduler.conditionBlocks(r)` runs at fire time in both the tick and the startup
+  sweep, reads the watched item's status from SQLite, and if resolved cancels the reminder with a system activity
+  ("Follow-up … dropped — resolved") and no toast. No model is involved anywhere. An unparseable condition never silences a reminder.
+- Conditional toasts read "Still waiting on X — No reply by <time>. Want to follow up?".
+- Tier 0: "TISS replied" / "they got back to me" / "heard back from X" / "the transcript arrived" → `resolve_waiting` when the
+  target is unambiguous (single open wait, a name match, or the one wait under the Thing in focus); otherwise the model asks.
+- Window: "Waiting on" section (⏳, who · about, expected/overdue, project, follow-up time) with a "replied ✓" quick action;
+  waiting items are excluded from Open. Reminder editor explains a conditional follow-up. "What is left?" separates
+  waiting from steps.
+- Verified: B7/B8 through the model; follow-up fires (as missed) when unresolved; dropped by the scheduler when the item was
+  resolved directly in the DB; dropped immediately by tier-0 "TISS replied".
 
 ## Phase 3b — Checklists (2026-09-16)
 - Checklist steps are `items` kind `checklist_item`, `part_of` a project, ordered by `sort_order` (`repo.nextSortOrder`,

@@ -69,12 +69,43 @@ function scheduleNextOccurrence(r: Reminder, now: DateTime): void {
  *   2. only then show the toast and log it.
  * If the state write fails or someone else already delivered it, nothing is shown.
  */
+/**
+ * Conditional follow-ups (spec 3c): {"unless_resolved": "<item id>"} — evaluated here, against item state in the database,
+ * deterministically. Returns a reason string when the reminder must NOT fire, else null.
+ */
+function conditionBlocks(r: Reminder): string | null {
+  if (!r.condition_json) return null
+  let cond: { unless_resolved?: string }
+  try {
+    cond = JSON.parse(r.condition_json) as { unless_resolved?: string }
+  } catch {
+    log('warn', 'condition.unparseable', r.condition_json, r.id)
+    return null // a broken condition must not silence a reminder
+  }
+  if (cond.unless_resolved) {
+    const watched = repo.getItem(cond.unless_resolved)
+    if (!watched) return `the watched item no longer exists`
+    if (['done', 'cancelled', 'archived'].includes(watched.status)) return `"${watched.title}" was resolved (${watched.status})`
+  }
+  return null
+}
+
 function deliver(r: Reminder, opts: { missed: boolean; now: DateTime }): void {
+  const blocked = conditionBlocks(r)
+  if (blocked) {
+    // The condition failed: retire the follow-up quietly, with a record, and never show a toast.
+    repo.cancelReminder(r.id)
+    repo.insertActivity({ targetType: 'reminder', targetId: r.id, verb: 'cancelled', actor: 'system', summary: `Follow-up for "${r.item_title ?? 'reminder'}" dropped — ${blocked}`, reversible: false })
+    log('info', 'deliver.condition_not_met', `"${r.item_title ?? 'reminder'}": ${blocked}`, r.id)
+    onDeliveredCb?.()
+    return
+  }
   if (!repo.markDelivered(r.id)) {
     log('warn', 'deliver.skipped', 'reminder was no longer pending when we tried to deliver it', r.id)
     return
   }
-  const title = r.item_title ?? 'Reminder'
+  const conditional = !!r.condition_json
+  const title = conditional ? `Still ${(r.item_title ?? 'waiting').replace(/^Waiting/, 'waiting')}` : (r.item_title ?? 'Reminder')
   const scheduled = localTime(r.fire_at_utc)
   const actions = { reminderId: r.id, itemId: r.target_type === 'item' ? r.target_id : null }
   const ack = (): void => {
@@ -99,7 +130,7 @@ function deliver(r: Reminder, opts: { missed: boolean; now: DateTime }): void {
     repo.insertActivity({ targetType: 'reminder', targetId: r.id, verb: 'reminder_fired', actor: 'system', summary: `Reminder fired for "${title}" (${scheduled})`, reversible: false })
     const shown = showToast({
       title,
-      body: `Reminder — ${scheduled}`,
+      body: conditional ? `No reply by ${scheduled}. Want to follow up?` : `Reminder — ${scheduled}`,
       reminderId: r.id,
       actions,
       persistent: true,

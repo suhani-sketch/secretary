@@ -223,6 +223,27 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     return null
   }
 
+  // ---- waiting (3c): "they replied" / "heard back from TISS" / "the bank got back to me" ----
+  if ((m = /^(?:ok,? |so,? |good news,? )?(?:(.+?) (?:replied|responded|got back to me|answered|came back to me|wrote back)|(?:i )?heard back(?: from (.+?))?|(.+?) (?:arrived|came through|came in|has arrived))(?: (?:finally|today|just now|this morning))?$/.exec(text))) {
+    const who = (m[1] ?? m[2] ?? m[3] ?? '').replace(/^(?:the |they |she |he |it )/, '').trim()
+    const pool = repo.openWaitingItems()
+    let target: Item | null = null
+    if (pool.length === 1) target = pool[0]
+    else if (pool.length > 1) {
+      if (who && !/^(they|she|he|it|them)$/.test(who)) {
+        const hits = pool.filter((w) => (w.waiting_on ?? '').toLowerCase().includes(who.toLowerCase()))
+        if (hits.length === 1) target = hits[0]
+      } else {
+        // "they replied" with several waits: the one belonging to the Thing in focus, if exactly one.
+        const proj = checklistTarget()
+        const hits = proj ? pool.filter((w) => repo.parentProjectOf(w.id)?.id === proj.id) : []
+        if (hits.length === 1) target = hits[0]
+      }
+    }
+    if (!target) return null // ambiguous or nothing waiting — let the model ask
+    return [{ name: 'resolve_waiting', args: { id: target.id, outcome: /arriv|came/.test(text) ? 'received' : 'replied' } }]
+  }
+
   // ---- checklists (3b) ----
   // "add a list for the things I need to do" → acknowledge and remember which Thing the coming items belong to.
   if (/^(?:add|make|create|start|give me|let'?s (?:add|make)) (?:a )?(?:check ?list|list|to-?do list)(?: (?:for|of|with) .*)?$/.test(text)) {

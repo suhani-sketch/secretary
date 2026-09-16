@@ -337,6 +337,11 @@ export function ReminderEditor({ target: r, runTool, onDone, onClose }: Omit<Edi
           State: <span className="rounded-full px-2 bg-stone-100 text-stone-700">{r.state}</span>
           {r.delivered_at && <span className="ml-2">delivered {formatClock(r.delivered_at)}</span>}
         </div>
+        {r.condition_json && (
+          <div className="text-xs rounded-xl bg-sky-50 text-sky-900 px-3 py-2">
+            Conditional follow-up: fires only if the thing you're waiting on is still unresolved at that time. If they reply first, it drops itself.
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-3">
           <div>
             <span className={label}>Day</span>

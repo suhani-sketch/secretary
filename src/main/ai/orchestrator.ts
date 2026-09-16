@@ -31,6 +31,8 @@ Things (projects) — the life model:
 - Progress on a Thing ("I worked on the TISS mailing today", "I drafted the first email") → record_activity with item_id = the project. Never a task named after the sentence.
 - Changing a Thing's date or details → update_item on the project id. "That belongs to X" → attach_to_project.
 - If create_project answers with a near-match question, relay it; "yes" → call again with use_existing_id, "no, it's different" → force_new=true.
+- Waiting: "they said they'll get back to me Friday" / "I emailed X and haven't heard back" → create_waiting (waiting_on = who, about = what, expected_date_local if they named a day; project_id when it belongs to a Thing in focus). Never a task. "They replied" / "heard back from X" / "the transcript arrived" → resolve_waiting.
+- Conditional follow-up: "if they haven't replied by Friday afternoon, remind me" → create_reminder on the waiting item with unless_resolved = that waiting item's id and fire_at_local = Friday 14:00 (afternoon → 14:00, morning → 09:00, evening → 18:00 when only a part of day is given). The app decides at fire time whether they replied; you never judge that.
 - Checklists: steps within a Thing are checklist items, not tasks. "Add a list of things to do" → just say you're ready for the steps (no tool). "Add send first email, follow up and attach the document" → add_checklist_item with three titles on that project. "I sent the first email" → complete_checklist_item (by title; the app matches it to the step) — never a new task. "What is left?" → get_project. Only promote_checklist_item when the user wants a step scheduled as its own task.
 
 Reference resolution:
@@ -205,14 +207,17 @@ function phraseReadResults(results: ToolResult[]): string | null {
       const parts = (res as { parts?: { title: string; status: string; due: string | null }[] }).parts ?? []
       const hist = (res as { history?: string[] }).history ?? []
       if (p) {
-        const open = parts.filter((x) => !['done', 'cancelled', 'archived'].includes(x.status))
-        const done = parts.filter((x) => x.status === 'done')
+        type Part = { title: string; status: string; due: string | null; kind?: string; waiting_on?: string | null }
+        const all = parts as Part[]
+        const waiting = all.filter((x) => x.kind === 'waiting' && !['done', 'cancelled', 'archived'].includes(x.status))
+        const open = all.filter((x) => x.kind !== 'waiting' && !['done', 'cancelled', 'archived'].includes(x.status))
+        const done = all.filter((x) => x.status === 'done')
         lines.push(
           `"${p.title}"${p.due ? ` is due ${p.due}` : ''}: ` +
-            (parts.length
-              ? open.length
-                ? `still to do — ${open.map((x) => x.title).join(', ')}${done.length ? `. Done: ${done.map((x) => x.title).join(', ')}` : ''}`
-                : `everything on it is done (${done.map((x) => x.title).join(', ')})`
+            (all.length
+              ? (open.length ? `still to do — ${open.map((x) => x.title).join(', ')}` : 'nothing left to do') +
+                (waiting.length ? `. Waiting on ${waiting.map((x) => `${x.waiting_on ?? 'someone'}${x.due ? ` (expected ${x.due})` : ''}`).join(', ')}` : '') +
+                (done.length ? `. Done: ${done.map((x) => x.title).join(', ')}` : '')
               : 'no parts yet') +
             '.'
         )

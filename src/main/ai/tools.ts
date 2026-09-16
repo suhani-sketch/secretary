@@ -141,9 +141,28 @@ export const toolSchemas = {
       item_id: idRef,
       fire_at_local: localDateTime.optional().describe(DT_DESC),
       fire_date_local: localDate.optional().describe('Day without clock time; fires at the default reminder time. ' + DATE_DESC),
-      rrule: rruleStr.optional()
+      rrule: rruleStr.optional(),
+      unless_resolved: idRef.optional().describe('Conditional follow-up: fire ONLY if this item (usually the waiting item) is still open at that time. "If they haven\'t replied by Friday afternoon, remind me" → the waiting item\'s id here, item_id the same, fire_at_local Friday 14:00.')
     })
     .refine((v) => !!v.fire_at_local !== !!v.fire_date_local, 'Give exactly one of fire_at_local or fire_date_local'),
+  create_waiting: z
+    .object({
+      waiting_on: z.string().min(1).max(100).describe('Who or what the user is waiting on: "TISS", "the professor", "the bank".'),
+      about: z.string().max(200).optional().describe('What it is about, e.g. "reply to the first email", "the transcript".'),
+      project_id: idRef.optional().describe('The Thing this belongs to, if any (it becomes a part of it).'),
+      expected_at_local: localDateTime.optional().describe('When they said they would get back, if a clock time was given. ' + DT_DESC),
+      expected_date_local: localDate.optional().describe('When they said they would get back, day only ("Friday"). ' + DATE_DESC)
+    })
+    .refine((v) => !(v.expected_at_local && v.expected_date_local), 'Give either expected_at_local or expected_date_local'),
+  resolve_waiting: z
+    .object({
+      id: idRef.optional().describe('The waiting item id when visible in the context.'),
+      waiting_on: z.string().max(100).optional().describe('Otherwise who replied ("TISS", "the professor").'),
+      project_id: idRef.optional(),
+      outcome: z.enum(['replied', 'received', 'no_longer_needed']).default('replied'),
+      note: z.string().max(300).optional().describe('What they said, if the user told you.')
+    })
+    .refine((v) => !!v.id || !!v.waiting_on, 'Give id or waiting_on'),
   update_reminder: z
     .object({
       id: idRef.describe('The reminder id (not the item id).'),
@@ -197,7 +216,9 @@ const descriptions: Record<ToolName, string> = {
   complete_item: 'Mark an item done ("done", "finished the CV"). Its own pending reminders stop.',
   cancel_item: 'Cancel ONE item the user no longer wants (status becomes cancelled, nothing is deleted). Its own reminders stop. Projects with parts require confirmation first.',
   delete_item: 'Permanently delete an item. Always requires confirmation. Prefer cancel_item.',
-  create_reminder: 'Add a reminder (alarm) to an existing item, optionally recurring.',
+  create_reminder: 'Add a reminder (alarm) to an existing item, optionally recurring, or conditional (unless_resolved) for "if they haven\'t replied by Friday, remind me".',
+  create_waiting: 'The user is now waiting on someone or something ("they said they\'ll get back to me Friday", "I emailed her and haven\'t heard back"). Creates a waiting item — not a task.',
+  resolve_waiting: 'They replied / it arrived / no longer needed: closes the waiting item and drops any conditional follow-up on it.',
   update_reminder: 'Move an existing reminder to a new clock time and/or change its recurrence.',
   cancel_reminder: 'Cancel a reminder while keeping the underlying item untouched. Use for "cancel the reminder".',
   snooze_reminder: 'Push a reminder that already fired forward by a number of minutes from now.',
@@ -213,6 +234,8 @@ const descriptions: Record<ToolName, string> = {
 }
 
 const WRITE_TOOLS: ReadonlySet<string> = new Set([
+  'create_waiting',
+  'resolve_waiting',
   'add_checklist_item',
   'complete_checklist_item',
   'remove_checklist_item',
@@ -336,6 +359,37 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
   }
   const focusIds = getFocus().map((f) => f.itemId)
 
+  /**
+   * A waiting item (spec 3c): "Waiting on X — about Y", kind waiting, optionally part of a project, with the expected reply
+   * time as a soft due date. Nothing is duplicated: an open waiting item on the same person within the same project is updated.
+   */
+  const createWaiting = (args: { waitingOn: string; about?: string | null; projectId?: string | null; expectedUtc?: string | null; expectedPrecision?: import('../../shared/types').DuePrecision | null }): { item: Item; reused: boolean } => {
+    const existing = repo.openWaitingFor(args.projectId ?? null, args.waitingOn)[0]
+    if (existing) {
+      const { item } = repo.updateItem(existing.id, {
+        ...(args.expectedUtc ? { dueAtUtc: args.expectedUtc, duePrecision: args.expectedPrecision ?? 'day', hardness: 'soft' } : {}),
+        ...(args.about && !existing.details ? { details: args.about } : {})
+      })
+      act({ targetType: 'item', targetId: item.id, verb: 'updated', summary: `Still waiting on ${args.waitingOn}${args.expectedUtc ? ` — now expected ${dueText(item)}` : ''}`, before: existing, after: item })
+      pushFocus(item.id, item.title, 'waiting updated')
+      return { item, reused: true }
+    }
+    const item = repo.insertItem({
+      kind: 'waiting',
+      title: `Waiting on ${args.waitingOn}${args.about ? ` — ${args.about}` : ''}`,
+      details: args.about ?? null,
+      waitingOn: args.waitingOn,
+      dueAtUtc: args.expectedUtc ?? null,
+      duePrecision: args.expectedUtc ? (args.expectedPrecision ?? 'day') : null,
+      hardness: args.expectedUtc ? 'soft' : null,
+      sourceMsgId: ctx.sourceMsgId
+    })
+    if (args.projectId) repo.setParentProject(item.id, args.projectId)
+    act({ targetType: 'item', targetId: item.id, projectId: args.projectId ?? null, verb: 'created', summary: `Waiting on ${args.waitingOn}${args.about ? ` (${args.about})` : ''}${args.expectedUtc ? `, expected ${dueText(item)}` : ''}`, after: item })
+    pushFocus(item.id, item.title, 'created')
+    return { item, reused: false }
+  }
+
   /** Entity resolution for a project named in conversation (spec §8): match → existing; none → create (inferred). */
   const projectForTitle = (title: string): Item => {
     const res = resolveEntity(title, repo.openProjects(), focusIds)
@@ -427,6 +481,53 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const parts = repo.projectParts(id).filter((c) => c.status !== 'cancelled' && c.status !== 'archived')
       const history = repo.activitiesForProject(id, 30)
       return { result: { project: publicItem(p), parts: parts.map(publicItem), history: history.map((h) => `${h.created_at.slice(0, 16).replace('T', ' ')} · ${h.actor}: ${h.summary}`) } }
+    }
+    case 'create_waiting': {
+      const x = a as z.infer<typeof toolSchemas.create_waiting>
+      const projectId = x.project_id ? repo.resolveItemId(x.project_id) : (getFocus().map((f) => repo.getItem(f.itemId)).find((i) => i?.kind === 'project')?.id ?? null)
+      const due = repo.resolveDue(x.expected_date_local, x.expected_at_local, null)
+      const { item, reused } = createWaiting({ waitingOn: x.waiting_on, about: x.about ?? null, projectId, expectedUtc: due.dueAtUtc, expectedPrecision: due.precision })
+      clearOffer()
+      const project = projectId ? repo.getItem(projectId) : undefined
+      const when = item.due_at_utc ? ` · expected ${dueText(item)}` : ''
+      const summary = `${reused ? 'Updated waiting' : 'Waiting'} on ${x.waiting_on}${x.about ? ` — ${x.about}` : ''}${project ? ` (${project.title})` : ''}${when}`
+      const phrase = reused
+        ? `Still waiting on ${x.waiting_on}${item.due_at_utc ? ` — I've noted they said ${dueText(item)}` : ''}. I'll keep it on the waiting list${project ? ` under "${project.title}"` : ''}.`
+        : `Got it — you're waiting on ${x.waiting_on}${x.about ? ` for ${x.about}` : ''}${item.due_at_utc ? `, expected ${dueText(item)}` : ''}. I'll keep it on the waiting list${project ? ` under "${project.title}"` : ''}. Say "if they haven't replied by …, remind me" and I'll follow up only if needed.`
+      return { result: { ok: true, waiting_id: shortId(item.id), reused, expected: item.due_at_utc ? dueText(item) : null, summary }, applied: { tool: name, summary, phrase, itemId: item.id } }
+    }
+    case 'resolve_waiting': {
+      const x = a as z.infer<typeof toolSchemas.resolve_waiting>
+      let target: Item | undefined
+      if (x.id) target = repo.getItem(repo.resolveItemId(x.id))
+      else {
+        const projectId = x.project_id ? repo.resolveItemId(x.project_id) : null
+        const pool = repo.openWaitingFor(projectId, x.waiting_on)
+        if (pool.length === 1) target = pool[0]
+        else if (pool.length > 1) {
+          const res = resolveEntity(x.waiting_on!, pool.map((w) => ({ ...w, title: `${w.waiting_on} ${w.details ?? ''}` })), focusIds)
+          if (res.kind !== 'none') target = repo.getItem(res.entity.id)
+          else throw new Error(`I'm waiting on ${x.waiting_on} for ${pool.length} things — which one?`)
+        }
+      }
+      if (!target) throw new Error(`I don't have an open waiting item for ${x.waiting_on ?? 'that'}`)
+      if (target.kind !== 'waiting') throw new ToolValidationError(`"${target.title}" is not a waiting item`)
+      const before = target
+      const followUps = repo.conditionalRemindersOn(target.id)
+      const { stoppedIds } = repo.completeItem(target.id)
+      // Conditional follow-ups that watched this item are now moot — the condition can never be met.
+      for (const f of followUps) if (!stoppedIds.includes(f.id)) repo.cancelReminder(f.id)
+      const dropped = new Set([...stoppedIds, ...followUps.map((f) => f.id)]).size
+      const after = repo.getItem(target.id)!
+      const project = repo.parentProjectOf(target.id)
+      const verbText = x.outcome === 'replied' ? 'replied' : x.outcome === 'received' ? 'arrived' : 'no longer needed'
+      act({ targetType: 'item', targetId: target.id, projectId: project?.id ?? null, verb: 'completed', summary: `${target.waiting_on ?? 'They'} ${verbText}${x.note ? ` — ${x.note}` : ''}${dropped ? ` (${plural(dropped, 'follow-up')} dropped)` : ''}`, before: { item: before, stopped: [...new Set([...stoppedIds, ...followUps.map((f) => f.id)])] }, after })
+      pushFocus(target.id, target.title, 'resolved')
+      if (project) pushFocus(project.id, project.title, 'waiting resolved')
+      clearOffer()
+      const summary = `Resolved: ${target.title} — ${verbText}${dropped ? ` · ${plural(dropped, 'follow-up')} dropped` : ''}`
+      const phrase = `Good — ${target.waiting_on ?? 'they'} ${verbText}${x.note ? ` (${x.note})` : ''}. I've closed that wait${dropped ? ` and dropped the follow-up` : ''}${project ? ` on "${project.title}"` : ''}.`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase, itemId: target.id } }
     }
     case 'add_checklist_item': {
       const x = a as z.infer<typeof toolSchemas.add_checklist_item>
@@ -749,13 +850,25 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
         note = ` ${r.note}${fixed.note}`
       }
       const rr = validateRRule(x.rrule)
-      const r = repo.insertReminder(itemId, fireAt, rr ? { rrule: rr, seriesAnchorLocal: x.fire_at_local ?? undefined, seriesTz: DateTime.local().zoneName } : {})
+      // Conditional follow-up: the condition is data the scheduler checks at fire time — never a question for the model.
+      let condition: string | null = null
+      let watched: Item | null = null
+      if (x.unless_resolved) {
+        watched = repo.getItem(repo.resolveItemId(x.unless_resolved)) ?? null
+        if (!watched) throw new ToolValidationError('unless_resolved points at nothing')
+        if (['done', 'cancelled', 'archived'].includes(watched.status)) throw new Error(`"${watched.title}" is already resolved — no follow-up needed`)
+        condition = JSON.stringify({ unless_resolved: watched.id })
+      }
+      const r = repo.insertReminder(itemId, fireAt, { ...(rr ? { rrule: rr, seriesAnchorLocal: x.fire_at_local ?? undefined, seriesTz: DateTime.local().zoneName } : {}), conditionJson: condition })
       const item = repo.getItem(itemId)!
-      act({ targetType: 'reminder', targetId: r.id, verb: 'created', summary: `Reminder set for "${item.title}" ${formatClock(r.fire_at_utc)}${describeRRule(rr)}`, after: strip(r) })
-      pushFocus(item.id, item.title, 'reminder added')
+      const condText = watched ? ` unless "${watched.title}" is resolved by then` : ''
+      act({ targetType: 'reminder', targetId: r.id, projectId: repo.parentProjectOf(itemId)?.id ?? null, verb: 'created', summary: `${watched ? 'Follow-up' : 'Reminder'} set for "${item.title}" ${formatClock(r.fire_at_utc)}${describeRRule(rr)}${condText}`, after: strip(r) })
+      pushFocus(item.id, item.title, watched ? 'follow-up added' : 'reminder added')
       clearOffer()
-      const summary = `Reminder for "${item.title}" ${formatClock(r.fire_at_utc)}${describeRRule(rr)}${note}`
-      const phrase = `I'll remind you about "${item.title}" ${formatClock(r.fire_at_utc)}${describeRRule(rr)}${note}.`
+      const summary = `${watched ? 'Follow-up' : 'Reminder'} for "${item.title}" ${formatClock(r.fire_at_utc)}${describeRRule(rr)}${note}${condText}`
+      const phrase = watched
+        ? `Noted — if that's still unresolved by ${formatClock(r.fire_at_utc)}, I'll nudge you${note}. If they reply first, the follow-up quietly drops.`
+        : `I'll remind you about "${item.title}" ${formatClock(r.fire_at_utc)}${describeRRule(rr)}${note}.`
       return { result: { ok: true, reminder_id: shortId(r.id), fires: formatClock(r.fire_at_utc) + note, summary }, applied: { tool: name, summary, phrase, itemId, reminderId: r.id } }
     }
     case 'update_reminder': {
@@ -846,9 +959,8 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       }
       let waiting: Item | null = null
       if (x.now_waiting_on) {
-        waiting = repo.insertItem({ kind: 'waiting', title: `Waiting on ${x.now_waiting_on}${item ? ` — ${item.title}` : ''}`, waitingOn: x.now_waiting_on, sourceMsgId: ctx.sourceMsgId })
-        act({ targetType: 'item', targetId: waiting.id, verb: 'created', summary: `Waiting on ${x.now_waiting_on}`, after: waiting })
-        pushFocus(waiting.id, waiting.title, 'created')
+        const project = item ? (item.kind === 'project' ? item : repo.parentProjectOf(item.id)) : undefined
+        waiting = createWaiting({ waitingOn: x.now_waiting_on, about: item && item.kind !== 'project' ? item.title : null, projectId: project?.id ?? null }).item
       }
       const summary = `Recorded: ${x.summary}` + (item ? ` (on "${item.title}")` : '') + (waiting ? ` · now waiting on ${x.now_waiting_on}` : '')
       // Don't say the project's name twice ("worked on the TISS mailing on TISS mailing").

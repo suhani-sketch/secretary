@@ -451,6 +451,27 @@ export function openWaitingItems(): Item[] {
     .all() as Item[]
 }
 
+/** Open waiting items, optionally narrowed to a project (via part_of) or to who is being waited on. */
+export function openWaitingFor(projectId?: string | null, who?: string | null): Item[] {
+  let rows = openWaitingItems()
+  if (projectId) {
+    const partIds = new Set(projectParts(projectId, false).map((c) => c.id))
+    rows = rows.filter((w) => partIds.has(w.id))
+  }
+  if (who) {
+    const q = who.toLowerCase()
+    rows = rows.filter((w) => (w.waiting_on ?? '').toLowerCase().includes(q) || q.includes((w.waiting_on ?? '').toLowerCase()))
+  }
+  return rows
+}
+
+/** Live conditional reminders whose condition points at this item. */
+export function conditionalRemindersOn(itemId: string): Reminder[] {
+  return getDb()
+    .prepare(`${REMINDER_SELECT} WHERE r.state IN ('pending','snoozed','paused') AND r.condition_json LIKE ? ORDER BY r.fire_at_utc`)
+    .all(`%${itemId}%`) as Reminder[]
+}
+
 export function openItems(limit = 50): Item[] {
   return getDb()
     .prepare(
@@ -496,6 +517,8 @@ export interface ReminderSeriesOpts {
   /** Required with rrule: the local wall-clock anchor and zone the series is stated in. */
   seriesAnchorLocal?: string | null
   seriesTz?: string | null
+  /** Conditional follow-up (spec 3c): JSON like {"unless_resolved": "<item id>"}, evaluated by the scheduler at fire time. */
+  conditionJson?: string | null
 }
 
 export function insertReminder(itemId: string, fireAtUtc: string, opts: ReminderSeriesOpts = {}): Reminder {
@@ -506,10 +529,10 @@ export function insertReminder(itemId: string, fireAtUtc: string, opts: Reminder
   const anchor = rrule ? (opts.seriesAnchorLocal ?? DateTime.fromISO(fireAtUtc, { zone: 'utc' }).setZone(tz!).toFormat("yyyy-MM-dd'T'HH:mm")) : null
   getDb()
     .prepare(
-      `INSERT INTO reminders (id, target_type, target_id, fire_at_utc, rrule, series_anchor_local, series_tz, offset_minutes, state, surfaced_count, created_at)
-       VALUES (?, 'item', ?, ?, ?, ?, ?, ?, 'pending', 0, ?)`
+      `INSERT INTO reminders (id, target_type, target_id, fire_at_utc, rrule, series_anchor_local, series_tz, offset_minutes, condition_json, state, surfaced_count, created_at)
+       VALUES (?, 'item', ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?)`
     )
-    .run(rid, itemId, fireAtUtc, rrule, anchor, tz, opts.offsetMinutes ?? null, nowIso())
+    .run(rid, itemId, fireAtUtc, rrule, anchor, tz, opts.offsetMinutes ?? null, opts.conditionJson ?? null, nowIso())
   return getReminder(rid)!
 }
 

@@ -45,7 +45,11 @@ function describeItem(it: Item, reminders: Reminder[]): string {
   if (it.status !== 'open') bits.push(`status=${it.status}`)
   if (it.due_at_utc) bits.push(`due ${formatDue(it.due_at_utc, it.due_precision)} (${it.due_precision} precision)`)
   if (it.importance !== 2) bits.push(`importance=${it.importance}`)
-  if (it.waiting_on) bits.push(`waiting on ${it.waiting_on}`)
+  if (it.waiting_on) bits.push(`waiting on ${it.waiting_on}${it.due_at_utc ? `, expected ${formatDue(it.due_at_utc, it.due_precision)}` : ''} since ${it.created_at.slice(0, 10)}`)
+  if (it.kind === 'waiting') {
+    const fu = repo.conditionalRemindersOn(it.id)
+    if (fu.length) bits.push(`follow-up ${fu.map((f) => `[${shortId(f.id)}] ${formatClock(f.fire_at_utc)}`).join(', ')} unless resolved`)
+  }
   if (it.is_suggestion) bits.push('SUGGESTION — not confirmed by the user')
   if (it.details) bits.push(`— ${it.details.slice(0, 120)}`)
   if (it.hardness) bits.push(it.hardness === 'hard' ? 'hard deadline' : 'soft target')

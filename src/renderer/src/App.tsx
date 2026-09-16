@@ -173,7 +173,13 @@ export default function App(): React.JSX.Element {
     checklistOf.set(p.id, arr)
   }
   for (const arr of checklistOf.values()) arr.sort((a, b) => (a.sort_order ?? 1e9) - (b.sort_order ?? 1e9) || a.created_at.localeCompare(b.created_at))
-  const standalone = openItems.filter((i) => !(i.kind === 'checklist_item' && parentOf.has(i.id)))
+  const waitingItems = openItems.filter((i) => i.kind === 'waiting').sort((a, b) => (a.due_at_utc ?? '9').localeCompare(b.due_at_utc ?? '9'))
+  const followUpsOn = new Map<string, Reminder[]>()
+  for (const r of pending) {
+    const m = /"unless_resolved":"([0-9a-f-]{36})"/.exec(r.condition_json ?? '')
+    if (m) followUpsOn.set(m[1], [...(followUpsOn.get(m[1]) ?? []), r])
+  }
+  const standalone = openItems.filter((i) => !(i.kind === 'checklist_item' && parentOf.has(i.id)) && i.kind !== 'waiting')
   const reorder = (project: Item, id: string, dir: -1 | 1): void => {
     const list = checklistOf.get(project.id) ?? []
     const idx = list.findIndex((c) => c.id === id)
@@ -354,6 +360,43 @@ export default function App(): React.JSX.Element {
                 ))}
               </ul>
             </section>
+            {waitingItems.length > 0 && (
+              <section className="rounded-2xl bg-sky-50/70 p-4 flex flex-col gap-2 min-h-0">
+                <h2 className="text-xs font-medium uppercase tracking-wide text-sky-900">Waiting on ({waitingItems.length})</h2>
+                <ul className="flex flex-col gap-1 overflow-y-auto">
+                  {waitingItems.map((w) => {
+                    const late = isOverdue(w.due_at_utc, w.due_precision, now)
+                    const fu = followUpsOn.get(w.id) ?? []
+                    return (
+                      <li key={w.id} className="group text-sm flex items-start gap-2 rounded-lg px-1 py-1 hover:bg-white/80 cursor-pointer" onClick={() => setEditing({ kind: 'item', item: w })}>
+                        <span className="mt-0.5 text-xs">⏳</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate">
+                            <span className="font-medium">{w.waiting_on ?? 'someone'}</span>
+                            {w.details ? <span className="text-stone-600"> · {w.details}</span> : null}
+                          </div>
+                          <div className={`text-xs truncate ${late ? 'text-amber-800' : 'text-stone-500'}`}>
+                            {w.due_at_utc ? `${late ? 'expected ' : 'expected '}${formatDue(w.due_at_utc, w.due_precision)}${late ? ' · no word yet' : ''}` : `since ${new Date(w.created_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`}
+                            {parentOf.has(w.id) && <> · {parentOf.get(w.id)!.title}</>}
+                            {fu.length > 0 && <> · follow-up {formatClock(fu[0].fire_at_utc)} unless resolved</>}
+                          </div>
+                        </div>
+                        <button
+                          className="opacity-0 group-hover:opacity-100 text-xs text-stone-500 hover:text-emerald-700 px-1 whitespace-nowrap"
+                          title="They replied"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void quick('resolve_waiting', { id: w.id, outcome: 'replied' })
+                          }}
+                        >
+                          replied ✓
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </section>
+            )}
             <section className="rounded-2xl bg-white/60 p-4 flex flex-col gap-2 min-h-0 flex-1">
               <h2 className="text-xs font-medium uppercase tracking-wide text-stone-500">Open ({standalone.filter((i) => !i.is_suggestion).length})</h2>
               {standalone.length === 0 && <p className="text-sm text-stone-400">Nothing open.</p>}
