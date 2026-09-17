@@ -11,6 +11,8 @@ import * as repo from '../repo'
 import { clearOffer, getFocus, pushFocus, setOffer, shortId } from './context'
 import { resolveEntity, tokens } from '../entity'
 import { assessTarget, assessmentText, atRiskLines, noteDateConflicts } from '../deadlines'
+import { DEFAULT_ASSUMED_EFFORT_MIN } from '../../core/deadline'
+import { proposeSlot, describeProposal, proposalBookingArgs } from '../schedule'
 import { recommendNowAt, recommendationText } from '../now'
 import { afterConflicts, blockingConflicts, bookingWindowForDue, conflictsFor, describeConflict, describeConstraint } from '../planning'
 import { formatClock, formatDue, isOverdue } from '../../shared/format'
@@ -211,6 +213,13 @@ export const toolSchemas = {
   recommend_now: z.object({
     at_local: localDateTime.optional().describe('Normally omitted (= now). A clock to reason as if it were that time — used for testing the 9 am vs 11 pm difference.')
   }),
+  propose_slot: z.object({
+    title: z.string().min(1).max(200).describe('What the time is for, in the user\'s words.'),
+    minutes: z.number().int().min(5).max(24 * 60).optional().describe('How long it needs, ONLY if the user said so. Omit to use the matched item\'s own effort figure, or a labelled assumption.'),
+    item_id: idRef.optional().describe('The existing item this is for, if you have its id.'),
+    before_local: localDateTime.optional().describe('An exact deadline, if the user gave a clock time.'),
+    before_date_local: localDate.optional().describe('A day-only deadline ("before Friday"). Omit both to search the next two weeks.')
+  }),
   assess_deadline: z.object({
     id: idRef.optional().describe('The project (Thing) or dated item to reason back from.'),
     title: z.string().max(200).optional().describe('Its name, if you do not have the id.')
@@ -380,6 +389,7 @@ const descriptions: Record<ToolName, string> = {
   create_event: 'Put something on the calendar that occupies time: "meeting with Professor X Thursday at 3", "dentist Friday 10:30", "class every Tuesday 2–4". NOT for tasks (a task due Thursday is create_item). The app checks clashes.',
   update_event: 'Move or change an existing event ("move it to 4", "make it an hour"). For one occurrence of a recurring series pass occurrence_start_local.',
   delete_event: 'Cancel an event ("cancel the meeting") or skip one occurrence of a series.',
+  propose_slot: 'Smart scheduling (7e): "I need two hours for the case study before Friday", "find me time to write the draft by tomorrow". The APP searches the real calendar (events, unavailable constraints, buffers) and grades what it finds feasible, tight, or infeasible — it NEVER books anything itself. Relay its text; if the user then says to book it, call create_event with exactly the time it proposed.',
   recommend_now: '"What should I do right now / next?" (7c). The APP ranks every open thing by urgency, importance, hardness, overdue state, blockers, the free time before the next fixed thing, effort, today\'s context and commitments, and names ONE action with its reason (or says honestly that nothing can start). Relay its text; never produce your own list.',
   assess_deadline: 'Deadline intelligence (7b): "is the TISS mailing on track?", "what\'s the bottleneck?", "can I still make Friday?". The APP computes what remains, what blocks what, the bottleneck and feasibility from the user\'s own parts and links — you only relay its text. Never add a component the user did not state.',
   ask_clarification: 'Brain dumps (7a): ask the ONE clarifying question that would change an action, alongside the tool calls for every clear part of the message. Only one per message is ever asked; never use it instead of acting, never for wording or priority.',
@@ -856,15 +866,58 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       return { result: { ok: true, summary, expires: 'tonight' }, applied: { tool: name, summary, phrase } }
     }
     case 'get_forgetting': {
+      // 7d — DEFINITE (facts: a promise made, a date passed, a reply owed, nothing set aside, a plan behind) is computed
+      // and kept strictly apart from POSSIBLE (an idea never confirmed, a suggestion never accepted). Nothing in the
+      // possible half is ever created, escalated or counted as a task by this tool — it only reads.
       const nowIso = new Date().toISOString()
       const commitments = repo.openCommitments().map((c) => ({ title: c.title, to: c.committed_to, due: c.due_at_utc ? formatDue(c.due_at_utc, c.due_precision) : null, overdue: !!c.due_at_utc && isOverdue(c.due_at_utc, c.due_precision) }))
       const overdue = repo.openItemsOverdue(nowIso, 20).filter((i) => i.kind !== 'commitment').map((i) => ({ title: i.title, kind: i.kind, due: formatDue(i.due_at_utc!, i.due_precision) }))
       const waiting = repo.openWaitingItems().map((w) => ({ who: w.waiting_on, about: w.details, expected: w.due_at_utc ? formatDue(w.due_at_utc, w.due_precision) : null, overdue: !!w.due_at_utc && isOverdue(w.due_at_utc, w.due_precision) }))
       const soonEnd = DateTime.utc().plus({ days: 2 }).toISO()!
       const soon = repo.itemsDueBetween(nowIso, soonEnd).filter((i) => i.kind !== 'commitment' && i.kind !== 'waiting' && i.kind !== 'checklist_item').map((i) => ({ title: i.title, due: formatDue(i.due_at_utc!, i.due_precision) }))
+      // Unscheduled obligations (7d): due within two weeks with no work block set aside, not already listed above —
+      // a promise or a waiting-on already says its own due date, so it never needs a second "no time set aside" mention.
+      const listed = new Set([...commitments.map((c) => c.title), ...overdue.map((o) => o.title), ...waiting.map((w) => w.about ?? ''), ...soon.map((s) => s.title)])
+      const twoWeeks = DateTime.utc().plus({ days: 14 }).toISO()!
+      const unscheduled = repo
+        .unscheduledObligations(60)
+        .filter((i) => i.due_at_utc && i.due_at_utc <= twoWeeks && !listed.has(i.title))
+        .map((i) => ({ title: i.title, due: formatDue(i.due_at_utc!, i.due_precision) }))
+      // Plans falling behind (7d + 6f): an ACTUAL miss happened, or there is no more runway left (no future session) while
+      // the plan still owes hours. A freshly made plan that simply hasn't reached its target yet is not "behind" — that
+      // would flag every plan on day one; `get_plan` already answers the ordinary progress question when asked.
+      const plansBehind = repo
+        .listPlans()
+        .map((p) => ({ p, prog: planProgress(p, repo.sessionsForPlan(p.id), nowIso) }))
+        .filter(({ prog }) => prog.missed_minutes > 0 || (!prog.next_session_utc && (prog.shortfall_minutes ?? 0) > 0))
+        .map(({ p, prog }) => ({ title: p.title, text: describeProgress(prog) }))
       // 7b: deadlines within two weeks that are not comfortably on track — surfaced before they are urgent.
       const atRisk = atRiskLines(14).map((r) => r.text)
-      return { result: { commitments, overdue, waiting, due_soon: soon, at_risk: atRisk, today_context: repo.todayContext().map((c) => c.text) } }
+      // POSSIBLE — never acted on by this tool: ideas and assistant suggestions still awaiting the user, plus a Thing
+      // that has gone quiet (open parts, no deadline, nothing touched in days) worth a glance but not a push.
+      const open = repo.openItems(300)
+      const ideas = open.filter((i) => i.kind === 'idea' && !i.is_suggestion).map((i) => i.title)
+      const suggestions = open.filter((i) => i.is_suggestion).map((i) => i.title)
+      const staleCut = DateTime.utc().minus({ days: 4 }).toISO()!
+      const quietProjects = repo
+        .openProjects(30)
+        .filter((p) => !p.due_at_utc)
+        .map((p) => ({ p, parts: repo.projectParts(p.id).filter((c) => c.status !== 'cancelled' && c.status !== 'archived' && c.status !== 'done'), last: repo.activitiesForProject(p.id, 1)[0] }))
+        .filter(({ parts, last }) => parts.length > 0 && (!last || last.created_at < staleCut))
+        .map(({ p, parts }) => `${p.title} (${plural(parts.length, 'open part')}, nothing recent)`)
+      return {
+        result: {
+          commitments,
+          overdue,
+          waiting,
+          due_soon: soon,
+          unscheduled,
+          plans_behind: plansBehind,
+          at_risk: atRisk,
+          possible: { ideas, suggestions, quiet_projects: quietProjects },
+          today_context: repo.todayContext().map((c) => c.text)
+        }
+      }
     }
     case 'create_event': {
       // Phase 6. Events occupy time; they are never tasks and never duplicate one (spec §6). Hard clashes are refused with an
@@ -1015,6 +1068,45 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const movedGone = doomed.filter((e) => !e.rrule).length
       const detail = seriesInvolved ? ` — the whole series${movedGone ? ` and ${plural(movedGone, 'moved occurrence')}` : ''}` : ''
       return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Cancelled "${ev.title}"${detail}. Nothing else was touched.` } }
+    }
+    case 'propose_slot': {
+      const x = a as z.infer<typeof toolSchemas.propose_slot>
+      let item: Item | null = x.item_id ? repo.getItem(repo.resolveItemId(x.item_id)) ?? null : null
+      if (!item) {
+        const strip = x.title.replace(/^(?:i need to |i want to |let'?s |please )?(?:finish|complete|do|write|prepare|prep|work on|start|read|review|revise|study|draft)\s+/i, '').replace(/^(?:the |my )/i, '')
+        const pool = [...repo.openItems(500), ...repo.openChecklistItems()].filter((i) => i.kind !== 'project' && i.kind !== 'waiting')
+        const r = resolveEntity(strip, pool, getFocus().map((f) => f.itemId))
+        if (r.kind === 'match') item = r.entity
+      }
+      const title = item?.title ?? x.title
+      let deadlineUtc: string | null = null
+      let deadlinePrecision: string | null = null
+      if (x.before_local) {
+        deadlineUtc = repo.localToUtc(x.before_local)
+        deadlinePrecision = 'exact'
+      } else if (x.before_date_local) {
+        deadlineUtc = DateTime.fromISO(x.before_date_local, { zone: DateTime.local().zoneName }).endOf('day').toUTC().toISO()!
+        deadlinePrecision = 'day'
+      } else if (item?.due_at_utc) {
+        deadlineUtc = item.due_at_utc
+        deadlinePrecision = item.due_precision
+      }
+      const minutes = x.minutes ?? item?.effort_minutes ?? DEFAULT_ASSUMED_EFFORT_MIN
+      const proposal = proposeSlot({ title, minutes, deadlineUtc, deadlinePrecision })
+      const bookArgs = proposalBookingArgs(proposal)
+      // Always remembered, even when there's nothing to book: a bare "book it" afterwards must be refused deterministically
+      // (7e/invariant 10), never left to the model to freelance a time or an override from stale conversation history.
+      setOffer({ kind: 'slot_proposal', title, itemId: item?.id ?? null, startsAtLocal: bookArgs?.starts_at_local ?? null, endsAtLocal: bookArgs?.ends_at_local ?? null })
+      return {
+        result: {
+          title,
+          minutes,
+          minutes_assumed: !x.minutes && !item?.effort_minutes,
+          feasibility: proposal.feasibility,
+          pick: proposal.pick ? { when: proposal.pick.startUtc, level: proposal.pick.level } : null,
+          text: describeProposal(proposal)
+        }
+      }
     }
     case 'recommend_now': {
       const x = a as z.infer<typeof toolSchemas.recommend_now>

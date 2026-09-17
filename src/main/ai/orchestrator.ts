@@ -51,6 +51,10 @@ Brain dumps (7a) — one messy message, everything handled in this ONE response:
 
 "What should I do right now / next / first?" (7c) → recommend_now. The app ranks every open thing (urgency, importance, hardness, overdue, blockers, free time before the next fixed thing, effort, today's context, promises, whether it can start this minute) and names ONE action with its reason — or says nothing can start and why. Relay its text. Never answer this from memory and never produce a list of your own.
 
+"What am I forgetting?" (7d) → get_forgetting. The app separates DEFINITE (promises, overdue, waiting, due soon with no time set aside, plans falling behind, at-risk deadlines) from POSSIBLE (ideas, unconfirmed suggestions) in its own text — relay it exactly as given, keep the two apart, and never turn a "possible" item into a task yourself.
+
+Smart scheduling (7e) — "I need two hours for the case study before Friday", "find time to write the draft by tomorrow" → propose_slot. The app searches the real calendar and grades what it found feasible, tight, or infeasible; it books NOTHING by itself. Relay its text. If the user then says to book it, call create_event with exactly the time and title it proposed — never a time of your own choosing. If the last proposal was infeasible or the deadline had passed, "book it" is handled for you deterministically (it refuses); do not call create_event yourself in that case, and never add override_conflicts to force something the app just said cannot fit — that is scheduling something that cannot happen, which this phase exists to prevent.
+
 Deadlines (7b) — computed, never weighed by you:
 - "Is X on track?", "what's the bottleneck?", "can I still make Friday?", "how is X looking?" → assess_deadline (or get_project for a dated Thing). The app reasons back from the deadline over the user's OWN parts and blocks links: what remains, what is blocked by what, the bottleneck, whether it is still feasible given the free time left. Relay its text; do not re-rank or second-guess it.
 - Never invent a component. If the parts listed seem incomplete, the app already says "that is everything you have listed — tell me if there are more parts"; do not add steps the user never mentioned.
@@ -121,6 +125,8 @@ export function enqueueChat(deps: OrchestratorDeps, text: string): Promise<ChatR
 }
 
 /** One or two changes read as a sentence; a brain dump's worth reads as a list, one line per thing (7a). */
+const plural = (n: number, w: string): string => `${n} ${w}${n === 1 ? '' : 's'}`
+
 const joinPhrases = (applied: AppliedChange[]): string =>
   applied.length >= 3 ? `Got it — ${applied.length} things:\n${applied.map((a) => `• ${a.phrase}`).join('\n')}` : applied.map((a) => a.phrase).join(' ')
 
@@ -340,20 +346,42 @@ function phraseReadResults(results: ToolResult[]): string | null {
       const c = res as unknown as { from: string; to: string; events: { title: string; when: string; end: string | null; recurring: boolean }[] }
       lines.push(c.events.length ? `On the calendar: ${c.events.map((e) => `${e.title} ${e.when}${e.end ? `–${e.end}` : ''}${e.recurring ? ' ↻' : ''}`).join('; ')}.` : `Nothing on the calendar between ${c.from} and ${c.to}.`)
     } else if (r.name === 'get_forgetting') {
-      type F = { commitments: { title: string; to: string | null; due: string | null; overdue: boolean }[]; overdue: { title: string; kind: string; due: string }[]; waiting: { who: string | null; about: string | null; expected: string | null; overdue: boolean }[]; due_soon: { title: string; due: string }[]; today_context: string[] }
-      const f = res as unknown as F
-      const parts: string[] = []
-      if (f.commitments.length) parts.push(`Promises first: ${f.commitments.map((c) => `${c.title} — to ${c.to ?? 'someone'}${c.due ? `, ${c.due}` : ''}${c.overdue ? ' (overdue)' : ''}`).join('; ')}.`)
-      if (f.overdue.length) parts.push(`Overdue: ${f.overdue.map((o) => `${o.title} (was ${o.due})`).join('; ')}.`)
-      if (f.waiting.length) parts.push(`Waiting on: ${f.waiting.map((w) => `${w.who ?? 'someone'}${w.about ? ` about ${w.about}` : ''}${w.expected ? `, expected ${w.expected}` : ''}${w.overdue ? ' — past due' : ''}`).join('; ')}.`)
-      if (f.due_soon.length) parts.push(`Coming up: ${f.due_soon.map((s) => `${s.title} (${s.due})`).join('; ')}.`)
-      const atRisk = (res as unknown as { at_risk?: string[] }).at_risk ?? []
-      if (atRisk.length) parts.push(`Deadlines to watch: ${atRisk.join(' ')}`)
-      if (!parts.length) lines.push("Nothing I can see slipping. No open promises, nothing overdue, nothing waiting.")
-      else {
-        if (f.today_context.some((t) => /exhaust|tired|wiped|drained|knackered|shattered|burnt|burned|worn|low|down|flat|anxious|stressed|overwhelmed|unwell|sick|ill/i.test(t))) parts.push(`You said you're ${f.today_context[0]} today — this is for the record, not a push. Nothing here needs to happen tonight unless it's a promise.`)
-        lines.push(parts.join(' '))
+      type F = {
+        commitments: { title: string; to: string | null; due: string | null; overdue: boolean }[]
+        overdue: { title: string; kind: string; due: string }[]
+        waiting: { who: string | null; about: string | null; expected: string | null; overdue: boolean }[]
+        due_soon: { title: string; due: string }[]
+        unscheduled: { title: string; due: string }[]
+        plans_behind: { title: string; text: string }[]
+        at_risk?: string[]
+        possible: { ideas: string[]; suggestions: string[]; quiet_projects: string[] }
+        today_context: string[]
       }
+      const f = res as unknown as F
+      const definite: string[] = []
+      if (f.commitments.length) definite.push(`Promises first: ${f.commitments.map((c) => `${c.title} — to ${c.to ?? 'someone'}${c.due ? `, ${c.due}` : ''}${c.overdue ? ' (overdue)' : ''}`).join('; ')}.`)
+      if (f.overdue.length) definite.push(`Overdue: ${f.overdue.map((o) => `${o.title} (was ${o.due})`).join('; ')}.`)
+      if (f.waiting.length) definite.push(`Waiting on: ${f.waiting.map((w) => `${w.who ?? 'someone'}${w.about ? ` about ${w.about}` : ''}${w.expected ? `, expected ${w.expected}` : ''}${w.overdue ? ' — past due' : ''}`).join('; ')}.`)
+      if (f.due_soon.length) definite.push(`Coming up: ${f.due_soon.map((s) => `${s.title} (${s.due})`).join('; ')}.`)
+      if (f.unscheduled.length) definite.push(`Due soon, no time set aside: ${f.unscheduled.map((s) => `${s.title} (${s.due})`).join('; ')}.`)
+      if (f.plans_behind.length) definite.push(`Plans falling behind: ${f.plans_behind.map((p) => `"${p.title}" — ${p.text}`).join('; ')}.`)
+      if (f.at_risk?.length) definite.push(`Deadlines to watch: ${f.at_risk.join(' ')}`)
+      const possibleBits: string[] = []
+      if (f.possible.ideas.length) possibleBits.push(`${plural(f.possible.ideas.length, 'idea')} noted but never made a task: ${f.possible.ideas.join(', ')}`)
+      if (f.possible.suggestions.length) possibleBits.push(`${plural(f.possible.suggestions.length, 'suggestion')} I made, still unconfirmed: ${f.possible.suggestions.join(', ')} — say the word to make one real`)
+      if (f.possible.quiet_projects.length) possibleBits.push(`gone quiet: ${f.possible.quiet_projects.join(', ')}`)
+      if (!definite.length && !possibleBits.length) lines.push('Nothing I can see slipping. No open promises, nothing overdue, nothing waiting.')
+      else {
+        if (definite.length) {
+          if (f.today_context.some((t) => /exhaust|tired|wiped|drained|knackered|shattered|burnt|burned|worn|low|down|flat|anxious|stressed|overwhelmed|unwell|sick|ill/i.test(t))) definite.push(`You said you're ${f.today_context[0]} today — this is for the record, not a push. Nothing here needs to happen tonight unless it's a promise.`)
+          lines.push(definite.join(' '))
+        } else lines.push('Nothing definite.')
+        // Kept visibly apart: possible things never silently become tasks, and this tool never creates anything either way.
+        if (possibleBits.length) lines.push(`Possible, not acted on: ${possibleBits.join('; ')}.`)
+      }
+    } else if (r.name === 'propose_slot') {
+      const t = (res as { text?: string }).text
+      if (t) lines.push(t)
     } else if (r.name === 'recommend_now') {
       const t = (res as { text?: string }).text
       if (t) lines.push(t)

@@ -44,6 +44,10 @@ export type Offer =
   /** A write tool asked a confirmation question (cancel a series, a project with parts, delete). A plain "yes" replays it
    *  with confirmed=true; any "no" clears it and changes nothing — deterministically, never via the model. */
   | { kind: 'confirm'; toolName: string; args: Record<string, unknown>; question: string }
+  /** Smart scheduling (7e): the last propose_slot answer. startsAtLocal null means it was infeasible or the deadline had
+   *  already passed — there is nothing to book, and "book it" must be refused deterministically, never left for the model
+   *  to improvise a time or override a clash on its own initiative. */
+  | { kind: 'slot_proposal'; title: string; itemId: string | null; startsAtLocal: string | null; endsAtLocal: string | null }
 let offer: Offer | null = null
 export const setOffer = (o: Offer): void => {
   offer = o
@@ -203,7 +207,13 @@ export function assembleContext(userText: string): string {
               ? offer.happeningId
                 ? `Standing offer: you offered a ${offer.minutes}-minute timer for the running "${offer.label}" [${shortId(offer.happeningId)}]. "yes" → time_happening with that id and minutes (or the minutes they name); "no" → decline_ritual with kind "${offer.happeningKind}" (the app then never offers it for that kind again).`
                 : `Standing offer: the user said they are making ${offer.label}; you offered a ${offer.minutes}-minute timer and nothing was created. "yes" → start_happening {label "${offer.label}", minutes ${offer.minutes}}; "no" → decline_ritual with kind "${offer.happeningKind}". Anything else → drop it silently.`
-              : `Standing question: a booking was refused because it clashes with the user's availability. If they say to book it anyway, call ${offer.toolName} again with the same arguments plus override_conflicts=true; if they pick another time, book that instead.`
+              : offer.kind === 'confirm'
+                ? `Standing question: "${offer.question}" — a plain yes replays ${offer.toolName} with confirmed=true; a no changes nothing. This is handled deterministically; you should not normally see it.`
+                : offer.kind === 'slot_proposal'
+                  ? offer.startsAtLocal
+                    ? `Standing proposal (7e): you proposed ${offer.startsAtLocal}–${offer.endsAtLocal} for "${offer.title}"; nothing is booked yet. "book it"/"yes" is handled deterministically. Do not propose or book a different time yourself, and never add override_conflicts on your own initiative.`
+                    : `Standing proposal (7e): the last scheduling search for "${offer.title}" found nothing workable (infeasible or the deadline had passed). "book it"/"yes" is handled deterministically and will refuse. Do NOT book anything for it yourself, with or without override_conflicts — call propose_slot again only if the user gives a new deadline or duration.`
+                  : `Standing question: a booking was refused because it clashes with the user's availability. If they say to book it anyway, call ${offer.toolName} again with the same arguments plus override_conflicts=true; if they pick another time, book that instead.`
       : '',
     ``,
     prefs.length

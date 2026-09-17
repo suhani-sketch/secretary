@@ -327,7 +327,9 @@ export default function App(): React.JSX.Element {
     const m = /"unless_resolved":"([0-9a-f-]{36})"/.exec(r.condition_json ?? '')
     if (m) followUpsOn.set(m[1], [...(followUpsOn.get(m[1]) ?? []), r])
   }
-  const standalone = openItems.filter((i) => !(i.kind === 'checklist_item' && parentOf.has(i.id)) && i.kind !== 'waiting')
+  // Ideas are "possible", never a hard task (spec §4 actionability threshold, §11G 9) — like waiting items, they get
+  // surfaced elsewhere (get_forgetting's "possible" section) rather than sitting in Open and counting toward its number.
+  const standalone = openItems.filter((i) => !(i.kind === 'checklist_item' && parentOf.has(i.id)) && i.kind !== 'waiting' && i.kind !== 'idea')
   const reorder = (project: Item, id: string, dir: -1 | 1): void => {
     const list = checklistOf.get(project.id) ?? []
     const idx = list.findIndex((c) => c.id === id)

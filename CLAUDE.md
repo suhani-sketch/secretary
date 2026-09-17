@@ -3,7 +3,8 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 7 — Intelligence. 7a (brain dump), 7b (deadline intelligence) and 7c (what should I do right now) built 2026-09-17, testable; 7d–7g not started. Governing rule: compute in
+## Current phase: Phase 7 — Intelligence. 7a (brain dump), 7b (deadline intelligence), 7c (what should I do right now), 7d ("what am I
+forgetting?", widened) and 7e (smart scheduling) built 2026-09-17, testable; 7f–7g not started. Governing rule: compute in
 code, the model only phrases — every answer costs at most ONE model call (§11G 14). Phase 6: 6a–6f built. **§11C run 2026-09-17 on scratch DB c7 across
 several real quit + relaunch cycles: 24 of 27 steps pass outright; 4 and 12 pass on the tool path the drag calls but the mouse gesture itself
 was not performed; 25 passes against planted history (see below).** Phase 5 complete (§11F passed).
@@ -24,6 +25,58 @@ was not performed; 25 passes against planted history (see below).** Phase 5 comp
   reuse all of it. `src/main/calendar.ts` is the SQLite glue (`buildDay`, `occurrencesBetween`); `planning.ts` (conflicts) still
   imports repo and moves to core when 6f touches it.
 - **Migration 7:** `plans` table; `events.plan_id`, `events.session_state`; index on `events.starts_at_utc`.
+
+## Phase 7d + 7e — "what am I forgetting?" widened, and smart scheduling (2026-09-17)
+- **7d — definite vs possible, strictly kept apart (§11G 8, 9).** `get_forgetting` (tools.ts) now returns, alongside the
+  existing commitments/overdue/waiting/due_soon(2d)/at_risk(7b): `unscheduled` (due within 14 days, no work block set aside,
+  deduped against commitments/overdue/waiting/due_soon by title so nothing is said twice), `plans_behind` (a plan with an
+  ACTUAL missed session, or no more runway left — `next_session_utc` null — while `shortfall_minutes` remains; a brand-new
+  plan that simply hasn't reached its target yet is NOT "behind", or every plan would be flagged on day one), and
+  `possible: {ideas, suggestions, quiet_projects}` — open `kind='idea'` items, open `is_suggestion=1` items, and open
+  projects with no due date and no activity in 4+ days. The orchestrator composes two clearly separate sentences: a
+  "Definite" paragraph (or "Nothing definite.") and, only if there is anything, "Possible, not acted on: …" — never merged,
+  never reordered by the model. `get_forgetting` is read-only, so mentioning something possible can never itself create it
+  (the other half of invariant 9's spirit). Zero model calls (tier 0 → get_forgetting, phrased in code).
+- **Ideas no longer count as Open** (`App.tsx` `standalone` filter, alongside `waiting`/nested `checklist_item`) — spec §4's
+  "idea, not a hard task" now holds in the rail, not just in the prompt; required by §11G 9 read literally ("nothing labelled
+  possible appears in Open afterwards"). Ideas still exist as rows and surface via `get_forgetting`'s possible section.
+- **7e — smart scheduling, feasible/tight/infeasible, never books itself.** `src/core/schedule.ts` (`findFreeWindows`,
+  platform-independent) walks the calendar day by day between two workable hours (08:00–22:00) and returns gaps ≥ the
+  asked-for duration against HARD-busy windows only (events + `unavailable` constraints), plus `totalFreeMinutes` and
+  `longestGapMinutes` for explaining an infeasible answer. `src/main/schedule.ts` (`proposeSlot`) turns each gap into a
+  candidate slot — nudged forward by the default 15 min buffer when the gap is generous and bounded by a real prior event,
+  so a big gap doesn't manufacture a false "tight" grading — then grades EVERY candidate with the existing deterministic
+  `planning.assessSlot` (buffers, neighbours, avoid windows: the same clear/tight/poor/hard used since 6f). Candidates sort
+  clear → poor → tight, earliest first; the best is the pick, up to two same-tier/next-tier alternatives on different days
+  are offered. Top-level `feasibility`: no candidate at all → `infeasible` (says whether there's no free time at all, or
+  free time exists but never in one uninterrupted block, using `totalFreeMinutes`/`longestGapMinutes`); best candidate
+  `tight` → `tight`; `clear`/`poor` → `feasible`. A deadline already passed is caught before any search and refused
+  outright. `describeProposal` writes the whole sentence in code — zero model calls to ask.
+- Tool `propose_slot {title, minutes?, item_id?, before_local?/before_date_local?}` (read-only — NEVER books). Router:
+  "I need <duration> for/to <X> before/by <Y>", "find (me) (some) time for <X> before/by <Y>", "when can I fit in/do <X>
+  before/by <Y>" → propose_slot; duration omitted → uses the matched item's own `effort_minutes` or a labelled 60 min
+  assumption. Title resolves against open items/steps first (invariant 11) after stripping a leading verb ("finish/write/
+  do the report" → "the report"); an item's own due date is the deadline when none is stated.
+- **Booking is a separate, always-remembered, deterministic confirm step — this is where a real bug was caught and fixed.**
+  `propose_slot` always calls `setOffer({kind:'slot_proposal', …})`, even on infeasible (with `startsAtLocal/endsAtLocal:
+  null` in that case) — NOT only when a bookable slot was found. Router intercepts "book it"/"yes"/"schedule it" etc.
+  whenever this offer exists: a real slot → replay `create_event` with EXACTLY the proposed time; no slot → a REPLY refusing
+  ("There's nothing to book … tell me a different deadline…"), never falling through to the model. **First cut only set the
+  offer when a slot existed; on infeasible, "book it" fell through to tier 2 and the MODEL, seeing the conversation's own
+  "busy all day" constraints, called `create_event` with `override_conflicts=true` on its own initiative** — exactly the
+  "scheduled something that cannot happen" failure §11G 11 forbids. Fixed by always setting the offer and refusing
+  deterministically; prompt also now explicitly forbids the model from adding `override_conflicts` to force an infeasible
+  proposal through.
+- Verified on scratch DBs: feasible (a real 2 h gap, phrased with the deadline), tight (only a 0-gap-either-side slot exists
+  before the stated time — phrased "It's tight: straight before …"), infeasible (both days blocked → "there's only 0 min
+  free in total… something has to give"), infeasible → "book it" now correctly refused (was the bug above), a genuine
+  "book it" → `create_event` fires and the day reads it back correctly, all at tier 0 / 0 model calls. 7d: promise +
+  overdue + waiting + unscheduled + a genuinely missed plan session all listed distinctly under one "Definite" paragraph; an
+  idea and an unconfirmed suggestion listed separately under "Possible"; a fresh plan/fresh project correctly NOT flagged;
+  a project stale for 4+ days correctly flagged as "gone quiet".
+- Not exercised: §11G 2 (spoken dump — Phase 7a's own item, not touched here); a real multi-day propose_slot search where
+  the best slot lands on a later day than the first checked; `tests/` still has no unit coverage for `core/now.ts`,
+  `core/deadline.ts` or `core/schedule.ts` — worth adding before Phase 7 is called done.
 
 ## Phase 7c — "what should I do right now?" (2026-09-17)
 - **Ranked in code, phrased in code, zero model calls.** `src/core/now.ts` (`recommendNow(input) → Recommendation`,

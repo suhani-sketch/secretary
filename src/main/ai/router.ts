@@ -252,6 +252,20 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     }
   }
 
+  // ---- "book it" for a pending smart-scheduling proposal (7e) — the app already graded and found the time; a plain
+  //      "yes"/"book it" replays exactly what it proposed. Nothing is ever booked before this. ----
+  {
+    const offer = getOffer()
+    if (offer?.kind === 'slot_proposal' && /^(?:yes|yes please|yep|yeah|sure|ok|okay|go ahead|do it|book it|book that|book it in|schedule it|schedule that|put it in|yes,? book it|yes,? do it|please book it)$/.test(text)) {
+      if (!offer.startsAtLocal || !offer.endsAtLocal) {
+        return [{ name: REPLY, args: { text: `There's nothing to book for "${offer.title}" — I couldn't find a workable time. Tell me a different deadline, a shorter length, or what could move, and I'll look again.` } }]
+      }
+      const args: Record<string, unknown> = { title: offer.title, starts_at_local: offer.startsAtLocal, ends_at_local: offer.endsAtLocal }
+      if (offer.itemId) args.item_id = offer.itemId
+      return [{ name: 'create_event', args }]
+    }
+  }
+
   // ---- "yes" / "no" to a standing offer or question ----
   if (/^(?:yes|yes please|yep|yeah|sure|ok|okay|please|do it|go ahead|yes do|same|same thing|yes same|(?:yes,? )?(?:book|do|put|add|move|schedule) it anyway|anyway|go ahead anyway|yes anyway|override)$/.test(text)) {
     const offer = getOffer()
@@ -646,6 +660,35 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     const args: Record<string, unknown> = startH === 0 && endH === 24 && !rec ? { kind: 'unavailable', label, date_local: day } : { kind: 'unavailable', label, starts_at_local: startLocal, ends_at_local: endLocal }
     if (rec) args.rrule = rec.rrule
     return [{ name: 'add_constraint', args }]
+  }
+
+  // ---- smart scheduling (7e): "I need two hours for the case study before Friday" → propose_slot. The app searches
+  //      real availability and grades it feasible/tight/infeasible; it never books anything here — "book it" does that. ----
+  {
+    const DUR = String.raw`(?:\d+(?:\.\d+)?|one|two|three|four|five|six|half an?|an?)\s*(?:hours?|hrs?|h\b|minutes?|mins?|m\b)`
+    const a = new RegExp(String.raw`^(?:i |i'?d )?(?:need|require) (?:about |roughly |around )?(${DUR}) (?:to |for )(.+?) (?:before|by) (.+)$`).exec(text)
+    const b = new RegExp(String.raw`^(?:find (?:me )?(?:some )?time|when (?:can|could) i (?:fit in|do|find time for)|can you find (?:me )?(?:some )?time) (?:to |for )?(.+?) (?:before|by) (.+)$`).exec(text)
+    if (a || b) {
+      const durText = a ? a[1] : null
+      const title = (a ? a[2] : b![1]).trim()
+      const deadlineText = (a ? a[3] : b![2]).trim()
+      let minutes: number | undefined
+      if (durText) {
+        const dm = /^(\d+(?:\.\d+)?|one|two|three|four|five|six|half an?|an?)\s*(hours?|hrs?|h|minutes?|mins?|m)$/.exec(durText.trim())
+        if (dm) {
+          const n = /^(?:an?|one)$/.test(dm[1]) ? 1 : dm[1] === 'two' ? 2 : dm[1] === 'three' ? 3 : dm[1] === 'four' ? 4 : dm[1] === 'five' ? 5 : dm[1] === 'six' ? 6 : /^half/.test(dm[1]) ? 0.5 : Number(dm[1])
+          minutes = Math.round(/^h/.test(dm[2]) ? n * 60 : n)
+        }
+      }
+      const when = parseWhen(deadlineText)
+      if (when && title && words(title).length) {
+        const args: Record<string, unknown> = { title: restoreCase(title) }
+        if (minutes) args.minutes = minutes
+        if (when.exact) args.before_local = when.dateTime
+        else args.before_date_local = when.date
+        return [{ name: 'propose_slot', args }]
+      }
+    }
   }
 
   // ---- dependencies (3f, widened in 7b): "X blocks Y" / "Y depends on X" / "can't do Y until X is done" /
