@@ -10,6 +10,7 @@ import type { Item, Reminder } from '../../shared/types'
 import { detectHappeningEnd, detectHappeningStart } from '../happenings'
 import { RITUALS as RITUAL_OFFERS } from './tools'
 import { occurrencesBetween } from '../calendar'
+import { parseBareOrdinalDay } from '../ordinal-date'
 
 /** A bare "I'm making dinner": an ordinary reply, nothing created, no offer (invariant 9). */
 function plainAcknowledgement(label: string): string {
@@ -119,6 +120,21 @@ interface ParsedWhen {
 /** chrono result → honest precision. Only hours the user actually stated count as exact. */
 function parseWhen(text: string): ParsedWhen | null {
   const results = chrono.casual.parse(text, new Date(), { forwardDate: true })
+  // A bare "the 25th"/"on the 23rd" — chrono has no concept of this: it returns nothing, or (worse, silently) a
+  // time-only result that defaults the date to today. Caught here so it never mis-dates anything downstream, and
+  // never differently in different rules (see src/main/ordinal-date.ts for the two failure modes, verified live).
+  const bareOrdinal = parseBareOrdinalDay(text, new Date(), DateTime.local().zoneName)
+  if (bareOrdinal && (results.length === 0 || (results.length === 1 && !results[0].start.isCertain('day')))) {
+    const timeOnly = results[0]
+    if (timeOnly && timeOnly.start.isCertain('hour')) {
+      const h0 = timeOnly.start.get('hour') ?? 0
+      const hour = !timeOnly.start.isCertain('meridiem') && h0 >= 1 && h0 <= 6 ? h0 + 12 : h0
+      const minute = timeOnly.start.get('minute') ?? 0
+      const dt = DateTime.fromISO(bareOrdinal.date, { zone: DateTime.local().zoneName }).set({ hour, minute })
+      return { text: `${bareOrdinal.text} ${timeOnly.text}`, exact: true, dateTime: dt.toFormat("yyyy-MM-dd'T'HH:mm") }
+    }
+    return { text: bareOrdinal.text, exact: false, date: bareOrdinal.date }
+  }
   if (results.length !== 1) return null
   const r = results[0]
   let d = r.start.date()
@@ -654,15 +670,26 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
       }
     }
     const part = /\b(morning|afternoon|evening|night|all day)\b/.exec(tail)?.[1]
-    const range = /\b(?:from |between )?(\d{1,2})(?::(\d{2}))?\s*(?:-|–|to|till|until)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/.exec(tail)
+    // Each side of the range may carry its OWN meridiem ("4pm to 8pm"), not just a shared trailing one ("4 to 8pm").
+    const range = /\b(?:from |between )?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:-|–|to|till|until)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/.exec(tail)
     const rec = parseRecurrencePhrase(tail)
     const dateText = tail.replace(/\b(morning|afternoon|evening|night|all day)\b/, ' ').replace(range?.[0] ?? '', ' ').replace(rec ? tail.slice(tail.indexOf(tail.replace(rec.stripped, '').trim())) : '', ' ')
     const when = parseWhen(dateText.trim() || 'today')
     const day = when ? (when.exact ? when.dateTime!.slice(0, 10) : when.date!) : DateTime.local().toISODate()!
     let startH: number, endH: number, startM = 0, endM = 0
     if (range) {
-      startH = Number(range[1]); startM = Number(range[2] ?? 0); endH = Number(range[3]); endM = Number(range[4] ?? 0)
-      if (range[5] === 'pm') { if (startH < 12 && startH <= endH) startH += 12; if (endH < 12) endH += 12 } else if (!range[5]) { if (startH <= 7) startH += 12; if (endH <= 7 || endH < startH) endH += 12 }
+      startH = Number(range[1]); startM = Number(range[2] ?? 0); endH = Number(range[4]); endM = Number(range[5] ?? 0)
+      const sAP = range[3] as 'am' | 'pm' | undefined
+      const eAP = range[6] as 'am' | 'pm' | undefined
+      const apply12h = (h: number, ap: 'am' | 'pm'): number => (ap === 'pm' && h < 12 ? h + 12 : ap === 'am' && h === 12 ? 0 : h)
+      if (sAP) startH = apply12h(startH, sAP)
+      if (eAP) endH = apply12h(endH, eAP)
+      if (!sAP && !eAP) {
+        // Neither side named a meridiem ("9-5", "2-4") — the existing heuristic: short hours read as afternoon.
+        if (startH <= 7) startH += 12
+        if (endH <= 7 || endH < startH) endH += 12
+      } else if (!sAP && eAP === 'pm' && startH < 12 && startH <= endH) startH += 12 // "9 to 5pm" — the start shares it
+      else if (sAP === 'pm' && !eAP && endH < startH) endH += 12 // "4pm to 8" — the end continues the same period
     } else if (part && PART_OF_DAY[part]) [startH, endH] = PART_OF_DAY[part]
     else if (when?.exact) { const h = Number(when.dateTime!.slice(11, 13)); startH = h; endH = h + 1 }
     else [startH, endH] = [0, 24]

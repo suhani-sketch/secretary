@@ -9,6 +9,7 @@ import * as repo from './repo'
 import { buildSummaries } from './calendar'
 import { assessDeadline, describeAssessment, type DeadlineAssessment, type DeadlineComponent } from '../core/deadline'
 import { formatDue } from '../shared/format'
+import { parseBareOrdinalDay } from './ordinal-date'
 import type { Item } from '../shared/types'
 
 /** Workable minutes in a day before anything is booked — an assumption, stated as one wherever it shows. */
@@ -109,21 +110,11 @@ export function noteDateConflicts(item: Item, onlyNoteId?: string): string[] {
       .parse(n.body, ref, { forwardDate: true })
       .filter((r) => r.start.isCertain('day'))
       .map((r) => DateTime.fromJSDate(r.start.date()).toISODate()!)
-    // chrono skips a bare ordinal ("the 20th"); read it as the next such day-of-month on or after the note was written.
+    // chrono skips a bare ordinal ("the 20th") entirely — the shared, deterministic fallback (also used by
+    // router.ts#parseWhen, so the app never resolves "the 20th" to two different dates depending on which code ran).
     if (!days.length) {
-      const ord = /\b(?:the )?(\d{1,2})(?:st|nd|rd|th)\b(?!\s+(?:of\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))/i.exec(n.body)
-      if (ord) {
-        const d = Number(ord[1])
-        let cand = DateTime.fromJSDate(ref).toLocal().startOf('day')
-        for (let i = 0; i < 2 && d >= 1 && d <= 31; i++) {
-          const inMonth = cand.set({ day: Math.min(d, cand.daysInMonth!) })
-          if (inMonth >= DateTime.fromJSDate(ref).toLocal().startOf('day') && inMonth.day === d) {
-            days.push(inMonth.toISODate()!)
-            break
-          }
-          cand = cand.plus({ months: 1 }).startOf('month')
-        }
-      }
+      const bare = parseBareOrdinalDay(n.body, ref, DateTime.local().zoneName)
+      if (bare) days.push(bare.date)
     }
     for (const day of days) {
       if (day !== dueDay) {

@@ -27,6 +27,32 @@ was not performed; 25 passes against planted history (see below).** Phase 5 comp
   imports repo and moves to core when 6f touches it.
 - **Migration 7:** `plans` table; `events.plan_id`, `events.session_state`; index on `events.starts_at_utc`.
 
+## Fixed: bare ordinal dates ("on the 25th") silently mis-dated as today (2026-09-18)
+- `src/main/ordinal-date.ts` — `parseBareOrdinalDay(text, refDate, zone)`: chrono-node has NO concept of a day-of-month
+  with no month named. Verified directly against the library, two distinct failure modes: "the 25th" alone → chrono
+  returns zero results; "meeting on the 23rd at 5pm" → chrono returns exactly ONE result covering only "at 5pm"
+  (`isCertain('day') === false`), silently defaulting the date to today. Both were reaching the user as a real but
+  wrongly-dated event/constraint/task, with no error at all — the app said something confident and wrong.
+- `router.ts#parseWhen` (the one shared date parser almost every rule calls) now checks for a bare ordinal FIRST:
+  if chrono found nothing, or found only a time (`!isCertain('day')`), the ordinal's date wins and any time chrono
+  DID find (including a full start–end pair collapsed to its start, see below) is layered onto it. A genuine chrono
+  date match (`isCertain('day')`) is always trusted as-is; the ordinal check never overrides a real date.
+- `deadlines.ts#noteDateConflicts`'s own inline copy of this exact fallback (written when 7b was built) now calls the
+  same shared function instead — the app no longer risks resolving "the 20th" to two different dates depending on
+  which code path ran, which is exactly the kind of drift 7g's date-reference chains would have made worse.
+- **A second, related bug surfaced by fixing the first and re-testing live:** "I'm busy on the 25th from 4pm to 8pm"
+  got the date right immediately but the TIME came out as 16:00–17:00, dropping the "to 8pm" entirely. Root cause: the
+  availability rule's own time-range regex only recognised ONE meridiem for the whole range ("4 to 8pm"), not one per
+  side ("4pm to 8pm") — a pre-existing, narrower bug that a wrong date had been quietly hiding (nobody notices a wrong
+  end-time on an event that was already on the wrong day). Fixed by widening that one regex to accept a meridiem on
+  either or both numbers, with sensible inference when only one side states it; the two other call sites with the
+  identical one-sided-meridiem limitation (`create_event`'s "meeting … 2pm to 4pm" and the recurring-class phrase) were
+  NOT touched — left as a known, narrower, related gap rather than an unbounded regex audit of the whole file.
+- Verified: "meeting with professor x on the 23rd at 5pm" → Wed 23 Sept 17:00 (was: today); "submit the report on the
+  30th" → Wed 30 Sept (was: today); "I'm busy on the 25th from 4pm to 8pm" → Fri 25 Sep 16:00–20:00 (was: today,
+  16:00–17:00); "I'm busy tomorrow 9-5" and "I'm busy friday 2-4" (no meridiem at all — the pre-existing heuristic)
+  and the note-date-contradiction feature (7b) all re-verified unaffected. All 77 existing unit checks still pass.
+
 ## Phase 7f — replanning (2026-09-18)
 - **The core rule, literally: nothing moves without approval.** `replan_sessions` now previews before it ever writes.
   First call: `src/main/replan.ts#buildReplanProposal` computes exactly what would be cleared (a plan's own future
