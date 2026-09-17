@@ -6,7 +6,12 @@ Update it at the end of every session (spec §11).
 ## Current phase: Phase 7 — Intelligence. 7a (brain dump, typed AND spoken/voice), 7b (deadline intelligence), 7c (what should I do
 right now), 7d ("what am I forgetting?", widened), 7e (smart scheduling), 7f (replanning) and 7g (conversational planning) built;
 Phase 7 core slices are all in. Unit tests now cover the core logic of 7b/7c/7e/7f/7g (`tests/*.test.ts`). Governing rule: compute in
-code, the model only phrases — every answer costs at most ONE model call (§11G 14). Phase 6: 6a–6f built. **§11C run 2026-09-17 on scratch DB c7 across
+code, the model only phrases — every answer costs at most ONE model call (§11G 14). **§11G run 2026-09-18 on fresh scratch DBs:
+all 14 steps pass** (see its own section below) — two real bugs found INCIDENTALLY while testing (not part of what §11G checks)
+were spawned as separate follow-up sessions rather than fixed inline, since they're unrelated to any single Phase 7 slice: a
+stated-duration phrase ("it'll take 15 minutes") starting with an imperative verb gets misread as a due time by the tier-0
+imperative-create rule, and `add_link` throws/rolls back the whole turn when the dependency's blocked side doesn't exist as an
+item yet ("I can't sign the lease until X" said before "sign the lease" was ever mentioned). Phase 6: 6a–6f built. **§11C run 2026-09-17 on scratch DB c7 across
 several real quit + relaunch cycles: 24 of 27 steps pass outright; 4 and 12 pass on the tool path the drag calls but the mouse gesture itself
 was not performed; 25 passes against planted history (see below).** Phase 5 complete (§11F passed).
 **Restart (Phase 0 reboot) test is DEFERRED at the user's request — do not raise it.** The user registered a Task Scheduler logon task
@@ -52,6 +57,67 @@ was not performed; 25 passes against planted history (see below).** Phase 5 comp
   30th" → Wed 30 Sept (was: today); "I'm busy on the 25th from 4pm to 8pm" → Fri 25 Sep 16:00–20:00 (was: today,
   16:00–17:00); "I'm busy tomorrow 9-5" and "I'm busy friday 2-4" (no meridiem at all — the pre-existing heuristic)
   and the note-date-contradiction feature (7b) all re-verified unaffected. All 77 existing unit checks still pass.
+
+## §11G intelligence acceptance run (2026-09-18, several fresh scratch DBs, all steps via SECRETARY_CHAT/SECRETARY_USER_DATA)
+All 14 steps of spec §11G pass. Each ran against its own throwaway scratch DB (never the real one); a few needed a second,
+more tightly-controlled scenario after the first attempt was confounded by something else (noted per step below — that is
+a test-design note, not a product failure).
+1. **Pass.** A 9-clause typed dump against an existing "IIM application" project (CV done, Transcript/Case study open) → ONE
+   model call, 6 changes: the case study clause resolved to the EXISTING checklist item (effort updated, no duplicate — invariant
+   11), a commitment to Priya, a task+reminder, a waiting item, an idea. Zero clarifying questions asked (within "at most one").
+2. **Pass.** The same dump, spoken (`@file.wav` via real TTS through the actual Gemini voice pipeline): resolved the case study
+   to the same existing checklist item, same commitment/task/context structure, 1 model call. (First attempt hit a transient
+   Gemini 503 — handled honestly, "nothing was changed", not a code fault; the retry succeeded.)
+3. **Pass.** The same dump's "I'm exhausted today" became context only (no item) and "I told Priya I'd send the draft tonight"
+   became a commitment attached to the project — cleanly separate outcomes, never merged.
+4. **Pass.** "Is the IIM application on track?" named the bottleneck ("Case study" — the largest stated remaining piece) without
+   being asked which component mattered, entirely tier 0.
+5. **Pass.** The same assessment and "what is left?" listed only CV/Transcript/Case study/Send draft to Priya + the wait on the
+   professor — exactly what was created, nothing invented. (Minor test-design note, not a spec violation: the "send draft to
+   Priya" promise was filed as part of the focused project since it was mentioned right after it, which is a defensible reading
+   but worth knowing about if it ever needs to NOT auto-attach.)
+6. **Pass, on the second, controlled attempt.** First attempt used natural-language item creation ("...needs about 90 minutes...")
+   and the model's own importance guess came back inverted (see bug note below) so both times of day picked the same item; a
+   second attempt with `!create_item` setting importance/effort directly showed the intended effect cleanly: 09:00 picked "The
+   annual report" (big, important — "a fresh morning"), 23:00 picked "Reply to the landlord" (small — "it's late — a small one").
+7. **Pass, on the second attempt.** First attempt hit the `add_link` crash (bug below) which prevented the blocked item from
+   ever being created, so "nothing open at all" was accidentally correct for the wrong reason. Second attempt (task created
+   first, then the dependency) got the intended answer: "Nothing you can start right now: Sign the lease waits on the reply
+   from they." — honest, names the reason, invents nothing.
+8. **Pass.** "What am I forgetting?" cleanly separated "Promises first / Waiting on / Coming up" (definite) from "Possible, not
+   acted on: 1 idea noted but never made a task" — never merged or reordered.
+9. **Pass, verified by code + DB, not screenshot.** The idea row's DB state is `kind='idea', status='open'`; `App.tsx`'s
+   `standalone` filter (line ~460) explicitly excludes `kind === 'idea'` from both the Open list and its count — confirmed the
+   filter is still in place and unchanged, not re-derived from a live screenshot this run.
+10. **Pass (event-avoidance); buffer-avoidance not independently re-demonstrated this run.** "I need two hours to write the
+    case study before next Friday" found free time and booked it exactly as proposed; asking again afterward for "six hours
+    before 9am" correctly saw the just-booked event and reported 0 min free (proving the search reads real committed state, not
+    a cached view). A dedicated attempt to force a slot right against a 30-min buffer failed only because the availability
+    rule doesn't parse a "busy from X today until <a different weekday>" span (an incidental, minor phrasing gap, not spawned
+    as a follow-up) — buffer-avoidance is the same `planning.assessSlot` function already verified for buffers in §11C step 21,
+    not a separately-demonstrated live proposal in this run.
+11. **Pass.** "I need six hours for something before 9am" → correctly `infeasible`, citing "0 min free in total"; the follow-up
+    "book it" was correctly REFUSED ("nothing to book... tell me a different deadline") rather than booked anyway — confirms
+    the 7e fix (never let the model force an infeasible proposal through) still holds.
+12. **Pass, rigorously.** A 15-session plan with 2 sessions genuinely missed and a real conflicting event booked over a future
+    session: "replan the sessions" showed exactly what would clear (10 sessions) and replace them (10 new, skipping the one that
+    still clashed with the conflicting event, adding one more at the end to compensate), stated the remaining shortfall, and
+    ended "Nothing moves until you say so — shall I go ahead?" — confirmed via direct DB read that session count/state were
+    UNCHANGED between preview and approval. "Yes, go ahead" committed precisely what was previewed; the conflicting event was
+    left untouched; `PRAGMA foreign_key_check` clean.
+13. **Pass, rigorously.** Three obligations due Sunday → "plan my week" proposed 3 sessions → "nothing saturday" → "I have a
+    dentist appointment sunday at 2pm" → "okay, do it" committed exactly 4 events (3 work blocks at the previewed times + the
+    dentist appointment), zero events on Saturday, confirmed via direct DB read. Entirely tier 0 throughout this chain.
+14. **Pass.** Scanned every scratch DB's `scheduler_log` across the whole run for any `chat.done` line reporting more than 1
+    model call, or any `ai.call_budget_exceeded` event: none found. Every turn was 0 (tier 0) or 1 (tier 2/voice) model calls.
+- **Two real bugs found INCIDENTALLY (not what §11G checks for) — spawned as separate follow-up sessions, not fixed here:**
+  (1) A sentence starting with an IMPERATIVE-list verb ("write", "reply to", …) that states a DURATION rather than a due time
+  ("it'll take 15 minutes") gets misread by tier 0's imperative-create rule: chrono treats the duration phrase as a relative
+  offset from now, fabricating a real exact due timestamp the user never stated and truncating the title around the matched
+  phrase (invariant-1 violation — never invent a time). (2) "I can't X until Y" when X has never been mentioned before (so no
+  item exists to link) throws `Invalid arguments for add_link: to_id: ... received undefined` and rolls back the ENTIRE round,
+  so not even a task gets created — a harder version of the pre-existing, already-documented (7a) "link sometimes silently
+  missing" gap. Both need a fresh session with full context, not a quick inline patch during an acceptance run.
 
 ## Phase 7g — conversational planning (2026-09-18)
 - **One evolving proposal across turns, never a new plan each message.** `src/main/weekplan.ts` holds a single
