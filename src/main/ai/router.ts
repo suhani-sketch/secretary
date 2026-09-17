@@ -11,6 +11,7 @@ import { detectHappeningEnd, detectHappeningStart } from '../happenings'
 import { RITUALS as RITUAL_OFFERS } from './tools'
 import { occurrencesBetween } from '../calendar'
 import { parseBareOrdinalDay } from '../ordinal-date'
+import { hasActiveWeekPlan } from '../weekplan'
 
 /** A bare "I'm making dinner": an ordinary reply, nothing created, no offer (invariant 9). */
 function plainAcknowledgement(label: string): string {
@@ -330,6 +331,39 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
       return [{ name: REPLY, args: { text: 'Okay, no reminder.' } }]
     }
     return null
+  }
+
+  // ---- conversational planning (7g): "plan my week" starts ONE evolving proposal — every rule below except the
+  //      first is gated on a draft already being open, so none of these words mean anything different in ordinary
+  //      conversation; they only take on this meaning mid-planning-session. ----
+  if (/^(?:so,? |ok,? |okay,? )?(?:please )?(?:plan (?:out |for )?my week|plan (?:out |for )?the week|help me plan (?:my|the) week|let'?s plan (?:my|the) week|plan my (?:upcoming )?week)\??$/.test(text)) {
+    return [{ name: 'plan_week', args: {} }]
+  }
+  if (hasActiveWeekPlan()) {
+    if ((m = /^(?:nothing|not|no|keep) (?:on )?(today|tomorrow|(?:this |next )?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday))(?: free| clear| off limits)?\.?$/.exec(text)) || (m = /^(today|tomorrow|(?:this |next )?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)) (?:is )?(?:off limits|out|no good|not free|blocked)\.?$/.exec(text))) {
+      const when = parseWhen(m[1])
+      const day = when ? (when.exact ? when.dateTime!.slice(0, 10) : when.date!) : null
+      if (day) return [{ name: 'refine_week_plan', args: { exclude_day_local: day } }]
+    }
+    if ((m = /^(?:i(?:'ve| have) (?:got )?|there'?s |there is |i'?ve got )(?:a |an |my |the )?(.+?) (?:on |this |next )?(today|tomorrow|(?:this |next )?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday))(?: at (.+))?\.?$/.exec(text))) {
+      const titleRaw = m[1].trim()
+      const dayWhen = parseWhen(m[2])
+      const day = dayWhen ? (dayWhen.exact ? dayWhen.dateTime!.slice(0, 10) : dayWhen.date!) : null
+      if (day && titleRaw && words(titleRaw).length) {
+        const args: Record<string, unknown> = { add_fixed_title: restoreCase(titleRaw), add_fixed_date_local: day }
+        if (m[3]) {
+          const timeWhen = parseWhen(`${m[2]} at ${m[3]}`)
+          if (timeWhen?.exact) args.add_fixed_at_local = timeWhen.dateTime
+        }
+        return [{ name: 'refine_week_plan', args }]
+      }
+    }
+    if (/^(?:okay,? |ok,? |alright,? |sure,? |yes,? )?(?:do it|go ahead|go for it|book it|make it happen|commit it|commit that|book that|do that|yes please|please do)\.?$/.test(text)) {
+      return [{ name: 'commit_week_plan', args: {} }]
+    }
+    if (/^(?:never ?mind(?: (?:that|it|the plan))?|scrap (?:that|it|the plan)|forget (?:it|that|the plan)|drop (?:it|that|the plan)|start over|cancel (?:that|the plan))\.?$/.test(text)) {
+      return [{ name: 'discard_week_plan', args: {} }]
+    }
   }
 
   // ---- living activities (Phase 5): happenings start and end here, before "done" can turn them into item completions ----

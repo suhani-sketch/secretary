@@ -13,6 +13,7 @@ import { resolveEntity, tokens } from '../entity'
 import { assessTarget, assessmentText, atRiskLines, noteDateConflicts } from '../deadlines'
 import { DEFAULT_ASSUMED_EFFORT_MIN } from '../../core/deadline'
 import { proposeSlot, describeProposal, proposalBookingArgs } from '../schedule'
+import { startWeekPlan, refineWeekPlan, commitWeekPlan, discardWeekPlan, weekPlanText } from '../weekplan'
 import { buildReplanProposal, commitReplan, plansAffectedByConstraint, replanDoneText, replanQuestion } from '../replan'
 import { recommendNowAt, recommendationText } from '../now'
 import { afterConflicts, blockingConflicts, bookingWindowForDue, conflictsFor, describeConflict, describeConstraint } from '../planning'
@@ -214,6 +215,17 @@ export const toolSchemas = {
   recommend_now: z.object({
     at_local: localDateTime.optional().describe('Normally omitted (= now). A clock to reason as if it were that time — used for testing the 9 am vs 11 pm difference.')
   }),
+  plan_week: z.object({}).describe('Start a FRESH week plan. Only ever call this on "plan my week" / "help me plan my week" — never to refine an existing one.'),
+  refine_week_plan: z
+    .object({
+      exclude_day_local: localDate.optional().describe('"nothing Tuesday" / "keep Saturday free" → the day to keep clear.'),
+      add_fixed_title: z.string().max(200).optional().describe('Something real the user mentioned that will also take up time this week ("a presentation", "dentist").'),
+      add_fixed_date_local: localDate.optional().describe('The day it falls on. Required together with add_fixed_title.'),
+      add_fixed_at_local: localDateTime.optional().describe('The exact time, ONLY if the user stated one. Omitted → the whole day is kept clear for it, since the time is not known.')
+    })
+    .refine((v) => !!v.exclude_day_local || (!!v.add_fixed_title && !!v.add_fixed_date_local), 'Give exclude_day_local, or add_fixed_title with add_fixed_date_local'),
+  commit_week_plan: z.object({}).describe('Only after the user has clearly approved the CURRENT proposal ("okay, do it" / "go ahead" / "book it").'),
+  discard_week_plan: z.object({}).describe('The user wants to abandon the current week-plan draft without booking anything ("never mind", "scrap that", "start over").'),
   propose_slot: z.object({
     title: z.string().min(1).max(200).describe('What the time is for, in the user\'s words.'),
     minutes: z.number().int().min(5).max(24 * 60).optional().describe('How long it needs, ONLY if the user said so. Omit to use the matched item\'s own effort figure, or a labelled assumption.'),
@@ -395,6 +407,10 @@ const descriptions: Record<ToolName, string> = {
   update_event: 'Move or change an existing event ("move it to 4", "make it an hour"). For one occurrence of a recurring series pass occurrence_start_local.',
   delete_event: 'Cancel an event ("cancel the meeting") or skip one occurrence of a series.',
   propose_slot: 'Smart scheduling (7e): "I need two hours for the case study before Friday", "find me time to write the draft by tomorrow". The APP searches the real calendar (events, unavailable constraints, buffers) and grades what it finds feasible, tight, or infeasible — it NEVER books anything itself. Relay its text; if the user then says to book it, call create_event with exactly the time it proposed.',
+  plan_week: '"Plan my week" (7g) — starts ONE evolving proposal. The app gathers this week\'s unplaced obligations and proposes real times for them, grading each. Books NOTHING. Relay its text.',
+  refine_week_plan: 'A modification to the CURRENT week-plan proposal ("nothing Tuesday", "keep Saturday free" → exclude_day_local; "I have a presentation Thursday" → add_fixed_title/date/time). The whole proposal is recomputed and re-shown; still books nothing. Only valid while a plan_week proposal is open.',
+  commit_week_plan: 'Books the CURRENT week-plan proposal exactly as last shown — only once the user has clearly said to go ahead. Never call this on the same turn as plan_week or a refinement; the user must see the proposal first.',
+  discard_week_plan: 'Abandons the current week-plan draft. Nothing was ever booked, so there is nothing to undo.',
   recommend_now: '"What should I do right now / next?" (7c). The APP ranks every open thing by urgency, importance, hardness, overdue state, blockers, the free time before the next fixed thing, effort, today\'s context and commitments, and names ONE action with its reason (or says honestly that nothing can start). Relay its text; never produce your own list.',
   assess_deadline: 'Deadline intelligence (7b): "is the TISS mailing on track?", "what\'s the bottleneck?", "can I still make Friday?". The APP computes what remains, what blocks what, the bottleneck and feasibility from the user\'s own parts and links — you only relay its text. Never add a component the user did not state.',
   ask_clarification: 'Brain dumps (7a): ask the ONE clarifying question that would change an action, alongside the tool calls for every clear part of the message. Only one per message is ever asked; never use it instead of acting, never for wording or priority.',
@@ -449,6 +465,8 @@ const WRITE_TOOLS: ReadonlySet<string> = new Set([
   'pause_plan',
   'mark_session',
   'replan_sessions',
+  'commit_week_plan',
+  'discard_week_plan',
   'add_buffer',
   'add_link',
   'remove_link',
@@ -1073,6 +1091,41 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const movedGone = doomed.filter((e) => !e.rrule).length
       const detail = seriesInvolved ? ` — the whole series${movedGone ? ` and ${plural(movedGone, 'moved occurrence')}` : ''}` : ''
       return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Cancelled "${ev.title}"${detail}. Nothing else was touched.` } }
+    }
+    case 'plan_week': {
+      // 7g: always a FRESH draft — "plan my week" is never a refinement of whatever was open before.
+      const summary = startWeekPlan()
+      return { result: { text: weekPlanText(summary) } }
+    }
+    case 'refine_week_plan': {
+      const x = a as z.infer<typeof toolSchemas.refine_week_plan>
+      const zone = DateTime.local().zoneName
+      let op: Parameters<typeof refineWeekPlan>[0]
+      if (x.exclude_day_local) op = { excludeDayLocal: x.exclude_day_local }
+      else {
+        const startsAtUtc = x.add_fixed_at_local ? repo.localToUtc(x.add_fixed_at_local) : DateTime.fromISO(x.add_fixed_date_local!, { zone }).startOf('day').toUTC().toISO()!
+        const endsAtUtc = x.add_fixed_at_local
+          ? DateTime.fromISO(startsAtUtc, { zone: 'utc' }).plus({ hours: 1 }).toISO()!
+          : DateTime.fromISO(x.add_fixed_date_local!, { zone }).endOf('day').toUTC().toISO()!
+        op = { addFixed: { title: x.add_fixed_title!, startsAtUtc, endsAtUtc, allDay: !x.add_fixed_at_local } }
+      }
+      const summary = refineWeekPlan(op)
+      if (!summary) throw new ToolValidationError('No week plan is in progress — say "plan my week" to start one.')
+      return { result: { text: weekPlanText(summary) } }
+    }
+    case 'commit_week_plan': {
+      const res = commitWeekPlan()
+      if (!res) throw new ToolValidationError('No week plan is in progress — there is nothing to book')
+      const text = weekPlanText(res.summary, true)
+      act({ targetType: 'action', targetId: `week-plan-${Date.now()}`, verb: 'created', summary: `Week plan committed: ${res.createdEvents} event${res.createdEvents === 1 ? '' : 's'}`, reversible: false })
+      return { result: { ok: true, created: res.createdEvents }, applied: { tool: name, summary: `Week plan · ${res.createdEvents} events booked`, phrase: text } }
+    }
+    case 'discard_week_plan': {
+      const had = discardWeekPlan()
+      return {
+        result: { ok: true, discarded: had },
+        applied: had ? { tool: name, summary: 'Week plan discarded', phrase: 'Okay — scrapped that plan. Nothing was booked.' } : { tool: name, summary: 'No plan open', phrase: 'There was no plan in progress to discard.' }
+      }
     }
     case 'propose_slot': {
       const x = a as z.infer<typeof toolSchemas.propose_slot>

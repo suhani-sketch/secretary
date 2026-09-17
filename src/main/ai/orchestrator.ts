@@ -57,6 +57,12 @@ Smart scheduling (7e) — "I need two hours for the case study before Friday", "
 
 Replanning (7f) — "replan the study sessions", "catch up the plan", or after a session was just marked missed / a new unavailability now clashes with one: call replan_sessions. The app computes remaining workload against remaining capacity and previews EXACTLY what would be cleared and what would replace it, graded, never proposing a slot that clashes with something already on the calendar — then it asks. It is handled for you deterministically after that: a plain yes replays it with confirmed=true, a no changes nothing. Never call replan_sessions with confirmed=true yourself on the first mention — the preview always comes first, and nothing on the plan's own sessions moves without the user having seen it and said yes. Only this plan's own future sessions ever move; every other commitment on the calendar is untouched (invariant 10).
 
+Conversational planning (7g) — ONE evolving proposal across turns, never a new plan on every message:
+- "Plan my week" / "help me plan my week" → plan_week. Starts a FRESH proposal from this week's unplaced obligations, computed and graded by the app; relay its text. Books nothing.
+- While that proposal is open, each further instruction REFINES the SAME proposal via refine_week_plan — never plan_week again (that would throw the proposal away and start over, which is exactly what this phase says not to do). "Nothing Tuesday" / "keep Saturday free" → exclude_day_local. "I have a presentation Thursday" (with or without a time) → add_fixed_title/add_fixed_date_local/add_fixed_at_local. Each refinement RECOMPUTES the whole proposal and shows the new consequences — relay that text plainly; do not summarise it yourself or claim anything is booked.
+- Only once the user has clearly approved what was just shown ("okay, do it", "go ahead", "book it") → commit_week_plan. It books exactly what was last shown, nothing more, nothing the user has not seen. If they abandon it instead ("never mind", "scrap that", "start over") → discard_week_plan, then a later "plan my week" starts clean.
+- Never call commit_week_plan on the same message as plan_week or a refinement — the user must see the proposal before approving it, even when they seem to want everything done at once ("plan my week and just do it") — show the proposal in your reply first; only the FOLLOWING message, once they confirm, commits.
+
 Deadlines (7b) — computed, never weighed by you:
 - "Is X on track?", "what's the bottleneck?", "can I still make Friday?", "how is X looking?" → assess_deadline (or get_project for a dated Thing). The app reasons back from the deadline over the user's OWN parts and blocks links: what remains, what is blocked by what, the bottleneck, whether it is still feasible given the free time left. Relay its text; do not re-rank or second-guess it.
 - Never invent a component. If the parts listed seem incomplete, the app already says "that is everything you have listed — tell me if there are more parts"; do not add steps the user never mentioned.
@@ -124,6 +130,20 @@ const NOTE_TRANSCRIPT_TOOL = {
   name: 'note_transcript',
   description: 'Voice only, mandatory, call first: the verbatim transcript of what the user said this turn.',
   parameters: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }
+}
+
+/**
+ * 7g guard, enforced in code rather than trusted to the prompt: a proposal must be SEEN (returned as text) before it
+ * can be approved, so committing it can never happen in the same round that just generated or changed it — the model
+ * cannot approve on the user's behalf within its own turn. If both appear together, the commit is dropped and logged;
+ * the proposal still goes out, and the user gets a real chance to say yes before anything is booked.
+ */
+function stripPrematureWeekPlanCommit(calls: ToolCall[]): ToolCall[] {
+  const sawProposal = calls.some((c) => c.name === 'plan_week' || c.name === 'refine_week_plan')
+  if (!sawProposal) return calls
+  const out = calls.filter((c) => c.name !== 'commit_week_plan')
+  if (out.length !== calls.length) log('warn', 'ai.weekplan_premature_commit', 'dropped a commit_week_plan called in the same round as the proposal it would be approving')
+  return out
 }
 
 export interface OrchestratorDeps {
@@ -221,7 +241,7 @@ async function handleChat(deps: OrchestratorDeps, rawText: string): Promise<Chat
       // 7a: at most ONE clarifying question per message. It rides alongside the actions in the same response; the
       // clear parts are applied, the question is appended. Extra questions are dropped (and logged), never asked.
       const asks = res.toolCalls.filter((c) => c.name === 'ask_clarification')
-      const calls = res.toolCalls.filter((c) => c.name !== 'ask_clarification')
+      const calls = stripPrematureWeekPlanCommit(res.toolCalls.filter((c) => c.name !== 'ask_clarification'))
       const question = asks.length ? String((asks[0].args as { question?: string }).question ?? '').trim() : ''
       if (asks.length) repo.insertExtraction(userMessage.id, JSON.stringify(asks.map((c) => ({ name: c.name, args: c.args }))), true, asks.length > 1 ? `${asks.length - 1} extra question(s) dropped — one per message` : null)
       if (asks.length > 1) log('warn', 'ai.clarify_capped', `${asks.length} clarifying questions proposed; asked the first only`)
@@ -332,7 +352,7 @@ async function handleVoice(deps: OrchestratorDeps, audio: { base64: string; mime
     userMessage.content = transcript ? `🎙️ ${transcript}` : '🎙️ (nothing heard)'
     repo.updateMessageContent(userMessage.id, userMessage.content)
     const asks = res.toolCalls.filter((c) => c.name === 'ask_clarification')
-    const calls = res.toolCalls.filter((c) => c.name !== 'note_transcript' && c.name !== 'ask_clarification')
+    const calls = stripPrematureWeekPlanCommit(res.toolCalls.filter((c) => c.name !== 'note_transcript' && c.name !== 'ask_clarification'))
     const question = asks.length ? String((asks[0].args as { question?: string }).question ?? '').trim() : ''
     log(
       'info',
@@ -519,7 +539,7 @@ function phraseReadResults(results: ToolResult[]): string | null {
         // Kept visibly apart: possible things never silently become tasks, and this tool never creates anything either way.
         if (possibleBits.length) lines.push(`Possible, not acted on: ${possibleBits.join('; ')}.`)
       }
-    } else if (r.name === 'propose_slot') {
+    } else if (r.name === 'propose_slot' || r.name === 'plan_week' || r.name === 'refine_week_plan') {
       const t = (res as { text?: string }).text
       if (t) lines.push(t)
     } else if (r.name === 'recommend_now') {

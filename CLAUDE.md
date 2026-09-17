@@ -4,8 +4,8 @@ Source of truth for the design is `SPEC.md`. This file tracks where the build ac
 Update it at the end of every session (spec §11).
 
 ## Current phase: Phase 7 — Intelligence. 7a (brain dump, typed AND spoken/voice), 7b (deadline intelligence), 7c (what should I do
-right now), 7d ("what am I forgetting?", widened), 7e (smart scheduling) and 7f (replanning) built; 7g not started. Unit tests now
-cover the core logic of 7b/7c/7e/7f (`tests/*.test.ts`). Governing rule: compute in
+right now), 7d ("what am I forgetting?", widened), 7e (smart scheduling), 7f (replanning) and 7g (conversational planning) built;
+Phase 7 core slices are all in. Unit tests now cover the core logic of 7b/7c/7e/7f/7g (`tests/*.test.ts`). Governing rule: compute in
 code, the model only phrases — every answer costs at most ONE model call (§11G 14). Phase 6: 6a–6f built. **§11C run 2026-09-17 on scratch DB c7 across
 several real quit + relaunch cycles: 24 of 27 steps pass outright; 4 and 12 pass on the tool path the drag calls but the mouse gesture itself
 was not performed; 25 passes against planted history (see below).** Phase 5 complete (§11F passed).
@@ -52,6 +52,79 @@ was not performed; 25 passes against planted history (see below).** Phase 5 comp
   30th" → Wed 30 Sept (was: today); "I'm busy on the 25th from 4pm to 8pm" → Fri 25 Sep 16:00–20:00 (was: today,
   16:00–17:00); "I'm busy tomorrow 9-5" and "I'm busy friday 2-4" (no meridiem at all — the pre-existing heuristic)
   and the note-date-contradiction feature (7b) all re-verified unaffected. All 77 existing unit checks still pass.
+
+## Phase 7g — conversational planning (2026-09-18)
+- **One evolving proposal across turns, never a new plan each message.** `src/main/weekplan.ts` holds a single
+  module-level draft (`fromUtc`/`untilUtc`/`excludedDays`/`fixed`/`obligationIds`, captured once at "plan my week" so the
+  target list doesn't drift mid-conversation while each item's own due date/effort/title is still re-read fresh on every
+  recompute). "Plan my week" (`startWeekPlan`) always starts a FRESH draft from this week's real unscheduled obligations
+  (due within 14 days, per `repo.unscheduledObligations`), superseding whatever was open. Every further instruction
+  REFINES the same draft (`refineWeekPlan`) — exclude a day, or add something the user mentioned as a `FixedCommitment`
+  (with or without a time; no time given → the whole day is kept clear for it, since the time isn't known) — and
+  recomputes the WHOLE placement from scratch each time (cheap enough not to bother diffing). Only `commit_week_plan`
+  writes anything, and only once the user has clearly approved what was just shown.
+- **`src/core/weekplan.ts`** (platform-independent, no Electron/SQLite/model): `planWeek` is a simple greedy pass — most
+  urgent obligation first (sorted by due date in the glue layer), earliest free slot via 7e's own `core/schedule.ts#
+  findFreeWindows`, reserve it, move on, so the next obligation can never land on the same time. A due date bounds the
+  search to strictly before it (an obligation is never placed "on time" after its own deadline has passed); an
+  obligation already overdue is never searched for at all. Grading a placement (clear/tight/poor) is `planning.assessSlot`
+  's job in the glue layer, exactly as in 7e/7f — duplicating it in core would be the "computation in the wrong place"
+  mistake spec §8 warns against. `summarizeWeekPlan`/`describeWeekPlan` turn a graded placement list into the one honest
+  sentence: "Proposed"/"Booked" verb, each placed session named with its grade suffix when not clear, unplaced items
+  named plainly ("Could not fit …"), excluded-day count, fixed-thing count, and a trailing "say what to change, or 'do
+  it' to commit — nothing is booked yet" only while it is still a live proposal, never once committed.
+- **Compute, then phrase, one model call:** `plan_week`/`refine_week_plan` are read-classified tools — the orchestrator's
+  `phraseReadResults` relays their computed text verbatim, never a second call. `commit_week_plan`/`discard_week_plan`
+  are write tools going through the usual confirm/apply path. Router (tier 0, gated correctly so these phrases mean
+  nothing different in ordinary conversation): "plan my week" → `plan_week`; then, ONLY while a draft is open
+  (`hasActiveWeekPlan`) — "nothing/keep <day> free", "<day> is off limits" → `exclude_day_local`; "I have/there's a
+  <thing> on/this <day> [at <time>]" → `add_fixed_title`/`add_fixed_date_local`/`add_fixed_at_local`; "do it/go ahead/
+  book it" → `commit_week_plan`; "never mind/scrap that/start over" → `discard_week_plan`.
+- **A proposal must be SEEN before it can be approved — enforced in code, not just the prompt.**
+  `orchestrator.ts#stripPrematureWeekPlanCommit` drops any `commit_week_plan` call that arrives in the SAME tool round as
+  `plan_week`/`refine_week_plan` (logs `ai.weekplan_premature_commit`): even if the model tries to satisfy "plan my week
+  and just do it" in one round, the proposal still goes out and the user gets a real turn to approve or redirect before
+  anything is booked. `commitWeekPlan` also re-grades everything ONE more time at commit (time may have passed, or
+  something else got booked meanwhile) and silently drops — never books over — anything that is now graded `hard`,
+  reporting it as unplaced instead.
+- **Real bug found and fixed via live testing:** a day-only due date is stored as that day's local MIDNIGHT (its start,
+  per spec §2 honest precision). `planWeek`'s search cutoff used that raw timestamp directly as the bound, which meant
+  "due Sept 20" excluded ALL of Sept 20 from the search — the deadline is literally the day's first instant. Symptom:
+  "could not fit ANY of the 3 obligations anywhere" when the due day alone should have had capacity. Fixed by
+  `main/weekplan.ts#effectiveDueUtc`: non-`exact` precision now searches up to END of the due day (23:59:59 local), not
+  its start.
+- **Verified live, end-to-end, on a scratch DB** (`SECRETARY_USER_DATA`), the exact spec chain: "plan my week" (proposed
+  sessions avoiding a fully-busy Friday) → "nothing saturday" (recomputed, moved everything to Sunday) → "I have a
+  presentation sunday at 3pm" (recomputed again: 2 of 3 items fit around it, 1 honestly reported unplaced) → "okay, do
+  it" (committed EXACTLY what was previewed — 2 work-block events + 1 presentation event, 3 total; the unplaced item
+  stayed unplaced, not silently booked). Confirmed via direct SQLite inspection that DB state matched the preview
+  exactly, `PRAGMA foreign_key_check` clean. Also verified: "never mind" discards with zero events created; "do it" or
+  "nothing tuesday" with no active draft falls through cleanly (no draft → the model gets a plain error, nothing crashes);
+  the code-level guard against same-round commit.
+- **Unit tests** (`tests/weekplan.test.ts`, 13 checks): basic placement, no double-booking, spillover to the next day, a
+  due date bounding the search, an already-overdue obligation never searched, nowhere workable before deadline reported
+  honestly, an excluded day genuinely cleared, a fixed commitment blocking exactly its own window (timed and all-day),
+  the summarize/describe split, and that an assumed effort is never quoted as the user's own figure. One test-authoring
+  mistake caught by actually running it: a scenario had the busy window run right up to `workEndHour` itself, leaving no
+  free time within working hours regardless of the due date — not a product bug, just an unrealistic fixture; fixed by
+  moving the busy window's end inside the work day.
+- **Node tooling gotcha, worth remembering:** `core/weekplan.ts` is the first `core/*.ts` module tested via plain `node`
+  that itself imports ANOTHER core module (`./schedule`, extensionless — matching the same convention every other
+  core file already uses, e.g. `core/plans.ts` → `./recurrence`). That convention is required for the real app's
+  Vite/tsc "Bundler" resolution, but Node's own native TypeScript type-stripping does NOT auto-append `.ts` to an
+  unresolved relative specifier the way a bundler does — every previously-tested core file was a "leaf" only importing
+  `luxon`, so this never came up before. Changing the import to `.ts` breaks `tsc` (`TS5097`); changing it to `.js`
+  (the NodeNext convention) satisfies `tsc`/Vite but Node's runtime then looks for a literal `schedule.js` that doesn't
+  exist. Fixed WITHOUT touching the source convention: `tests/_ts_ext_loader.mjs`, a tiny Node ESM `resolve` hook that
+  retries a failed relative import with `.ts` appended, registered (`node:module#register`) only inside
+  `weekplan.test.ts` itself before a dynamic `await import(...)` of the module under test; ordinary type-only imports
+  (`import type {...}`) are elided by type-stripping and need no such help. Reusable verbatim if a future core module
+  ever imports another one.
+- Not exercised: the model's own free-text phrasing of `plan_week`/`refine_week_plan` results when the tier-0 router
+  phrases don't match (the read-tool text is still relayed verbatim either way — untested is only whether the model
+  reliably calls the right tool from looser phrasing, not whether the computed text itself is ever altered); a
+  multi-week horizon (only "this week", per week-start setting, is in scope); refining with a fixed-commitment time that
+  itself conflicts with something already placed (recompute handles it structurally but wasn't specifically probed).
 
 ## Phase 7f — replanning (2026-09-18)
 - **The core rule, literally: nothing moves without approval.** `replan_sessions` now previews before it ever writes.
