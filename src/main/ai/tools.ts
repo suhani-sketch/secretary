@@ -140,11 +140,14 @@ export const toolSchemas = {
     .refine((v) => [v.item_id, v.item_title, v.reminder_id, v.event_id, v.date_local].filter(Boolean).length === 1, 'Give exactly one target: item_id, item_title, reminder_id, event_id or date_local'),
   add_link: z
     .object({
-      from_id: idRef.describe('For type blocks: the item that must be done FIRST (the blocker).'),
-      to_id: idRef.describe('For type blocks: the item that cannot proceed until then.'),
+      from_id: idRef.optional().describe('For type blocks: the item that must be done FIRST (the blocker), by id — only when it is already a known item/wait.'),
+      from_title: z.string().max(200).optional().describe('The blocker as the user named it, when it has not been mentioned before ("the landlord signs off" is usually an existing wait instead — use from_id for that). Give from_id OR from_title, never both. The app resolves it against what already exists, or creates a plain task for it if nothing matches — never guess an id.'),
+      to_id: idRef.optional().describe('For type blocks: the item that cannot proceed until then, by id — only when it is already a known item.'),
+      to_title: z.string().max(200).optional().describe('The blocked thing as the user named it, when it has not been mentioned before. Give to_id OR to_title, never both. This is the common case for "I can\'t do Y until X": Y is usually new — use to_title for it rather than inventing an id. The app resolves it against what already exists, or creates a plain task for it if nothing matches.'),
       type: z.enum(['blocks', 'relates_to']).default('blocks')
     })
-    .refine((v) => v.from_id !== v.to_id, 'An item cannot depend on itself'),
+    .refine((v) => !!v.from_id !== !!v.from_title, 'Give exactly one of from_id or from_title')
+    .refine((v) => !!v.to_id !== !!v.to_title, 'Give exactly one of to_id or to_title'),
   remove_link: z.object({ from_id: idRef, to_id: idRef, type: z.enum(['blocks', 'relates_to']).default('blocks') }),
   add_constraint: z
     .object({
@@ -393,7 +396,7 @@ const descriptions: Record<ToolName, string> = {
   detach_from_project: 'Take an item out of its project.',
   get_project: 'Read one project: its fields, parts and history. Use for "what is left?" / "what have I done for X?".',
   add_note: 'Attach a note to an item, project, reminder or day. "Add a note to the application that the transcript must be a PDF" → item_title "application". "I\'ll be travelling Friday" → date_local. Notes are information, never tasks.',
-  add_link: 'Record a dependency: from_id blocks to_id ("I can\'t send the mailing until the list is cleaned" → the list-cleaning item blocks the mailing item). Blocked status is then computed by the app.',
+  add_link: 'Record a dependency: from blocks to ("I can\'t send the mailing until the list is cleaned" → the list-cleaning item blocks the mailing item). Blocked status is then computed by the app. Use from_id/to_id for something already known (an id from the context); use from_title/to_title for something named for the first time in this same message — never invent an id for a thing that does not exist yet, the app resolves or creates it.',
   remove_link: 'Remove a dependency.',
   add_constraint: 'Record when the user is unavailable or prefers/avoids a time ("I\'m busy tomorrow afternoon", "travelling Friday", "no mornings", "class every Tuesday 2–5"). Used to detect conflicts when booking.',
   remove_constraint: 'Remove an availability constraint ("I\'m free tomorrow afternoon after all").',
@@ -790,8 +793,31 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
     }
     case 'add_link': {
       const x = a as z.infer<typeof toolSchemas.add_link>
-      const from = repo.getItem(repo.resolveItemId(x.from_id))!
-      const to = repo.getItem(repo.resolveItemId(x.to_id))!
+      // A side named for the first time ("I can't sign the lease until X" when "sign the lease" was never mentioned
+      // before) has no id the model could possibly know — asking it to invent one is how this used to crash (an
+      // undefined to_id, or the same id reused on both sides). Resolve the title against what already exists (any
+      // open item or wait), or create a plain task for it (invariant-11 style: resolve before creating), so a
+      // dependency clause always lands somewhere real in this one round, never nothing at all.
+      const resolveSide = (id: string | undefined, title: string | undefined, projectHint: string | null): Item => {
+        if (id) return repo.getItem(repo.resolveItemId(id))!
+        const pool = repo.openItems(500).filter((i) => i.kind !== 'project')
+        const res = resolveEntity(title!, pool, getFocus().map((f) => f.itemId))
+        if (res.kind === 'match') return res.entity
+        const cleanTitle = capital(title!.trim())
+        const created = repo.insertItem({
+          kind: 'task',
+          title: cleanTitle,
+          importance: inferImportance({ title: cleanTitle, kind: 'task', details: null, hardness: null, daysToDue: null }),
+          sourceMsgId: ctx.sourceMsgId
+        })
+        if (projectHint) repo.setParentProject(created.id, projectHint)
+        const project = projectHint ? repo.getItem(projectHint) : null
+        act({ targetType: 'item', targetId: created.id, projectId: projectHint, verb: 'created', summary: `Created task "${created.title}"${project ? ` (part of "${project.title}")` : ''}`, after: created })
+        return created
+      }
+      const from = resolveSide(x.from_id, x.from_title, null)
+      const to = resolveSide(x.to_id, x.to_title, repo.parentProjectOf(from.id)?.id ?? null)
+      if (from.id === to.id) throw new Error('An item cannot depend on itself')
       if (x.type === 'blocks' && repo.hasLink(to.id, from.id, 'blocks')) throw new Error(`"${to.title}" already blocks "${from.title}" — that would be circular`)
       const added = repo.addLink(from.id, to.id, x.type)
       if (!added) throw new Error(`That link already exists`)

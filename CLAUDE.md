@@ -9,10 +9,10 @@ Phase 7 core slices are all in. Unit tests now cover the core logic of 7b/7c/7e/
 code, the model only phrases — every answer costs at most ONE model call (§11G 14). **§11G run 2026-09-18 on fresh scratch DBs:
 all 14 steps pass** (see its own section below) — two real bugs found INCIDENTALLY while testing (not part of what §11G checks)
 were spawned as separate follow-up sessions rather than fixed inline at the time, since they're unrelated to any single Phase 7
-slice: a stated-duration phrase ("it'll take 15 minutes") starting with an imperative verb was misread as a due time by the
-tier-0 imperative-create rule (now FIXED, see its own section below), and `add_link` still throws/rolls back the whole turn when
-the dependency's blocked side doesn't exist as an item yet ("I can't sign the lease until X" said before "sign the lease" was
-ever mentioned — not yet fixed). Phase 6: 6a–6f built. **§11C run 2026-09-17 on scratch DB c7 across
+slice; both are now FIXED (see their own sections below): a stated-duration phrase ("it'll take 15 minutes") starting with an
+imperative verb was misread as a due time by the tier-0 imperative-create rule, and `add_link` threw and rolled back the whole
+turn when the dependency's blocked side didn't exist as an item yet ("I can't sign the lease until X" said before "sign the
+lease" was ever mentioned). Phase 6: 6a–6f built. **§11C run 2026-09-17 on scratch DB c7 across
 several real quit + relaunch cycles: 24 of 27 steps pass outright; 4 and 12 pass on the tool path the drag calls but the mouse gesture itself
 was not performed; 25 passes against planted history (see below).** Phase 5 complete (§11F passed).
 **Restart (Phase 0 reboot) test is DEFERRED at the user's request — do not raise it.** The user registered a Task Scheduler logon task
@@ -92,6 +92,51 @@ was not performed; 25 passes against planted history (see below).** Phase 5 comp
   (stored as low) in both the original repro and this fix's regression run — a separate, pre-existing, likely
   model-judgement issue (or an `inferImportance` HIGH-regex gap: it matches the word "important" but not "importance"),
   out of scope for this ticket; worth a dedicated look if it recurs.
+
+## Fixed: `add_link` crashed when the blocked/blocker side didn't exist as an item yet (2026-09-18)
+- Found incidentally while running the §11G acceptance test, not part of what it checks: "They said they'll get back to
+  me about the lease once the landlord signs off." correctly created a waiting item; "I can't sign the lease until they
+  get back to me." — said when "sign the lease" had never been mentioned before — THREW and rolled back the entire
+  round (`Invalid arguments for add_link: to_id: Invalid input: expected string, received undefined`, or on a repeat run,
+  `An item cannot depend on itself`), so not even a "Sign the lease" task got created. Workaround verified at the time:
+  creating the task first, THEN stating the dependency, worked fine.
+- Root cause: `add_link`'s schema (`tools.ts`) required a real `from_id`/`to_id` for BOTH sides, but the model has no way
+  to know an id for something that doesn't exist as an item yet — tool calls in one round are all decided in a single
+  model generation, before any tool has run, so it cannot first call `create_item` and then use the id THAT returns in
+  the same response. Two prompt sections (orchestrator.ts's "Brain dumps (7a)" clause list and the Phase 3f "Dependencies"
+  line) told the model to call `add_link` directly with no instruction covering this case, so it either omitted the id
+  (`undefined` → Zod throws) or, worse, reused an id it did have — the wait's own — for both sides, tripping the
+  self-dependency guard instead. This is a harder version of a softer, already-documented 7a gap ("the 'can't book
+  until the dept confirms' clause became a wait but no blocks link on the first run") — same root cause (a side named
+  for the first time has no id yet), just without the earlier gap's silent-omission mercy.
+- Fixed the way `add_note`'s `item_title` already solves the identical problem for its own target, but taken one step
+  further: `add_link` now accepts `from_title`/`to_title` as an alternative to `from_id`/`to_id` on EITHER side
+  (schema `.refine`s require exactly one of the pair per side). The case implementation (`resolveSide` in the `add_link`
+  case) resolves a title against everything open (any kind except `project`, so a title can land on an existing item OR
+  an existing wait) via the same `resolveEntity` used elsewhere; on no confident match it creates a plain task instead —
+  invariant-11 "resolve before creating," but creating rather than erroring is the deliberate difference from
+  `add_note`'s behaviour, since here nothing else can serve as the link's target. A newly-created side inherits the
+  OTHER (already-resolved) side's project, if it has one. The prompt (both sections above) now tells the model to use
+  `from_title`/`to_title` for anything not already known, and explicitly never to invent an id or call
+  `create_item`/`create_waiting` first just to get one.
+- The self-dependency and circular-link guards (already existing) still run AFTER both sides resolve, so they still
+  work correctly even when a title-based resolution on one side happens to land on what the other side just became —
+  verified live: "I can't sign the lease until I sign the lease" (title never seen before, identical on both sides)
+  rolled back to a completely empty database, no orphan task left behind, because the whole round (including the first
+  side's own `insertItem`) sits inside ONE SQLite transaction that the self-dependency error unwinds in full — the
+  atomic all-or-nothing write-round guarantee (spec invariant 4) was not weakened by this fix, only the case that used
+  to fail before ever reaching a real write now succeeds.
+- Verified live on scratch DBs: the exact repro now succeeds in ONE model call, ONE round — "sign the lease" is created
+  (capitalised via the existing `capital` helper, matching every other task's convention) and correctly linked as
+  blocked by the existing wait, confirmed directly against `items`/`links`/`PRAGMA foreign_key_check`. Regression:
+  "I can't send the mailing until the list is cleaned" correctly resolved "the mailing" to an EXISTING task rather than
+  creating a duplicate (title-resolution reuses existing items exactly as intended, not just the "doesn't exist" path);
+  the self-dependency guard still refuses "I can't sign the lease until I sign the lease" against an existing item too.
+  All existing unit tests still pass (same pre-existing, unrelated `recurrence.test.ts` failure as noted above).
+- Not touched: the softer 7a-documented gap this supersedes can be considered closed by this fix (the underlying cause
+  — a side with no id yet — is the same one); no separate note was kept for it. `remove_link` still requires real ids
+  on both sides (unchanged) — unlinking only makes sense for a link that already exists, so there is nothing to resolve
+  or create there.
 
 ## §11G intelligence acceptance run (2026-09-18, several fresh scratch DBs, all steps via SECRETARY_CHAT/SECRETARY_USER_DATA)
 All 14 steps of spec §11G pass. Each ran against its own throwaway scratch DB (never the real one); a few needed a second,
@@ -532,7 +577,9 @@ a test-design note, not a product failure).
   listed promise → waits → coming up and reflected the exhaustion. §11G 1 and 3 exercised (typed); 2 (spoken) is later.
 - Seen: "remind me thursday evening" on a Thursday after midnight → the model chose NEXT Thursday (ambiguous; left). The
   "can't book until the dept confirms" clause became a wait but no `blocks` link on the first run — prompt now spells out
-  wait + link together; re-verify.
+  wait + link together; re-verify. **Superseded 2026-09-18: root cause identified and fixed (`add_link` now accepts
+  `from_title`/`to_title` for a side with no id yet, see "Fixed: `add_link` crashed …" below) — this was the same gap,
+  just without the throw a slightly different repro phrasing later exposed.**
 
 ## Light / dark mode (2026-09-17)
 - Every colour the UI uses is a Tailwind theme variable: `@theme` in `styles.css` names the palette (`cocoa`, `cream`, `accent`,
