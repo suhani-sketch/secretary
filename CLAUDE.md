@@ -26,6 +26,42 @@ was not performed; 25 passes against planted history (see below).** Phase 5 comp
   imports repo and moves to core when 6f touches it.
 - **Migration 7:** `plans` table; `events.plan_id`, `events.session_state`; index on `events.starts_at_utc`.
 
+## Unit tests for 7c/7b/7e core logic (2026-09-18)
+- `tests/now.test.ts` (29 checks), `tests/deadline.test.ts` (26), `tests/schedule.test.ts` (10) — same convention as
+  `tests/recurrence.test.ts`/`entity.test.ts`: plain Node type-stripping, no build step, no framework. Run individually:
+  `node tests/now.test.ts` / `deadline.test.ts` / `schedule.test.ts`. Not wired into `tsconfig.*.json` (same as the
+  existing two) or any `npm test` script — there isn't one yet; worth adding a `test` script that runs all five in a row.
+- **now.test.ts**: `bandFor` hour boundaries and that a zone conversion actually happens (not just the raw UTC hour);
+  ranking order (overdue > promise; ideas ranked-but-penalised, never silently dropped, unlike project/waiting/note
+  which never enter ranking at all); the unblocks score cap at 3 vs. the wording still reporting the true count;
+  blockers → excluded with the exact reason, never picked; attendance-style titles and fixed-time-far-out both excluded
+  as "not work to start"; day-precision items are never "fixed" regardless of wording; the in-a-meeting ≤10 min rule;
+  every free-window branch (<15 min hard cutoff, fits/doesn't-fit, the >180 min "fits in" phrase is suppressed as
+  noise); night/morning/evening weighting; low-energy weighting and its sentence; a running work block always wins;
+  the 12-point alternatives window; the "nothing at all" / "nothing in this meeting" honesty paths; assumed effort is
+  never called "your figure".
+- **deadline.test.ts**: `hoursText` formatting; `waitLabel`; all seven `Feasibility` values including the two distinct
+  routes into `tight` (plain ratio > 0.6 vs. a long dependent chain with a real test proving the CHAIN-specific branch
+  and its wording actually fire, not just that the ratio also happened to qualify); a done blocker no longer blocks;
+  `unscheduled`/`startable`/`blocked` set membership; waits never counted toward `total`/`done`; the full bottleneck
+  priority order (a gating wait > a gating step > the largest STATED piece > null when nothing stated/nothing gates,
+  including the "one lone piece is never its own bottleneck" edge case); assumed-vs-stated effort wording ("all of
+  that" vs. a fraction); contradictions voiced first in every mode including `bare`; `short` vs `bare` differing by
+  exactly the leading name/progress sentence and nothing else.
+- **schedule.test.ts**: a clean day; a meeting splitting it into two gaps with the right `precededByBusy` on each; the
+  duration filter only affects which gaps are RETURNED, never the running totals (needed so an infeasible verdict can
+  still cite the true total free time); overlapping busy windows merging correctly (no phantom negative micro-gap);
+  `fromUtc`/`untilUtc` truncating the first/last day instead of the nominal work hours; a day fully eaten by one
+  meeting contributing nothing while the next day still counts; an overnight event starting before the workable window
+  correctly truncating that day's start; `max` capping returned windows without capping the total/longest accounting.
+- **Two real mistakes were caught by actually running these, not just writing them** — worth remembering as a reason
+  to always execute a new test before trusting it: (1) a "close alternative" scenario used `importance:1` (+15) as the
+  gap-of-15 from a `+30` pick, which is 15 points away — OUTSIDE the 12-point alternatives window — so the "close" item
+  never actually appeared as an alternative; fixed by using `unblocks:3` (+24, 6 points away) instead. (2) the
+  `unblocks` wording test assumed the score-capped count (3) was also what the SENTENCE reports for `unblocks:7`; the
+  code actually reports the true count (7) in the text while only capping the score's contribution — the test's
+  assumption was wrong, not the code; fixed the assertion, left the (reasonable) behaviour alone.
+
 ## Voice — spoken brain dumps (2026-09-17, spec §8 Phase 7 "Voice")
 - **A mic button beside Send**, in the conversation input row (`App.tsx`). Press to start recording (`getUserMedia` +
   `MediaRecorder`, button turns red and counts seconds), press again to stop and send; a small ✕ appears beside it while
