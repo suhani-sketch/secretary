@@ -44,7 +44,11 @@ function toContents(req: CompletionRequest): Content[] {
   const out: Content[] = []
   for (const m of req.messages) {
     if (m.role === 'user') {
-      out.push({ role: 'user', parts: [{ text: m.text }] })
+      // Voice (7a spoken): the recording rides alongside the text part in the SAME turn, so transcription and
+      // extraction happen in the one model call the rest of this app already budgets for.
+      const parts: Part[] = [{ text: m.text }]
+      if (m.audio) parts.push({ inlineData: { mimeType: m.audio.mimeType, data: m.audio.base64 } })
+      out.push({ role: 'user', parts })
     } else if (m.role === 'assistant') {
       const parts: Part[] = []
       if (m.text) parts.push({ text: m.text })

@@ -21,6 +21,7 @@ const api: SecretaryApi = {
   },
 
   sendChat: (text) => ipcRenderer.invoke(IPC.sendChat, text),
+  sendVoice: (base64, mimeType) => ipcRenderer.invoke(IPC.sendVoice, base64, mimeType),
   chatHistory: (limit) => ipcRenderer.invoke(IPC.chatHistory, limit),
   listExtractions: (limit) => ipcRenderer.invoke(IPC.listExtractions, limit),
   onChatStatus: (cb) => {

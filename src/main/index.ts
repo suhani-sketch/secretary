@@ -1,6 +1,7 @@
-import { BrowserWindow, Notification, app, ipcMain, powerMonitor, shell } from 'electron'
+import { BrowserWindow, Notification, app, ipcMain, powerMonitor, session, shell } from 'electron'
 import { join } from 'path'
-import { appendFileSync, mkdirSync, writeFileSync } from 'fs'
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { randomUUID } from 'crypto'
 import { config as loadDotenv } from 'dotenv'
 import { closeDatabase, dbPath, getDb, openDatabase } from './db'
 import { clearLog, listLog, log } from './log'
@@ -13,7 +14,7 @@ import { describeProgress, planProgress } from '../core/plans'
 import { createTray, refreshTrayMenu } from './tray'
 import { GeminiProvider } from './ai/gemini'
 import type { Provider } from './ai/provider'
-import { applyExternalTools, enqueueChat } from './ai/orchestrator'
+import { applyExternalTools, enqueueChat, enqueueVoice } from './ai/orchestrator'
 import { IPC, type AppInfo, type ChatStatus, type CreateItemInput } from '../shared/types'
 import { listAiCalls } from './log'
 
@@ -313,6 +314,9 @@ const trayHandlers = {
 
 // ---- Startup ----
 function onReady(): void {
+  // Voice (7a): Electron blocks getUserMedia by default; the mic button needs this to work at all. Scoped to this
+  // app's own window only, and only the "media" (camera/mic) permission — nothing else is auto-granted.
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => callback(permission === 'media'))
   openDatabase()
   backfillImportance()
   log('info', 'app.start', `v${app.getVersion()} electron ${process.versions.electron} hidden=${startedHidden} db=${dbPath()}`)
@@ -339,6 +343,8 @@ function onReady(): void {
 
   // Developer hook: SECRETARY_CHAT="first message||second message" runs a scripted conversation
   // through the real orchestrator, prints the results, then quits. Used for the §7 Phase 1 test.
+  // A line starting with "@" is a voice turn: "@C:\path\to\clip.wav" reads that audio file and runs it through
+  // enqueueVoice exactly as a real recording would (Phase 7 "Voice") — lets a scripted run mix typed and spoken turns.
   const script = process.env['SECRETARY_CHAT']
   if (script) {
     void (async () => {
@@ -365,6 +371,20 @@ function onReady(): void {
           if (res.confirm) console.log(`    ? confirm: ${res.confirm.question}`)
           if (res.error) console.log(`    ✗ error: ${res.error}`)
           if (res.text) console.log(`    → ${res.text}`)
+          remember(res.applied)
+          continue
+        }
+        if (line.startsWith('@')) {
+          const filePath = line.slice(1).trim()
+          console.log(`\n>>> VOICE: ${filePath}`)
+          const ext = filePath.toLowerCase().split('.').pop()
+          const mimeType = ext === 'wav' ? 'audio/wav' : ext === 'ogg' ? 'audio/ogg' : ext === 'mp3' ? 'audio/mp3' : 'audio/wav'
+          const base64 = readFileSync(filePath).toString('base64')
+          const res = await enqueueVoice({ provider, onStatus: () => undefined, onChanged: () => undefined }, { base64, mimeType })
+          console.log(`    heard: ${res.userMessage.content}`)
+          console.log(`<<< ASSISTANT: ${res.assistantMessage.content}`)
+          for (const a of res.applied) console.log(`    ✓ ${a.summary}`)
+          if (res.error) console.log(`    ✗ error: ${res.error}`)
           remember(res.applied)
           continue
         }
@@ -511,6 +531,21 @@ function registerIpc(): void {
   ipcMain.handle(IPC.sendChat, (_e, text: string) => {
     if (typeof text !== 'string' || !text.trim()) throw new Error('Empty message')
     return enqueueChat({ provider, onStatus: sendChatStatus, onChanged: notifyRendererChanged }, text.slice(0, 8000))
+  })
+  // Voice (Phase 7a "Voice"): audio goes to Gemini directly through enqueueVoice; the recording is ALSO written to a
+  // local file here, purely for the user's own record — it is never read back or sent anywhere but that one model call.
+  ipcMain.handle(IPC.sendVoice, (_e, base64: string, mimeType: string) => {
+    if (typeof base64 !== 'string' || !base64.length) throw new Error('Empty recording')
+    if (base64.length > 30_000_000) throw new Error('Recording too long') // ~20 MB decoded, generous for a spoken message
+    try {
+      const dir = join(app.getPath('userData'), 'voice')
+      mkdirSync(dir, { recursive: true })
+      const ext = /wav/i.test(mimeType) ? 'wav' : /ogg/i.test(mimeType) ? 'ogg' : /webm/i.test(mimeType) ? 'webm' : 'audio'
+      writeFileSync(join(dir, `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}.${ext}`), Buffer.from(base64, 'base64'))
+    } catch (e) {
+      log('warn', 'voice.save_failed', (e as Error).message) // saving locally is a courtesy, never blocks the actual message
+    }
+    return enqueueVoice({ provider, onStatus: sendChatStatus, onChanged: notifyRendererChanged }, { base64, mimeType })
   })
   ipcMain.handle(IPC.chatHistory, (_e, limit?: number) => repo.recentMessages(limit ?? 60))
   ipcMain.handle(IPC.listExtractions, (_e, limit?: number) => repo.listExtractions(limit ?? 30))

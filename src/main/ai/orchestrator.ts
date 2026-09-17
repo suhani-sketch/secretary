@@ -109,6 +109,21 @@ Suggestions: anything you propose that the user did not state gets is_suggestion
 
 When you reply in words (no tool call): one or two short sentences, no bullet lists unless listing several items. Never mention tools, ids or JSON.`
 
+/** Appended only for a spoken turn (7a voice). The audio IS the message; note_transcript is how you report what was
+ *  said, since free text alongside tool calls is unreliable — this turn, a tool call is the only dependable channel. */
+const VOICE_ADDENDUM = `
+
+Voice — this turn's message is SPOKEN, attached as audio, not typed:
+- Call note_transcript EXACTLY ONCE, FIRST, with the verbatim words spoken (cleaned of "um"/false starts is fine; do not paraphrase or summarise). This is mandatory every single turn, even when nothing else is actionable.
+- Then apply the Brain dumps (7a) rules exactly as you would to the same words typed: extract every obligation, deadline, reminder, commitment, note, context, status update, waiting state, dependency and project association; resolve against existing entities before creating anything; at most one clarifying question.
+- If the recording is unclear, silent, or not really speech, call note_transcript with your best honest guess at what you heard (or an empty string if truly nothing), and create nothing you are not confident of.`
+
+const NOTE_TRANSCRIPT_TOOL = {
+  name: 'note_transcript',
+  description: 'Voice only, mandatory, call first: the verbatim transcript of what the user said this turn.',
+  parameters: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }
+}
+
 export interface OrchestratorDeps {
   provider: Provider | null
   onStatus: (s: ChatStatus) => void
@@ -120,6 +135,13 @@ let queue: Promise<unknown> = Promise.resolve()
 /** Messages are processed strictly one at a time so throttling never loses or reorders input. */
 export function enqueueChat(deps: OrchestratorDeps, text: string): Promise<ChatResponse> {
   const run = queue.then(() => handleChat(deps, text))
+  queue = run.catch(() => undefined)
+  return run
+}
+
+/** Voice (7a spoken): same queue as typed chat, so a recording never lands mid-transaction with a typed message. */
+export function enqueueVoice(deps: OrchestratorDeps, audio: { base64: string; mimeType: string }): Promise<ChatResponse> {
+  const run = queue.then(() => handleVoice(deps, audio))
   queue = run.catch(() => undefined)
   return run
 }
@@ -257,6 +279,122 @@ async function handleChat(deps: OrchestratorDeps, rawText: string): Promise<Chat
     }
   }
   const assistantMessage = repo.insertMessage('assistant', replyText!, tier)
+  deps.onChanged()
+  return { userMessage, assistantMessage, applied, error }
+}
+
+/**
+ * Voice (spec §8 Phase 7, "Voice"): the recording goes to Gemini directly, through the exact same provider and tool
+ * schema as a typed brain dump — one model call, the same extraction rules, never a second subsystem. There is no
+ * tier 0 (nothing to pattern-match before the audio is heard) and no typed text to store up front, so the user message
+ * row is a placeholder until the transcript comes back from `note_transcript` (see VOICE_ADDENDUM) — a dedicated,
+ * mandatory tool call, not free text, because free text is unreliably present alongside tool calls in the same turn
+ * (verified: gemini-3.6-flash regularly omits it) while a required tool call is not.
+ */
+async function handleVoice(deps: OrchestratorDeps, audio: { base64: string; mimeType: string }): Promise<ChatResponse> {
+  const userMessage = repo.insertMessage('user', '🎙️ …', null)
+  const applied: AppliedChange[] = []
+  let error: string | null = null
+  let replyText: string | null = null
+  let transcript = ''
+  let modelCalls = 0
+  const started = Date.now()
+
+  try {
+    if (!deps.provider) {
+      throw new ProviderUnavailableError('No AI provider is configured. Add GEMINI_API_KEY to the .env file and restart the app.')
+    }
+    deps.onStatus({ kind: 'thinking' })
+
+    const history = repo
+      .recentMessages(11)
+      .filter((m) => m.id !== userMessage.id && m.role !== 'system')
+      .slice(-10)
+    const messages: ProviderMessage[] = history.map((m) =>
+      m.role === 'user' ? { role: 'user', text: m.content } : { role: 'assistant', text: m.content, toolCalls: [] }
+    )
+    // No typed words to search on yet — the rest of the context (Things, calendar, commitments…) is still assembled in full.
+    messages.push({ role: 'user', text: `Context:\n${assembleContext('')}\n\nThe user's message this turn is spoken. See the Voice section above.`, audio })
+
+    // Audio understanding + extraction is inherently a hard task — always start on the stronger model, same one call.
+    const res = await deps.provider.complete(
+      { system: SYSTEM_PROMPT + VOICE_ADDENDUM, messages, tools: [...toolDefinitions(), NOTE_TRANSCRIPT_TOOL], turnId: userMessage.id, preferStrong: true },
+      (s) => deps.onStatus({ kind: 'throttled', retryInSeconds: s })
+    )
+    modelCalls++
+
+    const transcriptCalls = res.toolCalls.filter((c) => c.name === 'note_transcript')
+    transcript = String((transcriptCalls[0]?.args as { text?: string } | undefined)?.text ?? '').trim()
+    // Mutate the in-memory row too — this same object is what's returned to the renderer at the end; without this
+    // the chat bubble would show the "🎙️ …" placeholder forever even though the database has the real transcript.
+    userMessage.content = transcript ? `🎙️ ${transcript}` : '🎙️ (nothing heard)'
+    repo.updateMessageContent(userMessage.id, userMessage.content)
+    const asks = res.toolCalls.filter((c) => c.name === 'ask_clarification')
+    const calls = res.toolCalls.filter((c) => c.name !== 'note_transcript' && c.name !== 'ask_clarification')
+    const question = asks.length ? String((asks[0].args as { question?: string }).question ?? '').trim() : ''
+    log(
+      'info',
+      'ai.response',
+      `call ${modelCalls} (${res.model ?? '?'}, voice): ${res.toolCalls.length} tool call(s), transcript ${transcript ? `${transcript.length} chars` : 'EMPTY'}; tokens in=${res.usage?.input ?? '?'} out=${res.usage?.output ?? '?'}`
+    )
+    if (asks.length) repo.insertExtraction(userMessage.id, JSON.stringify(asks.map((c) => ({ name: c.name, args: c.args }))), true, asks.length > 1 ? `${asks.length - 1} extra question(s) dropped — one per message` : null)
+    if (asks.length > 1) log('warn', 'ai.clarify_capped', `${asks.length} clarifying questions proposed; asked the first only`)
+    if (!transcript) log('warn', 'ai.voice_no_transcript', 'note_transcript was not called or returned empty text')
+
+    if (calls.length === 0) {
+      replyText = question || (transcript ? "Got it — I heard that, but there's nothing there for me to track." : "I couldn't make out anything in that recording — could you try again, a little closer to the mic?")
+    } else {
+      deps.onStatus({ kind: 'tools', count: calls.length })
+      const outcome = runToolRound(calls, { actor: 'assistant', sourceMsgId: userMessage.id }, applied)
+      deps.onChanged()
+      if (outcome.confirm) {
+        replyText = (applied.length ? joinPhrases(applied) + ' ' : '') + outcome.confirm.question
+      } else if (outcome.hadWrites) {
+        replyText = outcome.error
+          ? applied.length
+            ? `${joinPhrases(applied)} But I couldn't do the rest: ${outcome.error}.`
+            : `I couldn't do that: ${outcome.error}. Nothing was changed.`
+          : joinPhrases(applied)
+      } else {
+        replyText = phraseReadResults(outcome.results) ?? "I heard that, but couldn't put an answer into words — could you ask again?"
+      }
+      if (question && !outcome.confirm) replyText += `\n\nOne question: ${question}`
+    }
+  } catch (e) {
+    const err = e as Error
+    error = err.message
+    log('error', 'ai.failed', err.stack ?? err.message)
+    if (!transcript) {
+      userMessage.content = '🎙️ (voice message — something went wrong)'
+      repo.updateMessageContent(userMessage.id, userMessage.content)
+    }
+    replyText =
+      e instanceof ProviderUnavailableError
+        ? err.message
+        : applied.length
+          ? `${joinPhrases(applied)} Then something went wrong (${short(err.message)}), so anything after that was not done.`
+          : `Something went wrong talking to the model (${short(err.message)}). Nothing was changed — please try again in a moment.`
+  } finally {
+    deps.onStatus({ kind: 'idle' })
+  }
+
+  if (modelCalls > MAX_MODEL_CALLS_PER_MESSAGE) {
+    log('error', 'ai.call_budget_exceeded', `${modelCalls} calls for one voice message (budget ${MAX_MODEL_CALLS_PER_MESSAGE})`)
+  }
+  log('info', 'chat.done', `tier voice, ${modelCalls} model call(s), ${applied.length} change(s), ${Date.now() - started}ms`)
+  if (!error && applied.length) {
+    try {
+      const line = personalityLine(applied, transcript)
+      if (line) {
+        const q = /^(.*?[.!])\s+([^.!?]*\?)$/.exec(replyText!.trim())
+        replyText = q ? `${q[1]} ${line} ${q[2]}` : `${replyText} ${line}`
+        log('info', 'personality.line', line)
+      }
+    } catch (e) {
+      log('warn', 'personality.failed', (e as Error).message)
+    }
+  }
+  const assistantMessage = repo.insertMessage('assistant', replyText!, 2)
   deps.onChanged()
   return { userMessage, assistantMessage, applied, error }
 }

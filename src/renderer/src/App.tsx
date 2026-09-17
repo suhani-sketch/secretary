@@ -36,6 +36,62 @@ const levelColor: Record<string, string> = {
 
 type Surface = 'conversation' | 'calendar' | 'things' | 'settings'
 type UiMessage = ChatMessage & { applied?: AppliedChange[]; error?: string | null; pending?: boolean }
+
+/**
+ * Voice (spec §8 Phase 7 "Voice"): the browser's recorder only produces webm/opus in this app (Electron/Chromium), but
+ * Gemini's officially supported audio types do not include it — so the recording is decoded and re-encoded as a plain
+ * 16-bit PCM WAV entirely client-side (Web Audio API), which IS supported, before it ever reaches the main process.
+ */
+async function blobToWavBase64(blob: Blob): Promise<{ base64: string; mimeType: string }> {
+  const AudioCtxCtor = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+  const ctx = new AudioCtxCtor()
+  let audioBuf: AudioBuffer
+  try {
+    audioBuf = await ctx.decodeAudioData(await blob.arrayBuffer())
+  } finally {
+    void ctx.close()
+  }
+  const length = audioBuf.length
+  const channels: Float32Array[] = []
+  for (let c = 0; c < audioBuf.numberOfChannels; c++) channels.push(audioBuf.getChannelData(c))
+  const mono = new Float32Array(length)
+  for (let i = 0; i < length; i++) {
+    let sum = 0
+    for (const ch of channels) sum += ch[i]
+    mono[i] = sum / channels.length
+  }
+  const bytesPerSample = 2
+  const dataSize = length * bytesPerSample
+  const buf = new ArrayBuffer(44 + dataSize)
+  const view = new DataView(buf)
+  const writeStr = (offset: number, s: string): void => {
+    for (let i = 0; i < s.length; i++) view.setUint8(offset + i, s.charCodeAt(i))
+  }
+  writeStr(0, 'RIFF')
+  view.setUint32(4, 36 + dataSize, true)
+  writeStr(8, 'WAVE')
+  writeStr(12, 'fmt ')
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true) // PCM
+  view.setUint16(22, 1, true) // mono — speech doesn't need stereo
+  view.setUint32(24, audioBuf.sampleRate, true)
+  view.setUint32(28, audioBuf.sampleRate * bytesPerSample, true)
+  view.setUint16(32, bytesPerSample, true)
+  view.setUint16(34, 16, true)
+  writeStr(36, 'data')
+  view.setUint32(40, dataSize, true)
+  let offset = 44
+  for (let i = 0; i < length; i++) {
+    const s = Math.max(-1, Math.min(1, mono[i]))
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true)
+    offset += 2
+  }
+  const bytes = new Uint8Array(buf)
+  let binary = ''
+  const chunk = 0x8000
+  for (let i = 0; i < bytes.length; i += chunk) binary += String.fromCharCode(...bytes.subarray(i, i + chunk))
+  return { base64: btoa(binary), mimeType: 'audio/wav' }
+}
 type Editing =
   | { kind: 'item'; item: Item }
   | { kind: 'reminder'; reminder: Reminder }
@@ -62,6 +118,14 @@ export default function App(): React.JSX.Element {
   const [showDebug, setShowDebug] = useState(false)
   const [flash, setFlash] = useState<string | null>(null)
   const [editing, setEditing] = useState<Editing>(null)
+  // Voice (7a): a mic button beside Send. Recording state is local UI only; the actual send reuses `status` (pushed
+  // from main over the same onChatStatus channel as typed messages), so the "thinking…" indicator behaves identically.
+  const [recording, setRecording] = useState(false)
+  const [recordSeconds, setRecordSeconds] = useState(0)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const recordedChunksRef = useRef<Blob[]>([])
+  const recordStreamRef = useRef<MediaStream | null>(null)
+  const recordTimerRef = useRef<number | null>(null)
   // Light / dark: one setting (`ui.theme`), applied as data-theme on <html>; the stylesheet does the rest.
   const [theme, setThemeState] = useState<'light' | 'dark'>(() => {
     try {
@@ -279,6 +343,70 @@ export default function App(): React.JSX.Element {
       ])
     }
     void refresh()
+  }
+
+  // Voice (7a): press to start, press again to stop and send; the recording is decoded to WAV and handed to the exact
+  // same extraction pipeline as a typed brain dump (`window.api.sendVoice` → `enqueueVoice` in the main process).
+  const startRecording = async (): Promise<void> => {
+    if (recording || status.kind !== 'idle') return
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      recordStreamRef.current = stream
+      recordedChunksRef.current = []
+      const mr = new MediaRecorder(stream)
+      mr.ondataavailable = (e) => {
+        if (e.data.size > 0) recordedChunksRef.current.push(e.data)
+      }
+      mr.start()
+      mediaRecorderRef.current = mr
+      setRecording(true)
+      setRecordSeconds(0)
+      recordTimerRef.current = window.setInterval(() => setRecordSeconds((s) => s + 1), 1000)
+    } catch (e) {
+      say(`Couldn't use the microphone: ${(e as Error).message}`)
+    }
+  }
+
+  const stopRecording = (cancel = false): void => {
+    const mr = mediaRecorderRef.current
+    if (!mr) return
+    mr.onstop = () => {
+      void (async () => {
+        recordStreamRef.current?.getTracks().forEach((t) => t.stop())
+        recordStreamRef.current = null
+        if (recordTimerRef.current !== null) {
+          window.clearInterval(recordTimerRef.current)
+          recordTimerRef.current = null
+        }
+        setRecording(false)
+        const chunks = recordedChunksRef.current
+        recordedChunksRef.current = []
+        if (cancel || !chunks.length) return
+        const blob = new Blob(chunks, { type: mr.mimeType || 'audio/webm' })
+        if (blob.size < 800) {
+          say("That recording was too short — hold the button a little longer.")
+          return
+        }
+        const tempId = `tmp-voice-${Date.now()}`
+        setMessages((m) => [...m, { id: tempId, role: 'user', content: '🎙️ …', tier: null, created_at: new Date().toISOString(), pending: true }])
+        try {
+          const { base64, mimeType } = await blobToWavBase64(blob)
+          const res = await window.api.sendVoice(base64, mimeType)
+          setMessages((m) => [...m.filter((x) => x.id !== tempId), res.userMessage, { ...res.assistantMessage, applied: res.applied, error: res.error }])
+          setLastToolNames(res.applied.map((a) => a.tool))
+          if (res.applied.length) setLastAppliedAt(Date.now())
+          if (res.error) setConcernedAt(Date.now())
+        } catch (e) {
+          setConcernedAt(Date.now())
+          setMessages((m) => [
+            ...m.filter((x) => x.id !== tempId),
+            { id: `err-${Date.now()}`, role: 'assistant', content: `Something went wrong on my side: ${(e as Error).message}`, tier: null, created_at: new Date().toISOString(), error: (e as Error).message }
+          ])
+        }
+        void refresh()
+      })()
+    }
+    mr.stop()
   }
 
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -552,16 +680,31 @@ export default function App(): React.JSX.Element {
           <textarea
             ref={inputRef}
             value={draft}
+            disabled={recording}
             onChange={(e) => {
               setDraft(e.target.value)
               setTypingAt(Date.now())
             }}
             onKeyDown={onKey}
             rows={Math.min(6, Math.max(1, draft.split('\n').length))}
-            placeholder="type or dump here — Enter to send, Shift+Enter for a new line"
-            className="flex-1 resize-none bg-transparent px-3 py-2 outline-none text-[15px] leading-relaxed"
+            placeholder={recording ? `listening — ${recordSeconds}s, press again to send` : 'type or dump here — Enter to send, Shift+Enter for a new line'}
+            className="flex-1 resize-none bg-transparent px-3 py-2 outline-none text-[15px] leading-relaxed disabled:opacity-50"
           />
-          <button onClick={() => void send()} disabled={!draft.trim() || status.kind !== 'idle'} className="rounded-xl bg-cocoa text-cream px-4 py-2 text-sm disabled:opacity-30">
+          {recording && (
+            <button onClick={() => stopRecording(true)} title="Cancel — nothing sent" className="rounded-xl px-3 py-2 text-sm text-stone-500 hover:bg-paper">
+              ✕
+            </button>
+          )}
+          <button
+            onClick={() => (recording ? stopRecording() : void startRecording())}
+            disabled={!recording && status.kind !== 'idle'}
+            title={recording ? 'Stop and send' : 'Record a voice message — speaks straight into the same extraction pipeline as typing'}
+            aria-pressed={recording}
+            className={`rounded-xl px-3 py-2 text-sm disabled:opacity-30 ${recording ? 'bg-rose-600 text-white animate-pulse' : 'bg-white text-cocoa hover:bg-paper'}`}
+          >
+            {recording ? `⏺ ${recordSeconds}s` : '🎤'}
+          </button>
+          <button onClick={() => void send()} disabled={recording || !draft.trim() || status.kind !== 'idle'} className="rounded-xl bg-cocoa text-cream px-4 py-2 text-sm disabled:opacity-30">
             Send
           </button>
         </div>

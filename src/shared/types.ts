@@ -278,6 +278,9 @@ export interface SecretaryApi {
 
   // Conversation
   sendChat(text: string): Promise<ChatResponse>
+  /** Voice (7a spoken): audio goes to Gemini directly, through the same extraction pipeline as a typed dump.
+   *  `base64` is the recording (WAV), never sent anywhere but the model and a local file. */
+  sendVoice(base64: string, mimeType: string): Promise<ChatResponse>
   chatHistory(limit?: number): Promise<ChatMessage[]>
   listExtractions(limit?: number): Promise<ExtractionEntry[]>
   onChatStatus(cb: (status: ChatStatus) => void): () => void
@@ -415,6 +418,7 @@ export const IPC = {
   sendTestNotification: 'app:testNotification',
   changed: 'app:changed',
   sendChat: 'chat:send',
+  sendVoice: 'chat:sendVoice',
   chatHistory: 'chat:history',
   listExtractions: 'chat:extractions',
   chatStatus: 'chat:status',

@@ -3,8 +3,8 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 7 — Intelligence. 7a (brain dump), 7b (deadline intelligence), 7c (what should I do right now), 7d ("what am I
-forgetting?", widened) and 7e (smart scheduling) built 2026-09-17, testable; 7f–7g not started. Governing rule: compute in
+## Current phase: Phase 7 — Intelligence. 7a (brain dump, typed AND spoken/voice), 7b (deadline intelligence), 7c (what should I do
+right now), 7d ("what am I forgetting?", widened) and 7e (smart scheduling) built 2026-09-17, testable; 7f–7g not started. Governing rule: compute in
 code, the model only phrases — every answer costs at most ONE model call (§11G 14). Phase 6: 6a–6f built. **§11C run 2026-09-17 on scratch DB c7 across
 several real quit + relaunch cycles: 24 of 27 steps pass outright; 4 and 12 pass on the tool path the drag calls but the mouse gesture itself
 was not performed; 25 passes against planted history (see below).** Phase 5 complete (§11F passed).
@@ -25,6 +25,63 @@ was not performed; 25 passes against planted history (see below).** Phase 5 comp
   reuse all of it. `src/main/calendar.ts` is the SQLite glue (`buildDay`, `occurrencesBetween`); `planning.ts` (conflicts) still
   imports repo and moves to core when 6f touches it.
 - **Migration 7:** `plans` table; `events.plan_id`, `events.session_state`; index on `events.starts_at_utc`.
+
+## Voice — spoken brain dumps (2026-09-17, spec §8 Phase 7 "Voice")
+- **A mic button beside Send**, in the conversation input row (`App.tsx`). Press to start recording (`getUserMedia` +
+  `MediaRecorder`, button turns red and counts seconds), press again to stop and send; a small ✕ appears beside it while
+  recording to cancel and send nothing. Textarea and Send are disabled while recording; the mic itself is disabled while
+  a text message is in flight (`status.kind !== 'idle'`), but NOT while recording (so stopping always works).
+- **Electron blocks `getUserMedia` by default** — `session.defaultSession.setPermissionRequestHandler` in `index.ts` now
+  grants only the `media` permission (camera+mic as one Chromium grant; only audio is ever requested), scoped to this
+  app's own window. The Windows OS-level microphone privacy toggle still governs actual hardware access underneath that.
+- **Format: client-side WAV, not the browser's native webm/opus.** Chromium's `MediaRecorder` in this app only produces
+  `audio/webm;codecs=opus`, which is not on Gemini's officially documented supported audio list; `blobToWavBase64`
+  (`App.tsx`) decodes the recording with `AudioContext.decodeAudioData`, downmixes to mono, and hand-encodes a 16-bit PCM
+  WAV — universally supported — entirely in the renderer, before the base64 ever reaches the main process.
+- **Audio goes to Gemini directly, through the exact same provider and tool schema as a typed dump — one model call,
+  same 7a extraction rules** (spec's own words). `ProviderMessage`'s user variant grew an optional `audio: {base64,
+  mimeType}`; `gemini.ts#toContents` adds it as a second `inlineData` part alongside the text part, in the SAME turn.
+  `orchestrator.ts#enqueueVoice`/`handleVoice` mirror `enqueueChat`/`handleChat` almost exactly (same queue, same
+  `runToolRound`, same `phraseReadResults`, same `ask_clarification` handling, same one-call budget assertion) but skip
+  tier 0 entirely (nothing to pattern-match before the audio is heard) and always set `preferStrong` (audio+extraction is
+  inherently hard). `VOICE_ADDENDUM` is appended to `SYSTEM_PROMPT` only for this call; typed messages are untouched.
+- **The transcript problem, and how it was actually solved.** Free text alongside tool calls is UNRELIABLE — verified
+  directly against the real API (see below): gemini-3.6-flash routinely returns tool calls with NO accompanying text at
+  all, despite being told to always include one. The fix: a small, always-mandatory tool `note_transcript {text}`,
+  included ONLY in the voice request's tool list (never in `toolDefinitions()`, so typed messages are unaffected). The
+  model is instructed to call it first, exactly once, every turn. This is intercepted by the orchestrator exactly like
+  `ask_clarification` already is — filtered out of `calls` before `runToolRound`, never reaching the tool executor — and
+  its text becomes both (a) the stored user-message content (`repo.updateMessageContent`, mutating the in-memory
+  `userMessage.content` too — a real bug was caught here: the FIRST version updated only the DB row, so the returned
+  `ChatResponse` still carried the stale "🎙️ …" placeholder and the chat bubble would have shown that forever) and
+  (b) what the personality line and activity records use as "what the user said". This was empirically far more reliable
+  than free text: 4/4 test recordings got a clean transcript via the tool call after adding it, versus 0/2 via text alone.
+- **Local storage, never sent anywhere else.** Every recording is also written to `<userData>/voice/<timestamp>-<id>.wav`
+  (`index.ts`, the `chat:sendVoice` IPC handler) purely for the user's own record — a save failure only logs a warning
+  and never blocks the actual message. The audio is never read back by the app, never uploaded anywhere but the one
+  Gemini call the feature requires, and the file itself never leaves the machine.
+- **Verified against the real Gemini API with real spoken audio**, not synthetic text: four WAV files were generated with
+  Windows' own `System.Speech.Synthesis` TTS (a genuine speech signal, not silence or noise) and driven through the
+  actual production code path end to end — via a new dev hook, `SECRETARY_CHAT="@C:\path\to\clip.wav||next line"` (a
+  line starting with `@` is a voice turn; mixes freely with typed `||` turns and `!tool` manual lines) — on a scratch
+  database. All at 1 model call, tier "voice", MAX_MODEL_CALLS_PER_MESSAGE never exceeded:
+  - "Remind me to call the bank tomorrow at three p m." → task + reminder, correct date AND time (tomorrow's date, 15:00).
+  - "The case study will take about two hours and I need to finish it by Friday." → task due Friday, `effort_minutes: 120`
+    stored from the user's own spoken figure (invariant 2 — confirmed in the database, not just the reply text).
+  - "Hey, just checking in, how's it going today." (nothing actionable) → clean acknowledgment, nothing created at all.
+  - "I can't book the meeting room until the department confirms the budget." → a genuine `waiting` item (waiting_on
+    "department") AND a task, both created correctly — see the gap noted below.
+- **Known gap, not fixed here:** the same dependency phrase typed alone would hit tier 0's widened 7b rule (built earlier
+  this session) and get a `blocks` link between the wait and the task, deterministically. Voice always skips tier 0, so
+  it falls to the model's general judgement under the Brain dumps (7a) prompt section only — it made the wait and the
+  task correctly but did not add the link. A typed brain dump longer than one line has this same gap already (tier 0
+  also steps aside for `looksLikeDump`), so this is not a voice-specific regression — worth a pass across both spoken and
+  multi-clause typed dumps together, not solved by re-routing voice through tier 0 (the transcript only exists after the
+  one model call already happened).
+- **Not exercised from here:** the actual button click / hold-to-record / permission-prompt flow in a live window — this
+  needs a real microphone and a human voice, which this environment cannot provide; the user should press the button
+  and speak to confirm that half. Also not tried: a genuinely silent or noise-only recording (the model is instructed to
+  say so via `note_transcript` rather than invent content, but this has not been observed against real silence).
 
 ## Phase 7d + 7e — "what am I forgetting?" widened, and smart scheduling (2026-09-17)
 - **7d — definite vs possible, strictly kept apart (§11G 8, 9).** `get_forgetting` (tools.ts) now returns, alongside the

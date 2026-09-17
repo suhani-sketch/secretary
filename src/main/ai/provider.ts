@@ -26,7 +26,7 @@ export interface ToolResult {
 }
 
 export type ProviderMessage =
-  | { role: 'user'; text: string }
+  | { role: 'user'; text: string; audio?: { base64: string; mimeType: string } }
   | { role: 'assistant'; text: string | null; toolCalls: ToolCall[] }
   | { role: 'tool'; results: ToolResult[] }
 
