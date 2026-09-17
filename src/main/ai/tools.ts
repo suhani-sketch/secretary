@@ -13,6 +13,7 @@ import { resolveEntity, tokens } from '../entity'
 import { assessTarget, assessmentText, atRiskLines, noteDateConflicts } from '../deadlines'
 import { DEFAULT_ASSUMED_EFFORT_MIN } from '../../core/deadline'
 import { proposeSlot, describeProposal, proposalBookingArgs } from '../schedule'
+import { buildReplanProposal, commitReplan, plansAffectedByConstraint, replanDoneText, replanQuestion } from '../replan'
 import { recommendNowAt, recommendationText } from '../now'
 import { afterConflicts, blockingConflicts, bookingWindowForDue, conflictsFor, describeConflict, describeConstraint } from '../planning'
 import { formatClock, formatDue, isOverdue } from '../../shared/format'
@@ -259,7 +260,11 @@ export const toolSchemas = {
     id: idRef.describe('The session (an event id).'),
     state: z.enum(['done', 'missed', 'planned']).describe('done = the user did it; missed = skipped; planned = undo a mark.')
   }),
-  replan_sessions: z.object({ id: idRef.describe('The plan.'), from_date_local: localDate.optional().describe('Regenerate planned sessions from this day (default today). Done and missed sessions are untouched; nothing else on the calendar moves.') }),
+  replan_sessions: z.object({
+    id: idRef.describe('The plan.'),
+    from_date_local: localDate.optional().describe('Regenerate planned sessions from this day (default today). Done and missed sessions are untouched; nothing else on the calendar moves.'),
+    confirmed: z.boolean().optional().describe('Replanning is consequential (7f, invariant 10): the first call returns a preview — exactly what would be cleared and what would replace it — and asks; call again with confirmed=true only after the user says yes.')
+  }),
   get_plan: z.object({ id: idRef.optional(), title: z.string().max(120).optional() }).describe('A plan and its progress: hours done against target, sessions missed, shortfall.'),
   add_buffer: z.object({
     minutes: z.number().int().min(5).max(240),
@@ -399,7 +404,7 @@ const descriptions: Record<ToolName, string> = {
   update_plan: 'Change a plan\'s title, target, end date, cadence or session length. Future planned sessions follow; done and missed ones stay.',
   pause_plan: 'Pause, resume or abandon a plan.',
   mark_session: 'The user did a session ("did my econometrics session") or skipped one ("skip today\'s study session").',
-  replan_sessions: 'Regenerate a plan\'s remaining sessions from a date. Only the plan\'s own future sessions move; nothing else on the calendar does.',
+  replan_sessions: '7f — a plan missed a session, its deadline moved, or availability changed: recompute its remaining sessions against remaining capacity. The first call previews exactly what would be cleared and what would replace it (never a hard conflict) and asks; call again with confirmed=true only after the user says yes. Only this plan\'s own future sessions ever move; nothing else on the calendar does.',
   get_plan: 'How a plan is going: hours done against target, sessions missed, what is left. Phrased by the app.',
   add_buffer: 'A transition buffer the user asked for: "thirty minutes to get home from TISS", "nothing straight after class", "15 minutes before meetings". Later bookings that ignore it are flagged as a poor fit.',
   check_conflicts: 'What clashes with a proposed time. The app computes it; you phrase it.',
@@ -1254,19 +1259,46 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       act({ targetType: 'event', targetId: ev.id, projectId: plan?.project_id ?? null, verb: x.state === 'done' ? 'completed' : x.state === 'missed' ? 'session_missed' : 'updated', summary: `Session "${ev.title}" ${formatClock(ev.starts_at_utc)} marked ${x.state}`, before: ev, after })
       clearOffer()
       const progress = plan ? planProgress(plan, repo.sessionsForPlan(plan.id), new Date().toISOString()) : null
+      // 7f nudge: a genuinely-behind plan (a real miss, or no runway left to cover the target) gets a pointer to
+      // replanning — a suggestion, never automatic (invariant 10: nothing moves without the user asking).
+      const behind = x.state === 'missed' && progress && (progress.missed_minutes > 0 || (!progress.next_session_utc && (progress.shortfall_minutes ?? 0) > 0))
       const summary = `Session "${ev.title}" · ${x.state}`
-      const phrase = `${x.state === 'done' ? 'Done' : x.state === 'missed' ? 'Skipped' : 'Back to planned'}: "${ev.title}" ${formatClock(ev.starts_at_utc)}.${progress ? ` ${capital(describeProgress(progress))}.` : ''}`
+      const phrase = `${x.state === 'done' ? 'Done' : x.state === 'missed' ? 'Skipped' : 'Back to planned'}: "${ev.title}" ${formatClock(ev.starts_at_utc)}.${progress ? ` ${capital(describeProgress(progress))}.` : ''}${behind ? ` Say "replan the ${plan!.title.toLowerCase()} sessions" if you'd like me to work out a catch-up schedule.` : ''}`
       return { result: { ok: true, summary, progress }, applied: { tool: name, summary, phrase } }
     }
     case 'replan_sessions': {
+      // 7f — nothing moves without approval. The first call is a pure preview (graded against the real calendar,
+      // exactly like 7e's propose_slot; a hard conflict is never proposed, let alone booked). Only confirmed=true commits,
+      // and it commits precisely the ids this same computation named — recomputed fresh, never a stale cached list.
       const x = a as z.infer<typeof toolSchemas.replan_sessions>
       const plan = repo.getPlan(repo.resolvePlanId(x.id))
       if (!plan) throw new Error('No such plan')
-      const n = regenerateSessions(plan, undefined, x.from_date_local)
-      act({ targetType: 'plan', targetId: plan.id, projectId: plan.project_id, verb: 'updated', summary: `Plan "${plan.title}": ${n} sessions ahead regenerated`, reversible: false })
+      const proposal = buildReplanProposal(plan, x.from_date_local)
+      if (proposal.nothing_to_replan || proposal.no_change) {
+        // Nothing consequential to approve either way — say so directly rather than asking a yes/no for a no-op.
+        clearOffer()
+        const summary = `Plan "${plan.title}" · ${proposal.nothing_to_replan ? 'nothing ahead to replan' : 'no change'}`
+        return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: replanQuestion(proposal) } }
+      }
+      if (!x.confirmed) {
+        const question = replanQuestion(proposal)
+        return {
+          result: { ok: false, needs_confirmation: true, question },
+          confirm: { question, wouldAffect: [...proposal.removing.map((s) => `cleared: ${formatClock(s.startUtc)}`), ...proposal.adding.map((s) => `added: ${formatClock(s.startUtc)}`)] }
+        }
+      }
+      commitReplan(plan, proposal)
+      act({
+        targetType: 'plan',
+        targetId: plan.id,
+        projectId: plan.project_id,
+        verb: 'updated',
+        summary: `Plan "${plan.title}": ${plural(proposal.removing.length, 'session')} replanned (${plural(proposal.adding.length, 'new slot')})`,
+        reversible: false
+      })
       clearOffer()
-      const summary = `Plan "${plan.title}" · ${n} sessions ahead regenerated`
-      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Re-laid the sessions ahead for "${plan.title}": ${n} of them. Nothing else on the calendar moved.` } }
+      const summary = `Plan "${plan.title}" · replanned`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: replanDoneText(proposal) } }
     }
     case 'get_plan': {
       const x = a as z.infer<typeof toolSchemas.get_plan>
@@ -1308,7 +1340,12 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       act({ targetType: 'constraint', targetId: c.id, verb: 'created', summary: `${x.kind === 'unavailable' ? 'Unavailable' : x.kind === 'avoid' ? 'Avoid' : 'Prefer'}: ${describeConstraint(c)}`, after: c })
       clearOffer()
       const summary = `${x.kind}: ${describeConstraint(c)}`
-      const phrase = x.kind === 'unavailable' ? `Noted — you're ${c.label} ${describeConstraint(c).replace(`${c.label} — `, '')}. I won't book anything there without asking.` : `Noted: ${x.kind === 'avoid' ? 'avoid' : 'prefer'} ${describeConstraint(c)}.`
+      let phrase = x.kind === 'unavailable' ? `Noted — you're ${c.label} ${describeConstraint(c).replace(`${c.label} — `, '')}. I won't book anything there without asking.` : `Noted: ${x.kind === 'avoid' ? 'avoid' : 'prefer'} ${describeConstraint(c)}.`
+      // 7f trigger: this new unavailability now sits on top of a plan's own sessions — flag it, never move anything.
+      if (x.kind === 'unavailable') {
+        const affected = plansAffectedByConstraint(c)
+        if (affected.length) phrase += ` This now clashes with ${affected.map((a) => `${plural(a.count, 'session')} of "${a.plan.title}"`).join(' and ')} — say "replan the sessions" if you'd like me to work around it.`
+      }
       return { result: { ok: true, constraint_id: shortId(c.id), summary }, applied: { tool: name, summary, phrase } }
     }
     case 'remove_constraint': {

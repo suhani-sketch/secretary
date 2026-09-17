@@ -121,8 +121,11 @@ export function bufferRules(): BufferRule[] {
 export const describeBuffer = (side: BufferRule['side'], minutes: number, scope: string | null): string =>
   `${minutes} min ${side === 'around' ? 'either side of' : side} ${scope ? `"${scope}"` : 'anything'}`
 
-export function assessSlot(startUtc: string, endUtc: string, ignoreEventId?: string): SlotAssessment {
-  const all = conflictsFor(startUtc, endUtc).filter((c) => !(c.kind === 'event' && c.eventId === ignoreEventId))
+export function assessSlot(startUtc: string, endUtc: string, ignoreEventId?: string | string[]): SlotAssessment {
+  // Grading a REPLACEMENT for an event (moving it, or replanning several sessions at once) must never see the row(s)
+  // being replaced as a conflict with themselves — hence a set of ids, not just the one being moved.
+  const ignoreIds = new Set(Array.isArray(ignoreEventId) ? ignoreEventId : ignoreEventId ? [ignoreEventId] : [])
+  const all = conflictsFor(startUtc, endUtc).filter((c) => !(c.kind === 'event' && c.eventId && ignoreIds.has(c.eventId)))
   const hard = blockingConflicts(all)
   if (hard.length) return { level: 'hard', hard, reasons: hard.map(describeConflict), next_free_utc: afterConflicts(hard) }
   const reasons: string[] = []
@@ -132,7 +135,7 @@ export function assessSlot(startUtc: string, endUtc: string, ignoreEventId?: str
   // Neighbours: what ends just before, what starts just after (a wider window than the slot itself).
   const around = DateTime.fromISO(startUtc, { zone: 'utc' }).minus({ hours: 3 }).toISO()!
   const until = DateTime.fromISO(endUtc, { zone: 'utc' }).plus({ hours: 3 }).toISO()!
-  const neighbours = expandEvents(repo.eventsTouching(around, until), around, until).filter((o) => !o.all_day && o.id !== ignoreEventId)
+  const neighbours = expandEvents(repo.eventsTouching(around, until), around, until).filter((o) => !o.all_day && !ignoreIds.has(o.id))
   const rules = bufferRules()
   for (const o of neighbours) {
     const oEnd = o.occurrence_end_utc ?? o.occurrence_start_utc

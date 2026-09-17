@@ -4,7 +4,8 @@ Source of truth for the design is `SPEC.md`. This file tracks where the build ac
 Update it at the end of every session (spec §11).
 
 ## Current phase: Phase 7 — Intelligence. 7a (brain dump, typed AND spoken/voice), 7b (deadline intelligence), 7c (what should I do
-right now), 7d ("what am I forgetting?", widened) and 7e (smart scheduling) built 2026-09-17, testable; 7f–7g not started. Governing rule: compute in
+right now), 7d ("what am I forgetting?", widened), 7e (smart scheduling) and 7f (replanning) built; 7g not started. Unit tests now
+cover the core logic of 7b/7c/7e/7f (`tests/*.test.ts`). Governing rule: compute in
 code, the model only phrases — every answer costs at most ONE model call (§11G 14). Phase 6: 6a–6f built. **§11C run 2026-09-17 on scratch DB c7 across
 several real quit + relaunch cycles: 24 of 27 steps pass outright; 4 and 12 pass on the tool path the drag calls but the mouse gesture itself
 was not performed; 25 passes against planted history (see below).** Phase 5 complete (§11F passed).
@@ -26,11 +27,65 @@ was not performed; 25 passes against planted history (see below).** Phase 5 comp
   imports repo and moves to core when 6f touches it.
 - **Migration 7:** `plans` table; `events.plan_id`, `events.session_state`; index on `events.starts_at_utc`.
 
-## Unit tests for 7c/7b/7e core logic (2026-09-18)
-- `tests/now.test.ts` (29 checks), `tests/deadline.test.ts` (26), `tests/schedule.test.ts` (10) — same convention as
-  `tests/recurrence.test.ts`/`entity.test.ts`: plain Node type-stripping, no build step, no framework. Run individually:
-  `node tests/now.test.ts` / `deadline.test.ts` / `schedule.test.ts`. Not wired into `tsconfig.*.json` (same as the
-  existing two) or any `npm test` script — there isn't one yet; worth adding a `test` script that runs all five in a row.
+## Phase 7f — replanning (2026-09-18)
+- **The core rule, literally: nothing moves without approval.** `replan_sessions` now previews before it ever writes.
+  First call: `src/main/replan.ts#buildReplanProposal` computes exactly what would be cleared (a plan's own future
+  `planned`/`moved` sessions — done and missed rows are never touched) and what would replace it (candidate slots along
+  the PLAN'S OWN cadence, from `core/plans.ts#generateSessionSlots`, one per vacated session), grades every candidate
+  with the same deterministic `planning.assessSlot` used by 7e, and NEVER even proposes a slot graded `hard` — it is
+  skipped and counted instead (`skippedHardConflicts`). Nothing is written; the tool returns `needs_confirmation` with
+  the preview as the question, reusing the SAME generic `confirm` Offer + deterministic yes/no plumbing built for
+  `delete_event` in §11C and extended nowhere else since — no new mechanism needed. Second call, `confirmed: true`,
+  recomputes the SAME proposal fresh (never trusts a stale cached list — matches `delete_event`'s own precedent) and
+  commits precisely those ids: `repo.deleteEventRow` per cleared session, `repo.insertEvent` per new one.
+- **`src/core/replan.ts`** (platform-independent): `planReplan(input) → ReplanProposal` does the workload-vs-capacity
+  arithmetic (shortfall before/after, `still_short`, `covers_minutes`) and two honesty checks that skip the confirm
+  question entirely because there is nothing to approve: `nothing_to_replan` (no future sessions at all) and
+  **`no_change`** (the recomputed cadence lands on exactly the same times as before — a real bug's fix, see below).
+  `describeReplanQuestion`/`describeReplanDone` write the sentence in both directions — before ("Nothing moves until
+  you say so — shall I go ahead?") and after ("Replanned … cleared … put … in their place").
+- **A real bug, caught by actually running it (not just reading the code):** the first version graded every single
+  candidate slot as `hard`, always, because the sessions a replan is about to CLEAR are still sitting in the database
+  at preview time — every candidate landed on the exact time of the very row it was meant to replace, and
+  `planning.assessSlot` correctly (from its own point of view) called that a hard conflict with itself. Fixed by
+  widening `assessSlot`'s `ignoreEventId?: string` to `ignoreEventId?: string | string[]` (backward compatible — the
+  one other call site, `update_event`'s own single-id move-check, is untouched) and passing every id about to be
+  cleared. Caught immediately because the very first live test came back "12 slots skipped, nowhere workable found" —
+  the honesty in the phrasing (7c/7d/7e's whole discipline) is what made the bug visible instead of silently wrong.
+- **Triggers (spec: "work is missed, a deadline moves, availability changes, or a plan falls behind"):**
+  (1) `mark_session {state:'missed'}` now checks the SAME "falling behind" definition as 7d's `get_forgetting` (a real
+  miss, or no runway left to cover the target) and appends a nudge — never auto-replans — `Say "replan the X sessions"
+  if you'd like me to work out a catch-up schedule.` (2) `add_constraint` (kind `unavailable`) now calls
+  `replan.plansAffectedByConstraint` — expands the new window over a 90-day horizon (so a recurring "busy every
+  Tuesday" constraint is caught, not just a one-off) and, if it now sits on top of any active plan's future sessions,
+  appends `This now clashes with N sessions of "X" — say "replan the sessions" if you'd like me to work around it.`
+  Router: "replan the study sessions" / "catch up the plan" / "fix the schedule for X" / "reschedule X" → `replan_sessions`.
+  (3) A moved deadline is NOT wired in this pass — see below.
+- **Deliberately out of scope for this pass:** replanning is built only for PLAN sessions (the concrete, testable case
+  in §11G 12), not a general re-scheduler for ad hoc deadlines/tasks — that overlaps 7g's "conversational planning" and
+  would need its own design. A plan's `deadline_item` link (if the linked item's own due date changes) is not wired to
+  automatically prompt a replan yet. The commit is not undoable (`reversible: false`, matching the OLD `replan_sessions`'
+  own precedent from 6f — not a regression). Two pre-existing date-parsing gaps were hit while testing and are NOT
+  fixed here (out of scope, unrelated to 7f's own logic): "on the 23rd"/"on the 25th" (an ordinal day with no month)
+  reliably parses as today's date instead of the named day, in both `create_event` and `add_constraint` — worth a
+  dedicated pass since it silently mis-dates things rather than erroring.
+- **Verified on scratch DB r1** (a 12-session plan, 2 sessions marked missed): the missed-session nudge appeared
+  correctly; "replan the study econometrics sessions" with nothing else conflicting correctly detected **no_change**
+  and asked nothing (the two missed sessions' own still-on-calendar rows correctly counted as 2 skipped hard
+  conflicts, since a miss is not a deletion); after booking a real meeting over one future session and adding a
+  recurring-style unavailable window over another, "replan the sessions" correctly proposed clearing 9/10 future
+  sessions and replacing only 8/9 of them (skipping both new hard conflicts), named the exact times on both sides, and
+  said the plan would still be short; "no, keep it" left the database completely untouched (12 sessions, unchanged);
+  "yes, go ahead" committed exactly what was previewed — the meeting and the missed sessions were never touched, the
+  foreign-key check stayed clean, and the count matched exactly (12 → 11: 2 missed kept, 1 old cleared without a
+  replacement, 9 new ones in place of the other 9).
+
+## Unit tests for 7b/7c/7e/7f core logic (2026-09-18)
+- `tests/now.test.ts` (29 checks), `tests/deadline.test.ts` (26), `tests/schedule.test.ts` (10), `tests/replan.test.ts`
+  (12, added with 7f — see its own section above) — same convention as `tests/recurrence.test.ts`/`entity.test.ts`:
+  plain Node type-stripping, no build step, no framework. Run individually: `node tests/now.test.ts` / `deadline.test.ts`
+  / `schedule.test.ts` / `replan.test.ts`. Not wired into `tsconfig.*.json` (same as the existing two) or any `npm test`
+  script — there isn't one yet; worth adding a `test` script that runs all six in a row.
 - **now.test.ts**: `bandFor` hour boundaries and that a zone conversion actually happens (not just the raw UTC hour);
   ranking order (overdue > promise; ideas ranked-but-penalised, never silently dropped, unlike project/waiting/note
   which never enter ranking at all); the unblocks score cap at 3 vs. the wording still reporting the true count;

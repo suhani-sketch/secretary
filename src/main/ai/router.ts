@@ -511,6 +511,19 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     const plans = repo.listPlans().filter((p) => p.title.toLowerCase().includes(m![1].toLowerCase()) || m![1].toLowerCase().includes(p.title.toLowerCase().replace(/^(study|revise|train|practise|practice|work on|read|write|prepare|learn) /, '')))
     if (plans.length === 1) return [{ name: 'get_plan', args: { id: plans[0].id } }]
   }
+  // ---- replanning (7f): "replan the econometrics sessions" / "catch up the study plan" / "fix the schedule for X" —
+  //      always previews first (a plan tool, but the generic confirm mechanism handles the yes/no deterministically). ----
+  if (
+    (m = /^(?:please )?(?:replan|re-?plan|redo|fix|catch up(?: on)?|update|reschedule) (?:the |my )?(.+?)(?: sessions| schedule| plan)?$/.exec(text)) &&
+    /\b(replan|re-plan|redo|fix|catch up|reschedule)\b/.test(text)
+  ) {
+    const subject = m[1].replace(/\b(sessions?|schedule|plan)\b/g, '').trim()
+    const plans = repo.listPlans()
+    const matches = subject
+      ? plans.filter((p) => p.title.toLowerCase().includes(subject.toLowerCase()) || subject.toLowerCase().includes(p.title.toLowerCase().replace(/^(study|revise|train|practise|practice|work on|read|write|prepare|learn) /, '')))
+      : plans
+    if (matches.length === 1) return [{ name: 'replan_sessions', args: { id: matches[0].id } }]
+  }
   // ---- buffers (6f): "thirty minutes to get home from TISS" / "nothing straight after class" / "15 minutes before meetings" ----
   if ((m = /^(?:i need |give me |leave |keep |allow |add )?(\d{1,3}|five|ten|fifteen|twenty|thirty|forty|forty-five|sixty|an hour|half an hour) ?(?:min|mins|minutes?)?\s*(?:to get (?:home|back|there|to|from)|to travel|travel(?:ling)? time|to walk|buffer|gap|break)?\s*(after|before|from|to|between|around|either side of) (.+)$/.exec(text)) && !/\bremind\b/.test(text)) {
     const WORDS: Record<string, number> = { five: 5, ten: 10, fifteen: 15, twenty: 20, thirty: 30, forty: 40, 'forty-five': 45, sixty: 60, 'an hour': 60, 'half an hour': 30 }
