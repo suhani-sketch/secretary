@@ -8,10 +8,11 @@ right now), 7d ("what am I forgetting?", widened), 7e (smart scheduling), 7f (re
 Phase 7 core slices are all in. Unit tests now cover the core logic of 7b/7c/7e/7f/7g (`tests/*.test.ts`). Governing rule: compute in
 code, the model only phrases — every answer costs at most ONE model call (§11G 14). **§11G run 2026-09-18 on fresh scratch DBs:
 all 14 steps pass** (see its own section below) — two real bugs found INCIDENTALLY while testing (not part of what §11G checks)
-were spawned as separate follow-up sessions rather than fixed inline, since they're unrelated to any single Phase 7 slice: a
-stated-duration phrase ("it'll take 15 minutes") starting with an imperative verb gets misread as a due time by the tier-0
-imperative-create rule, and `add_link` throws/rolls back the whole turn when the dependency's blocked side doesn't exist as an
-item yet ("I can't sign the lease until X" said before "sign the lease" was ever mentioned). Phase 6: 6a–6f built. **§11C run 2026-09-17 on scratch DB c7 across
+were spawned as separate follow-up sessions rather than fixed inline at the time, since they're unrelated to any single Phase 7
+slice: a stated-duration phrase ("it'll take 15 minutes") starting with an imperative verb was misread as a due time by the
+tier-0 imperative-create rule (now FIXED, see its own section below), and `add_link` still throws/rolls back the whole turn when
+the dependency's blocked side doesn't exist as an item yet ("I can't sign the lease until X" said before "sign the lease" was
+ever mentioned — not yet fixed). Phase 6: 6a–6f built. **§11C run 2026-09-17 on scratch DB c7 across
 several real quit + relaunch cycles: 24 of 27 steps pass outright; 4 and 12 pass on the tool path the drag calls but the mouse gesture itself
 was not performed; 25 passes against planted history (see below).** Phase 5 complete (§11F passed).
 **Restart (Phase 0 reboot) test is DEFERRED at the user's request — do not raise it.** The user registered a Task Scheduler logon task
@@ -57,6 +58,40 @@ was not performed; 25 passes against planted history (see below).** Phase 5 comp
   30th" → Wed 30 Sept (was: today); "I'm busy on the 25th from 4pm to 8pm" → Fri 25 Sep 16:00–20:00 (was: today,
   16:00–17:00); "I'm busy tomorrow 9-5" and "I'm busy friday 2-4" (no meridiem at all — the pre-existing heuristic)
   and the note-date-contradiction feature (7b) all re-verified unaffected. All 77 existing unit checks still pass.
+
+## Fixed: a stated duration ("it'll take 15 minutes") was misread as a due time (2026-09-18)
+- Found incidentally while running the §11G acceptance test (see below), not part of what it checks: "Write the annual
+  report, it'll take an hour and a half, high importance." created a task titled "Write the annual report, it'll take
+  and a half, high importance", due at an exact clock time close to the actual moment of testing — a due date the user
+  never stated, invented from a sentence that only said how LONG the work would take.
+- Root cause: `router.ts`'s `IMPERATIVE` rule ("write the report tomorrow at 5pm") calls the shared `parseWhen` on the
+  whole remaining sentence. `chrono.casual.parse` treats a bare quantity+unit ("an hour", "15 minutes", "for two hours")
+  as a relative offset from right now and reports the computed date/hour/minute as fully certain — indistinguishable,
+  by every certainty flag `parseWhen` already checks, from a genuine date reference like "thursday at 3". `cleanTitle`
+  then stripped the matched duration phrase out of the title, mangling it too.
+- Fixed centrally in `parseWhen` itself (same place as the bare-ordinal-day fix above, and for the same reason: every
+  other tier-0 rule that touches a date shares this one function, so hardening it there protects all of them at once).
+  A new `BARE_DURATION` regex drops any chrono match that is nothing but a quantity + hour/minute unit, optionally
+  preceded by a benign qualifier (for/about/roughly/around/over/almost/nearly/next) — treated exactly as if chrono had
+  found nothing. Deliberately excludes anything starting with "in" ("in an hour", "in 20 minutes"): that IS a genuine
+  relative-deadline signal, already handled correctly and unaffected by this change (verified below) — it just never
+  reaches `parseWhen` with a bare quantity from the phrases this fix targets, since those either keep the "in" prefix
+  chrono itself matches, or go through the availability/propose_slot rules' own separate duration regexes, which were
+  already isolating durations correctly before this fix and are untouched by it.
+- Verified: the two exact repro sentences now fall through tier 0 entirely (to the model), producing clean titles
+  ("Write the annual report" / "Reply to the landlord's email") with `due_at_utc: null` and the model's own
+  `effort_minutes` (90 / 15) — confirmed directly against the database, not just the reply text. Regression pass
+  confirmed nothing legitimate broke: "call the bank thursday at 3", "submit the report friday, hard deadline",
+  "write the report tomorrow at 5pm" (still tier 0, still exact/day-precision as before), "meeting … on the 23rd at
+  5pm" (bare-ordinal path untouched), "I'm busy for the next hour" (its own separate duration regex, untouched) — and,
+  critically, "finish it in an hour" and "get the tickets in 20 minutes" STILL create an exact due time ~1h/20min from
+  now, proving the "in" exclusion works and genuine relative deadlines were not collateral damage. All existing unit
+  tests still pass (`recurrence.test.ts` fails, but confirmed via `git stash` to fail identically without this change —
+  a pre-existing, unrelated Node module-resolution issue in a different file, not caused by this fix).
+- Not touched: `inferImportance`/the model's own importance guess for "high importance" phrasing came back inverted
+  (stored as low) in both the original repro and this fix's regression run — a separate, pre-existing, likely
+  model-judgement issue (or an `inferImportance` HIGH-regex gap: it matches the word "important" but not "importance"),
+  out of scope for this ticket; worth a dedicated look if it recurs.
 
 ## §11G intelligence acceptance run (2026-09-18, several fresh scratch DBs, all steps via SECRETARY_CHAT/SECRETARY_USER_DATA)
 All 14 steps of spec §11G pass. Each ran against its own throwaway scratch DB (never the real one); a few needed a second,

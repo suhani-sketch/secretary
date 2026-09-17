@@ -118,9 +118,21 @@ interface ParsedWhen {
   looseness?: 'week'
 }
 
+/**
+ * A stated DURATION/EFFORT ("it'll take an hour", "for two hours", "roughly 45 minutes") is not a due time — but chrono
+ * reads a bare quantity+unit as a relative offset from now and reports the computed date/hour/minute as fully certain,
+ * identical to a genuine date reference by every flag `parseWhen` otherwise checks. Deliberately excludes "in" ("in an
+ * hour", "in 20 minutes"), which IS a genuine relative-deadline signal — but that phrasing already has its own dedicated
+ * regexes elsewhere (snooze/"remind me in N", the availability and propose_slot duration rules) and never reaches this
+ * function with a bare quantity in the first place, so excluding it here does not affect them.
+ */
+const BARE_DURATION = /^(?:for|about|roughly|around|over|almost|nearly|just over|just under|next)?\s*(?:a couple of|half an?|a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\s*(?:hours?|hrs?|h|minutes?|mins?|m)[.,!?]*$/i
+
 /** chrono result → honest precision. Only hours the user actually stated count as exact. */
 function parseWhen(text: string): ParsedWhen | null {
-  const results = chrono.casual.parse(text, new Date(), { forwardDate: true })
+  // Drop any match that is nothing but a bare duration — treated exactly as if chrono found nothing, never a
+  // fabricated due date/time (see BARE_DURATION above).
+  const results = chrono.casual.parse(text, new Date(), { forwardDate: true }).filter((r) => !BARE_DURATION.test(r.text.trim()))
   // A bare "the 25th"/"on the 23rd" — chrono has no concept of this: it returns nothing, or (worse, silently) a
   // time-only result that defaults the date to today. Caught here so it never mis-dates anything downstream, and
   // never differently in different rules (see src/main/ordinal-date.ts for the two failure modes, verified live).
