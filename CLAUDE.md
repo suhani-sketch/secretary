@@ -23,6 +23,29 @@ was not performed; 25 passes against planted history (see below).** Phase 5 comp
 **Restart (Phase 0 reboot) test is DEFERRED at the user's request — do not raise it.** The user registered a Task Scheduler logon task
 `Secretary` (20 s delay) after Explorer's Shell-Core log showed the HKCU Run entry being skipped; `<userData>/startup.log` logs each launch.
 
+## Fixed: "light" next to an overdue item read as the app not noticing (2026-09-18)
+- User feedback on the 8a briefing: `"Today looks light"` sat right next to `"Pay the electricity bill" (overdue)`
+  in the same sentence — technically defensible by raw time-load math (a couple of small unscheduled items against
+  a 12 h day genuinely is a low ratio), but "light" as a WORD promises nothing needs attention, which is false the
+  moment something is overdue. Root cause: `core/calendar/aggregate.ts#dayStatus` (spec 6d, shared by EVERY
+  calendar surface — Month/Week/Day/Agenda, not just the briefing) weighed hard deadlines lightly (+45 min) and
+  didn't weigh overdue items or high-importance items AT ALL — `highImportance` was already computed in the
+  summary but never actually passed into the function.
+- Fixed at the source, not just in the briefing's own phrasing, since Month/Week would have shown the exact same
+  mismatched "light" for the identical day otherwise: `dayStatus` gained two new weighted terms (`overdueCount *
+  45`, `highImportanceCount * 20`, alongside the existing `hardDeadlines * 45`) AND a floor rule — "light" is now
+  a promise, not just a ratio: any real urgency signal (overdue, hard deadline, or high importance) floors the
+  result at "normal" even when the raw time estimate is tiny (a five-minute overdue task is still overdue), while
+  the ratio stays free to escalate further to busy/overloaded when the load is genuinely heavy, not merely present.
+  A single call site (`assembleDay`), both new params default to 0 so nothing else could have silently broken.
+- `tests/dayStatus.test.ts` (9 checks, new — this function had no test coverage before): the exact real-world case
+  (one overdue + one hard deadline + one high-importance item, otherwise-empty calendar) is no longer "light";
+  a genuinely empty day still is; the floor never SUPPRESSES real escalation to busy/overloaded, only raises the
+  minimum. Verified live too: the exact scenario from the 8a bug report now reads "Today looks normal" in both the
+  morning briefing and `get_day`'s own independent phrasing (same underlying `summary.status` field, confirming
+  the fix is consistent across every surface that reads it, not just the one that was complained about); a
+  genuinely empty day still correctly reads "Nothing pressing today."
+
 ## Phase 8b — approaching-deadline alerts (2026-09-18)
 - **"Only fires when the evidence is clear, never speculatively" — enforced by reusing 7b's own arithmetic verbatim,
   not a new heuristic.** `src/main/deadlineAlerts.ts#sweepDeadlineRisk` calls the exact same `upcomingDeadlineTargets`

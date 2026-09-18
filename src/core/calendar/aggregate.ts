@@ -53,17 +53,22 @@ export function dayWindow(date: string, zone: string): { startUtc: string; endUt
 const CLOSED = new Set(['done', 'cancelled', 'archived'])
 
 /**
- * Descriptive workload (spec 6d), deterministic. Load = scheduled minutes + estimated due effort (+45 per hard deadline).
- * Capacity = a ~12 h waking day minus unavailable windows, never below 4 h. Never a score; four words.
+ * Descriptive workload (spec 6d), deterministic. Load = scheduled minutes + estimated due effort (+45 per hard
+ * deadline, +45 per overdue item, +20 per high-importance item due/overdue today). Capacity = a ~12 h waking day
+ * minus unavailable windows, never below 4 h. Never a score; four words.
+ *
+ * "Light" is a PROMISE, not just a ratio: it tells the reader nothing here needs their attention. An overdue item,
+ * a hard deadline or a high-importance obligation due today makes that promise false even when the raw time
+ * estimate is small — a five-minute overdue task is still overdue. So on top of nudging the ratio, anything that
+ * would otherwise land on "light" while carrying a real urgency signal is floored at "normal" instead; the ratio
+ * is still free to climb further to "busy"/"overloaded" when the load is genuinely heavy, not just present.
  */
-export function dayStatus(scheduledMin: number, dueEffortMin: number, hardDeadlines: number, availableMin: number): DayStatus {
-  const load = scheduledMin + dueEffortMin + hardDeadlines * 45
+export function dayStatus(scheduledMin: number, dueEffortMin: number, hardDeadlines: number, availableMin: number, overdueCount = 0, highImportanceCount = 0): DayStatus {
+  const load = scheduledMin + dueEffortMin + hardDeadlines * 45 + overdueCount * 45 + highImportanceCount * 20
   if (load === 0) return 'light'
   const ratio = load / Math.max(1, availableMin)
-  if (ratio < 0.25) return 'light'
-  if (ratio < 0.45) return 'normal'
-  if (ratio < 0.75) return 'busy'
-  return 'overloaded'
+  const byRatio: DayStatus = ratio < 0.25 ? 'light' : ratio < 0.45 ? 'normal' : ratio < 0.75 ? 'busy' : 'overloaded'
+  return byRatio === 'light' && (overdueCount > 0 || hardDeadlines > 0 || highImportanceCount > 0) ? 'normal' : byRatio
 }
 
 export function unavailableMinutes(constraints: Constraint[], startUtc: string, endUtc: string): number {
@@ -220,7 +225,7 @@ export function assembleDay(inp: DayInputs): DayBundle {
     due_effort_minutes: dueEffort,
     available_minutes: available,
     conflicts: countConflicts(scheduled),
-    status: isPast ? null : dayStatus(scheduledMin, dueEffort, hardDeadlines, available)
+    status: isPast ? null : dayStatus(scheduledMin, dueEffort, hardDeadlines, available, isToday ? overdue.length : 0, highImportance)
   }
 
   return {
