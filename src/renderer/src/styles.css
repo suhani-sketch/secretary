@@ -140,3 +140,59 @@ body {
 /* Plan sessions: missed ones read as gone-by, never as failure — muted, struck, still on the record. */
 .cal-grid .fc .fc-event.k-session.t-muted { background: transparent; color: var(--color-ink-muted-2); border: 1px dashed var(--color-slate-soft); box-shadow: none; text-decoration: line-through; }
 .cal-grid .fc .fc-event.k-session.t-low { opacity: 0.75; }
+
+/*
+ * Micro-interactions and motion (spec §8 Phase 9, 9i): one small, shared vocabulary rather than a per-component
+ * invention. Three entrance animations (a message landing, an item appearing, a confirmation surfacing) cover
+ * "sending a message" / "creating an item" / manual-edit feedback (which is also how "undoing" gets its own visible
+ * confirmation — undo_last's result flows through the same `say()` flash used everywhere else); `.completing`
+ * covers "completing something" — a beat of fade+strikethrough before the row actually leaves, so it reads as
+ * causality, not a silent disappearance. "Interacting with the creature" already has its own restrained language
+ * from 9b/9c/9d (breathe/blink/tail, the single `.lift.bounce` for a small win, sparkles — never confetti — for a
+ * real accomplishment); nothing here duplicates that, it only adds the reduced-motion switch that now covers it too.
+ */
+@keyframes bubbleIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes itemIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes flashIn {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.bubble-in { animation: bubbleIn .22s ease-out; }
+.item-in { animation: itemIn .25s ease-out; }
+.flash-in { animation: flashIn .18s ease-out; }
+.completing { opacity: .35; text-decoration: line-through; transition: opacity .2s ease; }
+
+/* Every rounded interactive surface gets the same smooth hover/active language instead of an instant snap —
+   deliberately NOT `transform`, so this never fights FullCalendar's own drag/resize handling (6e) or the
+   Companion/Room's own pose transitions (9b/9g), which already manage their own transform transitions precisely. */
+button, [role="tab"], .rounded-full, .rounded-lg, .rounded-xl, .rounded-2xl, .rounded-3xl {
+  transition-property: background-color, color, opacity, box-shadow, border-color;
+  transition-duration: .15s;
+  transition-timing-function: ease;
+}
+
+/* Reduced motion: a viewer's real OS/browser preference always applies (the @media block); ".reduce-motion" on
+   <html> is the identical switch, settable from the dev hook ("#motion:reduce") so it can be screenshotted and
+   verified without changing a real OS accessibility setting. Both simply make every animation and transition in
+   the app instant — the standard, robust pattern — rather than hand-picking which of the dozens across Companion,
+   Room and the surfaces to keep; state, causality and continuity are still communicated at 0.01ms, just abruptly. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+.reduce-motion *, .reduce-motion *::before, .reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}

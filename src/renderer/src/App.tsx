@@ -120,7 +120,12 @@ export default function App(): React.JSX.Element {
   const [status, setStatus] = useState<ChatStatus>({ kind: 'idle' })
   const [showDebug, setShowDebug] = useState(false)
   const [flash, setFlash] = useState<string | null>(null)
+  const [flashSeq, setFlashSeq] = useState(0)
   const [editing, setEditing] = useState<Editing>(null)
+  // Micro-interactions (9i): the id of anything mid-"completing" — held visible, faded and struck through, for one
+  // beat before the underlying complete_item/resolve_waiting call actually lands, so ticking something off reads as
+  // an action with a result rather than an instant, silent disappearance.
+  const [completingIds, setCompletingIds] = useState<Set<string>>(new Set())
   // Voice (7a): a mic button beside Send. Recording state is local UI only; the actual send reuses `status` (pushed
   // from main over the same onChatStatus channel as typed messages), so the "thinking…" indicator behaves identically.
   const [recording, setRecording] = useState(false)
@@ -226,6 +231,21 @@ export default function App(): React.JSX.Element {
   // Dev hook: "#state:working,light:night,env:rain" forces creature state / light band / environment for screenshots.
   const hashParts = Object.fromEntries(window.location.hash.replace('#', '').split(',').map((p) => p.split(':') as [string, string]))
   const forcedState = (hashParts['state'] as CompanionState | undefined) ?? null
+  // Reduced motion (9i): the real signal is the OS/browser media query; ".reduce-motion" on <html> is the single
+  // switch every animation/transition in styles.css checks, so nothing here has to know HOW motion got turned off.
+  // "#motion:reduce" forces it on for screenshotting the reduced state without touching a real OS accessibility
+  // setting (which this app has no business changing on someone's machine for a dev-hook test).
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const forced = hashParts['motion'] === 'reduce'
+    const apply = (): void => {
+      document.documentElement.classList.toggle('reduce-motion', forced || mq.matches)
+    }
+    apply()
+    mq.addEventListener('change', apply)
+    return () => mq.removeEventListener('change', apply)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   useEffect(() => {
     if (hashParts['light']) setTimeChoice(hashParts['light'] as TimeChoice)
     if (hashParts['env']) setEnvironment(hashParts['env'] as EnvironmentId)
@@ -328,6 +348,7 @@ export default function App(): React.JSX.Element {
 
   const say = (msg: string): void => {
     setFlash(msg)
+    setFlashSeq((n) => n + 1) // a fresh key each time, so consecutive confirmations each get their own entrance (9i)
     setTimeout(() => setFlash(null), 5000)
   }
 
@@ -350,6 +371,25 @@ export default function App(): React.JSX.Element {
       res = await runTool(name, { ...args, confirmed: true })
     }
     say(res.error ? `Couldn't: ${res.error}` : res.applied.map((a) => a.phrase).join(' '))
+  }
+
+  /**
+   * Completing something (9i): the row fades and strikes through for one beat BEFORE the tool call actually runs,
+   * rather than vanishing the instant the click lands — causality made visible, not just a state flip. Guarded
+   * against a double-click re-firing the same completion while its own animation is still playing.
+   */
+  const completeWithFeedback = (tool: string, id: string, extra: Record<string, unknown> = {}): void => {
+    if (completingIds.has(id)) return
+    setCompletingIds((s) => new Set(s).add(id))
+    setTimeout(() => {
+      void quick(tool, { id, ...extra })
+      setCompletingIds((s) => {
+        if (!s.has(id)) return s
+        const n = new Set(s)
+        n.delete(id)
+        return n
+      })
+    }, 260)
   }
 
   const send = async (): Promise<void> => {
@@ -797,7 +837,7 @@ export default function App(): React.JSX.Element {
             Send
           </button>
         </div>
-        {flash && <p className="mt-2 text-xs text-stone-500">{flash}</p>}
+        {flash && <p key={flashSeq} className="mt-2 text-xs text-stone-500 flash-in">{flash}</p>}
       </main>
 
       {/* TODAY RAIL (or DEBUG) */}
@@ -809,7 +849,7 @@ export default function App(): React.JSX.Element {
                 <h2 className="text-xs font-medium uppercase tracking-wide text-amber-800">Overdue ({overdueItems.length})</h2>
                 <ul className="flex flex-col gap-1 overflow-y-auto">
                   {overdueItems.slice(0, 8).map((it) => (
-                    <li key={it.id} className="group text-sm flex items-start gap-2 rounded-lg px-1 py-1 hover:bg-white/80 cursor-pointer" onClick={() => setEditing({ kind: 'item', item: it })}>
+                    <li key={it.id} className={`item-in group text-sm flex items-start gap-2 rounded-lg px-1 py-1 hover:bg-white/80 cursor-pointer ${completingIds.has(it.id) ? 'completing' : ''}`} onClick={() => setEditing({ kind: 'item', item: it })}>
                       <span className="mt-0.5 text-xs">⚠</span>
                       <div className="min-w-0 flex-1">
                         <div className="truncate">{it.title}</div>
@@ -820,7 +860,7 @@ export default function App(): React.JSX.Element {
                         title="Done"
                         onClick={(e) => {
                           e.stopPropagation()
-                          void quick('complete_item', { id: it.id })
+                          completeWithFeedback('complete_item', it.id)
                         }}
                       >
                         ✓
@@ -835,7 +875,7 @@ export default function App(): React.JSX.Element {
               {upcoming.length === 0 && <p className="text-sm text-stone-400">Nothing dated, no alarms set.</p>}
               <ul className="flex flex-col gap-1 overflow-y-auto">
                 {upcoming.slice(0, 10).map((u) => (
-                  <li key={u.key} className="group text-sm flex items-start gap-2 rounded-lg px-1 py-1 hover:bg-white/80 cursor-pointer" onClick={u.open}>
+                  <li key={u.key} className={`item-in group text-sm flex items-start gap-2 rounded-lg px-1 py-1 hover:bg-white/80 cursor-pointer ${u.item && completingIds.has(u.item.id) ? 'completing' : ''}`} onClick={u.open}>
                     <span className="mt-0.5 text-xs" title={u.kind === 'alarm' ? 'Reminder will fire' : u.kind === 'note' ? 'Note for that day' : 'Due date, no reminder'}>
                       {u.kind === 'alarm' ? '🔔' : u.kind === 'note' ? '📝' : '📅'}
                     </span>
@@ -856,7 +896,7 @@ export default function App(): React.JSX.Element {
                         title="Done"
                         onClick={(e) => {
                           e.stopPropagation()
-                          void quick('complete_item', { id: u.item!.id })
+                          completeWithFeedback('complete_item', u.item!.id)
                         }}
                       >
                         ✓
@@ -906,7 +946,7 @@ export default function App(): React.JSX.Element {
                     const late = isOverdue(w.due_at_utc, w.due_precision, now)
                     const fu = followUpsOn.get(w.id) ?? []
                     return (
-                      <li key={w.id} className="group text-sm flex items-start gap-2 rounded-lg px-1 py-1 hover:bg-white/80 cursor-pointer" onClick={() => setEditing({ kind: 'item', item: w })}>
+                      <li key={w.id} className={`item-in group text-sm flex items-start gap-2 rounded-lg px-1 py-1 hover:bg-white/80 cursor-pointer ${completingIds.has(w.id) ? 'completing' : ''}`} onClick={() => setEditing({ kind: 'item', item: w })}>
                         <span className="mt-0.5 text-xs">⏳</span>
                         <div className="min-w-0 flex-1">
                           <div className="truncate">
@@ -924,7 +964,7 @@ export default function App(): React.JSX.Element {
                           title="They replied"
                           onClick={(e) => {
                             e.stopPropagation()
-                            void quick('resolve_waiting', { id: w.id, outcome: 'replied' })
+                            completeWithFeedback('resolve_waiting', w.id, { outcome: 'replied' })
                           }}
                         >
                           replied ✓
@@ -942,7 +982,7 @@ export default function App(): React.JSX.Element {
                 {standalone.slice(0, 30).map((it) => (
                   <li
                     key={it.id}
-                    className="group text-sm flex flex-col rounded-lg px-1 py-1 hover:bg-white/80 cursor-pointer"
+                    className={`item-in group text-sm flex flex-col rounded-lg px-1 py-1 hover:bg-white/80 cursor-pointer ${completingIds.has(it.id) ? 'completing' : ''}`}
                     onClick={() => setEditing(it.kind === 'project' ? { kind: 'project', project: it } : { kind: 'item', item: it })}
                   >
                   <div className="flex items-start gap-2">
@@ -968,7 +1008,7 @@ export default function App(): React.JSX.Element {
                       title="Done"
                       onClick={(e) => {
                         e.stopPropagation()
-                        void quick('complete_item', { id: it.id })
+                        completeWithFeedback('complete_item', it.id)
                       }}
                     >
                       ✓
@@ -1047,13 +1087,13 @@ export default function App(): React.JSX.Element {
 
 function Bubble({ m }: { m: UiMessage }): React.JSX.Element {
   if (m.role === 'system') {
-    return <div className="self-center text-xs text-stone-500 bg-white/60 rounded-full px-3 py-1 max-w-[85%] truncate">{m.content}</div>
+    return <div className="bubble-in self-center text-xs text-stone-500 bg-white/60 rounded-full px-3 py-1 max-w-[85%] truncate">{m.content}</div>
   }
   const user = m.role === 'user'
   return (
     <div className={`flex flex-col gap-1 max-w-[85%] ${user ? 'self-end items-end' : 'self-start items-start'}`}>
       <div
-        className={`rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap ${user ? 'bg-cocoa text-cream' : 'bg-paper text-cocoa'} ${m.pending ? 'opacity-60' : ''}`}
+        className={`bubble-in rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap ${user ? 'bg-cocoa text-cream' : 'bg-paper text-cocoa'} ${m.pending ? 'opacity-60' : ''}`}
       >
         {m.content}
       </div>

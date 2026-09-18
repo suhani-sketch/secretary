@@ -3,10 +3,13 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 9 — The living world. 9a (the room as a place), 9b (the creature as a character system),
-9c (autonomous ambient behaviour), 9d (direct interaction), 9e (rare initiation), 9f (familiarity through real
-memory), 9g (room persistence and the deferred Phase 4 features) and 9h (coherent product language) built,
-testable; 9i (micro-interactions and motion) not started. **Phase 8 — Proactivity is COMPLETE.** 8a (morning briefing), 8b (approaching-deadline alerts), 8c
+## Current phase: Phase 9 — The living world. **All nine slices (9a–9i) built, testable.** 9a (the room as a
+place), 9b (the creature as a character system), 9c (autonomous ambient behaviour), 9d (direct interaction), 9e
+(rare initiation), 9f (familiarity through real memory), 9g (room persistence and the deferred Phase 4 features),
+9h (coherent product language) and 9i (micro-interactions and motion) all built and verified per-slice. **Not yet
+run: §9T/§9U** — spec's own overarching Phase 9 acceptance ("leave the application open for several hours...",
+"use it over multiple days...") is an observational test of the lived-in whole, not a single session's scripted
+check; needs the user's own multi-day use, the same way the Phase 0 reboot test needed a real restart. **Phase 8 — Proactivity is COMPLETE.** 8a (morning briefing), 8b (approaching-deadline alerts), 8c
 (missed-task and waiting-item follow-up), 8d (adaptive intensity, quiet hours) built and tested; SPEC.md's own Phase 8 line
 has no lettered slices at all (8a–8d were this session's own organisational split, not spec text) — "conversational
 replanning" is PARTIALLY covered by 7f (full preview, nothing moves without approval, a proactive nudge) but NOT by a
@@ -16,6 +19,72 @@ passed outright; 3 genuine bugs found (a forward-looking reluctance statement me
 instead of empathy+alternative; "move it"/"cancel the reminder" reused the last-focused item's id as the wrong entity type
 and threw instead of rerouting/answering gracefully; a bare-day move on an exact-time item silently dropped the time) — all
 three FIXED and re-verified live + via direct DB read on a fresh scratch DB (see their own section below).**
+
+## Phase 9i — micro-interactions and motion (2026-09-19, the last Phase 9 slice)
+- **One small, shared vocabulary, not a per-component invention** — three CSS entrance keyframes
+  (`styles.css#bubbleIn/itemIn/flashIn`) cover "sending a message" (`.bubble-in` on `Bubble`'s own div — a new
+  message, whether typed by the user, replied by the model, or pushed proactively by 8a/8c/9e, all fade+rise in the
+  same way, since they all render through the same `Bubble` component), "creating an item" (`.item-in` on every
+  rail `<li>` — Overdue, Coming Up, Open, Waiting — and Things' project cards), and manual-edit/undo confirmation
+  (`.flash-in` on the existing `say()` flash line, now keyed by a new `flashSeq` counter so each new confirmation —
+  including `undo_last`'s own — gets its own entrance instead of the text just swapping silently mid-fade).
+- **Why a CSS class on a stable-keyed list item is enough, with no tracking state needed:** React only replays a
+  mount-triggered CSS `animation` when the DOM node is actually created — an item that already exists and simply
+  re-renders (same `key={it.id}`) keeps its node and never replays `.item-in`. So the SAME unconditional class,
+  applied to every row, correctly plays only for genuinely new rows (a new item, or one re-appearing after undo)
+  and stays silent for the hundred re-renders that happen in between. No "is this new" bookkeeping required.
+- **Completing something — causality made visible, not an instant vanish.** `App.tsx#completeWithFeedback(tool,
+  id, extra)`: on click, the row's `id` goes into a new `completingIds` set (→ a `.completing` class: fade to 35%
+  opacity + strikethrough, `transition: opacity .2s`), and the REAL `complete_item`/`resolve_waiting` tool call is
+  deliberately deferred 260ms behind that — the row is visibly already fading by the time the underlying data
+  actually changes and the row unmounts, rather than the two happening in the same instant. Guarded against a
+  double-click re-firing mid-animation (`if (completingIds.has(id)) return`). Wired to all four existing quick-✓
+  buttons (Overdue, Coming Up, Open, and Waiting's "replied ✓") — the only inline one-click completions in the app;
+  the full ItemEditor's own "Done" button was deliberately left alone, since closing the editor is already its own
+  clear completion signal and there is no persistent row left behind to animate away.
+- **A broad, deliberately narrow global transition rule**, rather than editing hundreds of individual
+  `className` strings: every `button`/`[role="tab"]`/`.rounded-{full,lg,xl,2xl,3xl}` element (which is to say,
+  nearly every interactive surface in the app, since that's this app's own established rounding convention) now
+  transitions `background-color`/`color`/`opacity`/`box-shadow`/`border-color` over 150ms instead of snapping.
+  **Deliberately excludes `transform`** — the one property Companion's own pose/lift animations (9b) and
+  FullCalendar's drag-and-drop (6e) already manage themselves, precisely and on their own terms; a blanket
+  transform transition would have made calendar dragging visibly lag behind the pointer. Checked by reasoning
+  through the risk before writing the rule, not discovered by a regression afterward.
+- **"Interacting with the creature" already had its own restrained language before this slice** (breathe/blink/
+  tail since Phase 4, the single `.lift.bounce` for `quietlyExcited` since 9b, sparkles — never confetti — only for
+  `celebrating`, a real accomplishment, since 9b/9c) — 9i adds nothing new here on purpose, per spec's own "no
+  excessive bouncing, no confetti" and the fact that the ordinary/major-accomplishment distinction the spec asks
+  for ("a slightly stronger reaction, still restrained") was already built: one small sparkle for finishing a task,
+  three sparkles + a stretch pose only for finishing a whole project. Restated, not re-invented.
+- **Reduced motion, one real switch — a `.reduce-motion` class on `<html>`, not a per-component flag.** A new
+  effect (`App.tsx`, alongside the other dev-hook hash reads) watches `matchMedia('(prefers-reduced-motion:
+  reduce)')` and keeps the class in sync on change; a global `@media (prefers-reduced-motion: reduce)` block in
+  `styles.css` independently applies the identical rule so a first paint before the JS effect runs is never
+  briefly un-reduced. Both use the well-known robust pattern — collapse every `animation-duration`/
+  `transition-duration` to `0.01ms` and cap `animation-iteration-count` to 1 — rather than hand-picking which of
+  the dozens of animations across Companion/Room/the surfaces to individually keep or cut: state, causality and
+  continuity are still communicated at 0.01ms, just abruptly instead of smoothly, satisfying "respected throughout"
+  by construction (every animation and transition in the codebase runs through these two CSS properties, there is
+  no third mechanism anywhere that could slip past the rule).
+- **A real, if narrow, environment gap accepted rather than worked around: this dev hook cannot be screenshotted
+  mid-animation.** `SECRETARY_SCREENSHOT` captures a single frame ~2.5s after load, by which point every entrance
+  animation here (150–250ms) has long since settled to its final frame — normal-motion and reduced-motion
+  screenshots of the same seeded conversation are, correctly, pixel-identical, since both converge to the same end
+  state; a static screenshot cannot and structurally never could show a duration-only difference. Verified instead
+  by: (1) `tsc`/`vite build` both clean; (2) grepping the COMPILED output confirms `.completing`, `.reduce-motion`,
+  and all three `@keyframes` survived Tailwind's build pipeline intact (custom raw CSS, not Tailwind-generated
+  utilities, so nothing there was ever at risk of being purged — confirmed rather than assumed); (3) a seeded
+  scratch-DB screenshot with a populated conversation + rail, both with and without `#motion:reduce` forced, came
+  back visually identical and undamaged — confirming the new classes don't break layout, without claiming to prove
+  the timing difference a screenshot cannot show. The live click-through — actually watching a message land, an
+  item enter, a row fade on completion, in real time, with and without the OS's own reduce-motion setting — is for
+  the user to do, the same honest limitation already noted for FullCalendar's mouse-drag interactions in 6e/§11C.
+- **Not built here** (this was the last Phase 9 slice; the two acceptance tests are what remains): §9T/§9U are
+  observational, multi-hour/multi-day, not something a scripted session can run — see the "Current phase" line
+  above. No animation was added to the Calendar's own DayView/DayPanel/MonthView/WeekView rows — those already
+  have a carefully-tuned drag/resize/click interaction surface (6b–6f, extensively verified in §11C), and blanket-
+  animating them risked destabilizing that rather than adding coherence; a deliberate scope boundary, not an
+  oversight, left for a dedicated pass if the user wants Calendar rows to also get entrance/exit motion later.
 
 ## Phase 9h — coherent product language (2026-09-19)
 - **The real gap wasn't styling drift — Things and Settings were still literal placeholder text** ("Things — its

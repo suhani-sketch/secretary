@@ -82,7 +82,7 @@ export function ThingsSurface({ active, archived, partsOf, lastActivityAt, onOpe
                 <button
                   key={p.id}
                   onClick={() => onOpen(p)}
-                  className="group text-left rounded-2xl bg-white/70 hover:bg-white p-4 flex flex-col gap-2 min-w-0"
+                  className="item-in group text-left rounded-2xl bg-white/70 hover:bg-white p-4 flex flex-col gap-2 min-w-0"
                 >
                   <div className="flex items-start gap-2">
                     <TypeGlyph item={p} />
