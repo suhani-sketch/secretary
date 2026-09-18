@@ -17,7 +17,7 @@ import { createTray, refreshTrayMenu } from './tray'
 import { GeminiProvider } from './ai/gemini'
 import type { Provider } from './ai/provider'
 import { applyExternalTools, enqueueChat, enqueueVoice } from './ai/orchestrator'
-import { IPC, type AppInfo, type ChatStatus, type CreateItemInput } from '../shared/types'
+import { IPC, type AppInfo, type ChatMessage, type ChatStatus, type CreateItemInput } from '../shared/types'
 import { listAiCalls } from './log'
 
 // ---- Identity: required for Windows toasts, otherwise they vanish silently (spec §5) ----
@@ -331,6 +331,10 @@ function send(channel: string, payload?: unknown): void {
 }
 const notifyRendererChanged = (): void => send(IPC.changed)
 const sendChatStatus = (s: ChatStatus): void => send(IPC.chatStatus, s)
+/** 9e's proactive lines are checked on every scheduler tick, not just window-show, since a long focus session or
+ *  late-night work can run its whole course without the window needing to be shown again — pushed the exact same
+ *  way 8a/8c's own messages are, by id, never a chatHistory refetch that could race an in-flight send. */
+const sendMessageAdded = (msg: ChatMessage): void => send(IPC.messageAdded, msg)
 
 const trayHandlers = {
   showWindow,
@@ -369,9 +373,10 @@ function onReady(): void {
   mainWindow = createWindow()
   if (!startedHidden && !coldUrl) mainWindow.once('ready-to-show', () => mainWindow?.show())
 
-  // Highest-risk subsystem first: sweep what we missed, then start ticking.
+  // Highest-risk subsystem first: sweep what we missed, then start ticking. The message callback is wired before
+  // the sweep runs, not after, so a 9e line surfaced by the very first sweep still has somewhere to go.
+  startScheduler(notifyRendererChanged, sendMessageAdded)
   startupSweep()
-  startScheduler(notifyRendererChanged)
   if (coldUrl) handleProtocolUrl(coldUrl)
 
   // Developer hook: SECRETARY_CHAT="first message||second message" runs a scripted conversation

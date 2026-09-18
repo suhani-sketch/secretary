@@ -4,8 +4,8 @@ Source of truth for the design is `SPEC.md`. This file tracks where the build ac
 Update it at the end of every session (spec §11).
 
 ## Current phase: Phase 9 — The living world. 9a (the room as a place), 9b (the creature as a character system),
-9c (autonomous ambient behaviour) and 9d (direct interaction) built, testable; 9e–9i (rare initiation, real-memory
-familiarity, room persistence, coherent product language, micro-interactions) not started. **Phase 8 — Proactivity is COMPLETE.** 8a (morning briefing), 8b (approaching-deadline alerts), 8c
+9c (autonomous ambient behaviour), 9d (direct interaction) and 9e (rare initiation) built, testable; 9f–9i
+(real-memory familiarity, room persistence, coherent product language, micro-interactions) not started. **Phase 8 — Proactivity is COMPLETE.** 8a (morning briefing), 8b (approaching-deadline alerts), 8c
 (missed-task and waiting-item follow-up), 8d (adaptive intensity, quiet hours) built and tested; SPEC.md's own Phase 8 line
 has no lettered slices at all (8a–8d were this session's own organisational split, not spec text) — "conversational
 replanning" is PARTIALLY covered by 7f (full preview, nothing moves without approval, a proactive nudge) but NOT by a
@@ -15,6 +15,65 @@ passed outright; 3 genuine bugs found (a forward-looking reluctance statement me
 instead of empathy+alternative; "move it"/"cancel the reminder" reused the last-focused item's id as the wrong entity type
 and threw instead of rerouting/answering gracefully; a bare-day move on an exact-time item silently dropped the time) — all
 three FIXED and re-verified live + via direct DB read on a fresh scratch DB (see their own section below).**
+
+## Phase 9e — the creature initiates, rarely (2026-09-18)
+- **Six named triggers, split across two genuinely different mechanisms — not because one is easier, but because
+  three of them ARE reactions to a user action and three genuinely are not.** An important task finishing, a
+  repeatedly-postponed one finally landing, and an important wait resolving all follow directly from something the
+  user just did — they extend `personality.ts` (Phase 5c), right beside every other "something just happened"
+  observation, reusing its rate limit and rules unchanged. A long focus session, working late, and a deadline now
+  only hours away follow from nothing the user did this moment — time simply passed — so they live in a NEW module,
+  `main/initiate.ts`, checked on every scheduler tick (not just window-show, since a two-hour focus session can run
+  its whole course without the window ever needing to be shown again).
+- **One shared budget, on purpose.** `personality.ts` gained `tryProactiveLine`, factored out of the existing
+  `personalityLine` so both halves spend from the exact same 90-minute-gap/3-per-day/never-twice allowance
+  (`spendBudget`) — a chatty proactive day genuinely leaves less room for reactive lines and vice versa, matching
+  spec's "sparse" as ONE property of the creature, not a separate quota per feature.
+- **A real bug caught before it ever ran: rule 3 (never comment on anything overdue) would have silenced the exact
+  case `wait_resolved_important` exists for.** The existing "never on anything overdue" check in `personality.ts`
+  would have suppressed every firing of the new wait-resolved trigger, since staleness is precisely WHY it fires —
+  fixed by passing the picked event key into `struggling()` and exempting only that one key from the overdue check
+  (its own line is written to acknowledge the staleness directly, not ignore it; every other trigger keeps the
+  original behaviour of staying quiet about anything still overdue right now).
+- **Reactive additions to `personality.ts`** (`key()`, checked only for `complete_item`/`resolve_waiting`):
+  `postponed_done` (≥2 `rescheduled` activities on the item before it finally completes — checked first, since
+  "you finally got that one out of the way" is the truer thing to say when an item is both postponed and
+  important); `important_done` (importance critical/high, or a hard deadline); `wait_resolved_important` (the wait
+  itself was important, OR its expected-reply date had already passed — an ordinary reply arriving on schedule is
+  not "the creature initiating", it is just bookkeeping, so it stays silent).
+- **Proactive triggers in `main/initiate.ts`**, each with its own id-tracking (mirroring 8b's `alerted_ids`
+  pattern) so a given happening/deadline is only ever mentioned once: a `focus`-metaphor happening running ≥120
+  minutes → "You've been at this for two hours." (the spec's own exact line); a HARD deadline due within 4 hours →
+  a calm heads-up, deliberately a DIFFERENT signal from 8b's own deadline alert (8b fires on feasibility risk —
+  infeasible/tight arithmetic — and would say nothing at all about a deadline that stayed comfortably on track
+  right up until a few hours out; this is pure time proximity, regardless of feasibility, so the two never
+  suppress each other); local hour 23:00–03:00 AND a genuine user message within the last 20 minutes (never fired
+  against the app merely left open, idle, overnight) → "I think that's enough for tonight.", at most once per
+  calendar night.
+- **Delivered exactly like 8a/8c**: a real assistant chat message via the same `onMessageAdded` channel, never a
+  toast — nothing here can pop up over what the user is doing, satisfying "never interrupting focused work" by
+  construction rather than by a special case. Exempt from 8d's quiet hours for the same reason 8a/8c already are:
+  quiet hours hold TOASTS, and a message sitting quietly until the user looks was never an interruption to hold
+  back. `scheduler.ts#startScheduler` gained a second, optional callback (`onMessage`) alongside the existing
+  `onDelivered` one, wired in `index.ts` to `win.webContents.send(IPC.messageAdded, …)` — and wired BEFORE
+  `startupSweep()` runs now, not after, so a line surfaced by the very first sweep still has somewhere to go.
+- **Verified live, all six triggers, mostly without needing to fake anything.** The three reactive ones: created a
+  hard deadline and completed it → "That's the one that counted." (important_done); created a task, rescheduled it
+  twice, completed it → "You finally got that one out of the way." (postponed_done, the spec's own exact line);
+  created a waiting item with an expected-reply date already in the past, then resolved it → "That had been
+  sitting a while. Good to hear." (wait_resolved_important — confirming the rule-3 exemption fix above actually
+  works, not just reads correctly). The three proactive ones, via a real restart each: backdated a running focus
+  happening's start time by 3 hours, relaunched → "You've been at this for two hours." on the startup sweep;
+  created a hard deadline 2 hours out, relaunched → "Heads up — … is due at 01:19."; and — genuinely, not
+  simulated, since it happened to actually be 23:20 local on this machine while testing — sent a real message,
+  relaunched moments later → "I think that's enough for tonight." All three proactive ones re-verified NOT to
+  repeat on a further relaunch (id-tracking + the shared budget both independently confirmed via direct settings
+  query, not just absence of a log line), and the late-night one specifically re-verified silent on a genuinely
+  idle scratch database at the same real late hour, with no recent message to justify it.
+- **Not built here** (later Phase 9 slices, not 9e's scope): nothing about a triggered line is remembered as
+  "familiar" in the way 9f's real-memory familiarity will eventually want; no per-trigger user control (e.g. no way
+  to say "don't tell me about long focus sessions specifically" — only the existing blanket 8d intensity/quiet-hours
+  controls apply, same as every other proactive surface).
 
 ## Phase 9d — direct interaction (2026-09-18)
 - **Two genuinely different kinds of interaction, kept genuinely separate.** Spec 9d lists "click the creature"

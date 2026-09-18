@@ -3,17 +3,33 @@ import { nextOccurrenceUtc } from './recurrence'
 import { log } from './log'
 import { showToast } from './notifier'
 import * as repo from './repo'
-import type { Reminder } from '../shared/types'
+import type { ChatMessage, Reminder } from '../shared/types'
 import { doneLineFor } from './ai/tools'
 import { sessionsToMarkMissed } from '../core/plans'
 import { sweepDeadlineRisk } from './deadlineAlerts'
 import { isQuietNow, intensityEffects } from './notifyPrefs'
+import { maybeInitiate } from './initiate'
 
 export const TICK_MS = 30_000
 
 let timer: NodeJS.Timeout | null = null
 let ticking = false
 let onDeliveredCb: (() => void) | null = null
+let onMessageCb: ((msg: ChatMessage) => void) | null = null
+
+/** 9e's proactive lines (long focus, late night, deadline soon) — its own try/catch so a bug here can never take
+ *  reminder delivery down with it, matching the same independence 8a/8c's window-show handlers already keep. */
+function checkInitiate(now: DateTime): void {
+  try {
+    const msg = maybeInitiate(now.toLocal())
+    if (msg) {
+      log('info', 'initiate.sent', msg.content)
+      onMessageCb?.(msg)
+    }
+  } catch (e) {
+    log('error', 'initiate.failed', (e as Error).message)
+  }
+}
 
 /** Human-readable lateness, e.g. "4 min", "2 h 10 min", "1 day 3 h". */
 function describeLateness(fireAtUtc: string, now: DateTime): string {
@@ -199,6 +215,9 @@ export function startupSweep(): number {
   const quiet = isQuietNow(now.toLocal())
   endDueHappenings(now, true, quiet)
   if (!quiet) sweepDeadlineRisk(now.toISO()!)
+  // 9e delivers as a chat message, never a toast, so — like 8a/8c — it is exempt from quiet hours: there is
+  // nothing to interrupt, only something waiting for whenever the user next looks.
+  checkInitiate(now)
   const due = repo.duePendingReminders(now.toISO()!)
   if (quiet) {
     // Held, not delivered: they stay 'pending' and will be picked up (correctly shown as late) by the first tick
@@ -227,6 +246,7 @@ export function tick(reason = 'interval'): void {
     endDueHappenings(now, false, quiet)
     sweepMissedSessions(now)
     if (!quiet) sweepDeadlineRisk(now.toISO()!)
+    checkInitiate(now) // chat message, not a toast — exempt from quiet hours, same as 8a/8c
     const due = repo.duePendingReminders(now.toISO()!)
     if (quiet) {
       // Left 'pending' on purpose — never delivered, never marked missed, while quiet hours are active. The first
@@ -247,8 +267,9 @@ export function tick(reason = 'interval'): void {
   }
 }
 
-export function startScheduler(onDelivered: () => void): void {
+export function startScheduler(onDelivered: () => void, onMessage?: (msg: ChatMessage) => void): void {
   onDeliveredCb = onDelivered
+  onMessageCb = onMessage ?? null
   if (timer) return
   timer = setInterval(() => tick(), TICK_MS)
   log('info', 'scheduler.started', `ticking every ${TICK_MS / 1000}s`)
