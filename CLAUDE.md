@@ -4,8 +4,9 @@ Source of truth for the design is `SPEC.md`. This file tracks where the build ac
 Update it at the end of every session (spec §11).
 
 ## Current phase: Phase 9 — The living world. 9a (the room as a place), 9b (the creature as a character system),
-9c (autonomous ambient behaviour), 9d (direct interaction), 9e (rare initiation) and 9f (familiarity through real
-memory) built, testable; 9g–9i (room persistence, coherent product language, micro-interactions) not started. **Phase 8 — Proactivity is COMPLETE.** 8a (morning briefing), 8b (approaching-deadline alerts), 8c
+9c (autonomous ambient behaviour), 9d (direct interaction), 9e (rare initiation), 9f (familiarity through real
+memory) and 9g (room persistence and the deferred Phase 4 features) built, testable; 9h–9i (coherent product
+language, micro-interactions) not started. **Phase 8 — Proactivity is COMPLETE.** 8a (morning briefing), 8b (approaching-deadline alerts), 8c
 (missed-task and waiting-item follow-up), 8d (adaptive intensity, quiet hours) built and tested; SPEC.md's own Phase 8 line
 has no lettered slices at all (8a–8d were this session's own organisational split, not spec text) — "conversational
 replanning" is PARTIALLY covered by 7f (full preview, nothing moves without approval, a proactive nudge) but NOT by a
@@ -15,6 +16,84 @@ passed outright; 3 genuine bugs found (a forward-looking reluctance statement me
 instead of empathy+alternative; "move it"/"cancel the reminder" reused the last-focused item's id as the wrong entity type
 and threw instead of rerouting/answering gracefully; a bare-day move on an exact-time item silently dropped the time) — all
 three FIXED and re-verified live + via direct DB read on a fresh scratch DB (see their own section below).**
+
+## Phase 9g — room persistence and the deferred Phase 4 features (2026-09-19)
+- **Six pieces, all from the spec line, all verified live:** room state survives close/restart/computer-restart;
+  favourite scenes; scene rotation; weather-driven atmosphere; time-of-day transitions without abrupt swaps; the
+  naming moment; objects accumulate naturally. Nothing here is a new mechanic bolted onto Phase 4 — each piece
+  fills in a specific "deferred" line from Phase 4's own decisions section (favourites/rotation, weather/season,
+  room growth, naming moment) using the exact settings/offer/personality machinery already built for everything
+  else, not a parallel system.
+- **Persistence is a straight `settings` table write, same convention as `scene.environment`/`scene.timeOfDay`
+  since Phase 4** — no new storage concept. `scene.favorites` (JSON array), `scene.rotate` (bool), and the
+  creature's name (`creature.name`) all round-trip through `settings:get`/`settings:set`, loaded on mount in
+  `App.tsx` and applied before first paint the same way theme already is. A full quit + relaunch was verified to
+  restore all three together in one pass, not just individually.
+- **Favourites + rotation, not a new picker.** The existing "scene" menu (Phase 4) grew a ★ toggle per environment
+  and a 🔀 toggle for "rotate among favourites"; when rotation is on, `App.tsx` picks one favourite per day via a
+  deterministic `hashDay(date, seed)` — the same pure-hash-of-(date,seed) pattern `ambientPose`/`AMBIENT_SLOT_MS`
+  already established in companionState.ts, so the pick needs no persisted "today's scene" row and is stable
+  across any number of relaunches on the same day. Verified via direct SQL: `scene.favorites=["coast","winter"]`
+  + rotate on → "winter" consistently picked and rendered for the seeded date, confirmed by screenshot.
+- **Weather is atmosphere, not a new simulated system** — no forecast, no season model (deferred, correctly, same
+  as Phase 4's own "weather/season" line always said this was future scope beyond a light overlay). `Room.tsx`
+  gained a small `weather` prop (clear|cloudy|misty) driving translucent overlays inside the existing `Window()`
+  SVG group only — clouds drifting, a soft mist wash — never touching the creature, the furniture, or any other
+  surface. Picked once per day via the same `hashDay` mechanism as rotation (a separate seed), with a
+  `SECRETARY_VIEW=…,weather:<x>` dev-hook override for screenshotting each state on demand.
+- **A real bug, caught by actually looking, not by trusting the code:** the first misty overlay (`#F4F1EA` at
+  0.4–0.5 opacity) was completely invisible against the sky/hill colours — indistinguishable from clear weather in
+  a screenshot. Diagnosed by temporarily swapping in a garish `#FF00FF` at full opacity, which DID render,
+  proving the overlay logic itself was correct and this was purely a colour-contrast mistake, not a wiring bug.
+  Fixed with a darker, more opaque `#D9D5CB` at 0.7/0.85 — confirmed visible afterward, all three weather states
+  screenshotted and visually distinct.
+- **Time-of-day "without abrupt swaps":** the existing light-band system (morning/afternoon/evening/night, driven
+  by the real clock since Phase 4) previously snapped its sun/moon and sky colours instantly at each band
+  boundary. `Room.tsx`'s sun and moon are now both always present in the DOM with a CSS opacity crossfade between
+  them, and the sky gradient stops interpolate rather than jump — the boundary itself is unchanged (still the same
+  four bands), only the render across it is now a fade instead of a cut.
+- **The naming moment — a proactive line, then a normal conversational reply, nothing new invented.** New
+  `src/main/naming.ts`: fires at most once ever (a permanent `creature.name` setting, once set, disqualifies the
+  trigger for good), gated on real usage — `repo.distinctUserMessageDays()` (new repo method, counts distinct
+  calendar days with at least one user message) must show at least 3 different days, so the line can never appear
+  in a user's very first sitting. Delivered exactly like 8a/8c/9e: a real `role:'assistant'` message pushed over
+  the existing `onMessageAdded` channel from `win.on('show', …)`, never a toast. Sets a new `Offer{kind:'naming'}`
+  (context.ts) so the very next reply — whatever the user says — can be interpreted as the name. New write tool
+  `set_creature_name {name}` (tools.ts) is what actually commits it; router.ts gained two tier-0 rules: an explicit
+  phrasing ("call it X", "let's name it X", "her/his/their name is X") matches anywhere in conversation, and a
+  bare short reply (no other tier-0 rule matches, offer pending) is treated as the name itself — the last-resort
+  fallback the naming offer specifically needs, since "Biscuit" alone doesn't look like any other command.
+- **The Offer system's pre-existing limitation (in-memory only, resets on process restart) is not new to this
+  slice** — it already applied to every offer kind since Phase 3a. Verified as an ACCEPTED gap, not a regression:
+  accepting the name in a freshly-restarted process (offer gone) fell through the bare-reply tier-0 rule to the
+  tier-2 model instead, but the model correctly inferred the name from conversation history anyway and called
+  `set_creature_name` itself — the feature still works end to end, just via a different (also correct) path.
+- **Objects accumulate naturally — no unlock mechanics, no progress bar, exactly as instructed.** A new
+  `Mementos` component in `Room.tsx` (a small stack of rounded tokens on the existing bookshelf, beside the plant)
+  is gated on nothing but `completedProjectsCount >= 3` (a plain count of finished Things, already available from
+  existing data — no new counter, no visible number, no "X/3 to unlock" language anywhere). Below the threshold,
+  nothing renders; at and above it, the stack is simply there, matching Phase 4's "room growth" deferred line
+  without turning it into a game mechanic.
+- **CRITICAL dev-hook gotcha found this slice, worth remembering for every future window-show-gated feature:**
+  `npx electron . --hidden` NEVER fires `win.on('show', …)` — the window never actually becomes visible under
+  `--hidden`, so 8a/8c/9g-naming (all show-gated) cannot be exercised that way; a scheduler-tick-gated feature
+  (8b, 9e) still fires fine under `--hidden` since `startupSweep()` runs regardless. Root-caused via direct DB
+  inspection after a false "naming never fires" read: every trigger condition was actually met, and a DIFFERENT
+  9e late-night line HAD fired via the tick path in the same run, proving the gate itself was correct and only the
+  test's own launch flag was wrong. Fixed the test (relaunch without `--hidden`), not the code.
+- **Verified live**, each piece independently and persistence combined: weather (all three states, screenshotted,
+  visually distinct after the mist fix); naming (full lifecycle — 3-distinct-day gate, chat-delivered offer,
+  acceptance via both the tier-0 fallback and the tier-2 model-inference path, permanent persistence, confirmed
+  never re-offered on a later relaunch, name shown in the room's top-left label); rotation + favourites (SQL-seeded
+  favourites list + rotate flag → correct deterministic daily pick, screenshotted); mementos (3 completed Things
+  via a scripted run → the token stack correctly appears on the shelf, screenshotted and visually confirmed next to
+  the plant); a combined quit-and-relaunch with favourites, rotation and the creature's name all set together came
+  back identical in one pass.
+- **Not built here** (Phase 9h/9i, later slices per spec): coherent product language across surfaces, and smaller
+  micro-interactions beyond what 9a–9g already cover. No seasons or real forecast data feed weather — it remains a
+  once-a-day deterministic pick, matching the spec's own "atmosphere" framing rather than a simulation. No UI for
+  renaming after the one-time moment (the spec describes a single naming moment, not a rename feature) — worth
+  asking the user whether that is wanted later, not assumed here.
 
 ## Phase 9f — familiarity through real memory (2026-09-18)
 - **A prefix, not a suffix — deliberately the opposite shape from 9e's own lines.** "Back to the application?" is

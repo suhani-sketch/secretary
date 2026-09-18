@@ -14,7 +14,7 @@ import type {
   SchedulerLogEntry,
   ToolRunResult
 } from '../../shared/types'
-import { Room, type EnvironmentId, type TimeChoice } from './Room'
+import { Room, type EnvironmentId, type TimeChoice, type Weather } from './Room'
 import { useCompanion, type CompanionState } from './companionState'
 import { ItemEditor, NoteEditor, ReminderEditor } from './Editors'
 import { ItemHistory, ProjectView } from './ProjectView'
@@ -178,6 +178,11 @@ export default function App(): React.JSX.Element {
   const [hour, setHour] = useState(new Date().getHours())
   const [environment, setEnvironment] = useState<EnvironmentId>('trees')
   const [timeChoice, setTimeChoice] = useState<TimeChoice>('auto')
+  // Room persistence (9g): favourites, rotation and the creature's own name, restored the same way
+  // environment/timeOfDay already were — nothing here is new persistence machinery, just more settings.
+  const [favorites, setFavorites] = useState<EnvironmentId[]>([])
+  const [rotation, setRotation] = useState(false)
+  const [creatureName, setCreatureName] = useState<string | null>(null)
   const prevOverdue = useRef<number | null>(null)
   useEffect(() => {
     const t = setInterval(() => setHour(new Date().getHours()), 30_000)
@@ -203,6 +208,17 @@ export default function App(): React.JSX.Element {
     void window.api.getSetting('scene.environment').then((v) => v && setEnvironment(v as EnvironmentId))
     void window.api.getSetting('scene.timeOfDay').then((v) => v && setTimeChoice(v as TimeChoice))
     void window.api.getSetting('ui.theme').then((v) => (v === 'dark' || v === 'light') && setTheme(v, false))
+    void window.api.getSetting('scene.favorites').then((v) => {
+      if (!v) return
+      try {
+        const arr = JSON.parse(v) as unknown
+        if (Array.isArray(arr)) setFavorites(arr.filter((x): x is EnvironmentId => typeof x === 'string'))
+      } catch {
+        /* ignore a corrupted value — favourites simply start empty again */
+      }
+    })
+    void window.api.getSetting('scene.rotation').then((v) => setRotation(v === '1'))
+    void window.api.getSetting('creature.name').then((v) => setCreatureName(v))
   }, [])
   // Dev hook: "#state:working,light:night,env:rain" forces creature state / light band / environment for screenshots.
   const hashParts = Object.fromEntries(window.location.hash.replace('#', '').split(',').map((p) => p.split(':') as [string, string]))
@@ -212,10 +228,13 @@ export default function App(): React.JSX.Element {
     if (hashParts['env']) setEnvironment(hashParts['env'] as EnvironmentId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+  // Dev hook only: "#weather:cloudy" forces the room's weather for a screenshot (real weather is computed fresh
+  // from today's date and has no other way to be tested on demand).
+  const weatherOverride = hashParts['weather'] as Weather | undefined
 
   const refresh = useCallback(async () => {
     try {
-      const [i, r, l, a, x, ac, act, lk, nt, cs, hp] = await Promise.all([
+      const [i, r, l, a, x, ac, act, lk, nt, cs, hp, cn] = await Promise.all([
         window.api.listItems(),
         window.api.listReminders(),
         window.api.listLog(50),
@@ -226,7 +245,10 @@ export default function App(): React.JSX.Element {
         window.api.listLinks(),
         window.api.listNotes(),
         window.api.listConstraints(),
-        window.api.listHappenings()
+        window.api.listHappenings(),
+        // Re-read here too, not only at startup: the naming moment (9g) sets this through a chat exchange, not a
+        // settings call, so it can change at any point in the session, not only on load.
+        window.api.getSetting('creature.name')
       ])
       setItems(i)
       setLinks(lk)
@@ -239,6 +261,7 @@ export default function App(): React.JSX.Element {
       setExtractions(x)
       setAiCalls(ac)
       setActivities(act)
+      setCreatureName(cn)
       setRefreshKey((k) => k + 1)
     } catch (e) {
       setFlash((e as Error).message)
@@ -433,6 +456,9 @@ export default function App(): React.JSX.Element {
   const openItems = items.filter(live)
   const pending = reminders.filter((r) => r.state === 'pending' || r.state === 'snoozed' || r.state === 'paused')
   const itemById = new Map(items.map((i) => [i.id, i]))
+  // Objects accumulate naturally (9g): a real, always-freshly-computed count of finished Things, all time — never
+  // a stored "unlock" flag. The room simply shows a small stack of mementos once this is genuinely true.
+  const completedProjectsCount = items.filter((i) => i.kind === 'project' && (i.status === 'done' || i.status === 'archived')).length
   // Things: which project each item belongs to (part_of), and how many live parts each project has.
   const parentOf = new Map<string, Item>()
   const partsOf = new Map<string, number>()
@@ -646,14 +672,31 @@ export default function App(): React.JSX.Element {
           onPet={() => setPettedAt(Date.now())}
           onChangeEnvironment={(e) => {
             setEnvironment(e)
+            setRotation(false) // a direct pick is a direct pick — rotation (9g) stops choosing for the room
             void window.api.setSetting('scene.environment', e)
+            void window.api.setSetting('scene.rotation', '0')
           }}
           onChangeTime={(t) => {
             setTimeChoice(t)
             void window.api.setSetting('scene.timeOfDay', t)
           }}
+          favorites={favorites}
+          rotation={rotation}
+          onToggleFavorite={(e) => {
+            const next = favorites.includes(e) ? favorites.filter((f) => f !== e) : [...favorites, e]
+            setFavorites(next)
+            void window.api.setSetting('scene.favorites', JSON.stringify(next))
+          }}
+          onToggleRotation={() => {
+            const next = !rotation
+            setRotation(next)
+            void window.api.setSetting('scene.rotation', next ? '1' : '0')
+          }}
+          completedCount={completedProjectsCount}
+          weatherOverride={weatherOverride}
         />
         <div className="absolute top-3 left-4 text-[11px] text-stone-600/80 pointer-events-none">
+          {creatureName ? `${creatureName} · ` : ''}
           {new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}
         </div>
         <p className="absolute bottom-2 left-0 right-0 text-[11px] text-stone-500 text-center pointer-events-none">

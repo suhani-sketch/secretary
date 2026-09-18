@@ -10,7 +10,9 @@ import type { CompanionState, Gaze } from './companionState'
  * cheap tricks rather than true 3D: a receding floor (the back edge is narrower than the front — forced perspective),
  * soft contact shadows under every piece of furniture so nothing floats, and near-things-are-bigger sizing on the
  * creature's own spot scale. Environments change the window and a few objects; time of day changes the light over
- * any environment. Nothing here is gamified and nothing accumulates (that is 9g).
+ * any environment, crossfading rather than swapping abruptly (9g). Favourites and rotation, weather, and objects
+ * quietly accumulating with real use are all 9g too — none of it gamified: no unlock moment, no progress bar, no
+ * "you earned a mug", just a room that is honestly a little different depending on what has actually happened.
  */
 
 export type EnvironmentId = 'trees' | 'rain' | 'coast' | 'winter' | 'library' | 'fireplace'
@@ -40,6 +42,31 @@ export function bandForHour(h: number): Band {
   return 'night'
 }
 
+/** A tiny deterministic hash of a calendar date — the same "changes slowly, restores identically after a
+ *  restart" trick the ambient rotation (9c) already uses, so weather and scene rotation (9g) need no storage
+ *  of their own: a fresh render on the same day always recomputes the same answer. */
+function hashDay(dateISO: string, seed: number): number {
+  let h = seed >>> 0
+  for (let i = 0; i < dateISO.length; i++) h = (Math.imul(h, 31) + dateISO.charCodeAt(i)) >>> 0
+  return h
+}
+
+export type Weather = 'clear' | 'cloudy' | 'misty'
+/** Weather-driven atmosphere (9g): changes once a day, mostly clear — a mood layered over whichever environment
+ *  is showing, not a replacement for it (a literal rainstorm is already the "Rainy window" environment choice). */
+export function weatherForDate(dateISO: string): Weather {
+  const r = hashDay(dateISO, 7) % 100
+  if (r < 60) return 'clear'
+  if (r < 85) return 'cloudy'
+  return 'misty'
+}
+
+/** Scene rotation (9g): a deterministic daily pick from the user's favourites, or all six if none are favourited. */
+export function rotatedEnvironment(dateISO: string, favorites: EnvironmentId[]): EnvironmentId {
+  const pool = favorites.length ? favorites : ENVIRONMENTS.map((e) => e.id)
+  return pool[hashDay(dateISO, 13) % pool.length]
+}
+
 /** Light for each band: wall, floor, window sky gradient, sun/moon, lamp, and how much to dim the creature. */
 const LIGHT: Record<Band, { wall: string; wall2: string; floor: string; floor2: string; sky: [string, string]; sun: string | null; moon: boolean; lamp: boolean; dim: number; desk: string }> = {
   morning: { wall: '#F6E9D8', wall2: '#EFDCC5', floor: '#D9C3A8', floor2: '#C7AC8C', sky: ['#BFD9EE', '#F7E3C9'], sun: '#F6D28A', moon: false, lamp: false, dim: 0, desk: '#B98F6A' },
@@ -59,16 +86,32 @@ interface Props {
   onPet: () => void
   onChangeEnvironment: (e: EnvironmentId) => void
   onChangeTime: (t: TimeChoice) => void
+  /** Room persistence (9g): favourited environments and whether the room is rotating through them on its own. */
+  favorites: EnvironmentId[]
+  rotation: boolean
+  onToggleFavorite: (e: EnvironmentId) => void
+  onToggleRotation: () => void
+  /** Objects accumulate naturally (9g) — a real, always-freshly-computed count, never a stored "unlock". */
+  completedCount: number
+  /** Dev/test hook only (matches the existing #state:/#light: forcing): overrides the computed weather. */
+  weatherOverride?: Weather
 }
 
-export function Room({ state, gaze, environment, time, happening, onPet, onChangeEnvironment, onChangeTime }: Props): React.JSX.Element {
+export function Room({ state, gaze, environment, time, happening, onPet, onChangeEnvironment, onChangeTime, favorites, rotation, onToggleFavorite, onToggleRotation, completedCount, weatherOverride }: Props): React.JSX.Element {
   const [hour, setHour] = useState(new Date().getHours())
+  const [today, setToday] = useState(() => new Date().toISOString().slice(0, 10))
   useEffect(() => {
-    const t = setInterval(() => setHour(new Date().getHours()), 60_000)
+    const t = setInterval(() => {
+      setHour(new Date().getHours())
+      setToday(new Date().toISOString().slice(0, 10))
+    }, 60_000)
     return () => clearInterval(t)
   }, [])
   const band: Band = time === 'auto' ? bandForHour(hour) : time
   const L = LIGHT[band]
+  // Rotation (9g) picks the environment on its own, once a day, from favourites; a manual pick (below) turns it off.
+  const activeEnvironment = rotation ? rotatedEnvironment(today, favorites) : environment
+  const weather = weatherOverride ?? weatherForDate(today)
   // While something cooks, an idle or window-gazing creature waits beside the kitchen object instead (spec Phase 5).
   const basePose = poseFor(state)
   const pose = happening === 'cooking' && (basePose === 'sit' || basePose === 'window') ? 'kitchen' : basePose
@@ -117,13 +160,16 @@ export function Room({ state, gaze, environment, time, happening, onPet, onChang
 
         {/* the window zone — unchanged from Phase 4: view, shelf, books, plant */}
         <g transform="translate(0 60)">
-          {environment === 'library' ? <Bookcase night={band === 'night'} /> : <Window env={environment} band={band} L={L} />}
+          {activeEnvironment === 'library' ? <Bookcase night={band === 'night'} /> : <Window env={activeEnvironment} band={band} L={L} weather={weather} />}
           <rect x="24" y="238" width="212" height="6" rx="2" fill={L.desk} style={{ transition: 'fill 2s ease' }} />
           <rect x="24" y="244" width="212" height="3" fill="#000" opacity="0.06" />
           <Books x={30} y={212} />
           <rect x="118" y="220" width="30" height="18" rx="3" fill="#C9B29A" />
           <rect x="118" y="218" width="30" height="5" rx="2" fill="#B39B82" />
-          <Plant x={196} y={200} winter={environment === 'winter'} />
+          <Plant x={196} y={200} winter={activeEnvironment === 'winter'} />
+          {/* objects accumulate naturally (9g): a small stack of mementos once real project history has actually
+              accumulated — no announcement, no unlock moment, just quietly true or not each time the room renders */}
+          {completedCount >= 3 && <Mementos x={168} y={214} />}
         </g>
 
         {/* the reading nook — new (9a): fills what used to be a flat, empty stretch of wall with an actual place to
@@ -186,7 +232,7 @@ export function Room({ state, gaze, environment, time, happening, onPet, onChang
         </g>
 
         {/* fireplace environment: a small hearth on the left */}
-        {environment === 'fireplace' && <Hearth x={14} y={682} />}
+        {activeEnvironment === 'fireplace' && <Hearth x={14} y={682} />}
 
         {/* living activities: a small kitchen object appears only while something cooks (spec Phase 5) */}
         {/* a real cooking happening (Phase 5) OR the creature's own ambient decision to make tea (9c) — either
@@ -223,12 +269,28 @@ export function Room({ state, gaze, environment, time, happening, onPet, onChang
       </button>
       {menu && (
         <div className="absolute top-9 right-3 left-3 rounded-2xl bg-cream/95 shadow-lg p-3 text-xs flex flex-col gap-2 z-10" onMouseLeave={() => setMenu(false)}>
-          <div className="text-stone-500">Window</div>
+          <div className="flex items-center justify-between">
+            <span className="text-stone-500">Window</span>
+            {/* rotation (9g): the room picks among favourites on its own, once a day, instead of staying fixed */}
+            <button
+              onClick={onToggleRotation}
+              className={`rounded-lg px-2 py-0.5 ${rotation ? 'bg-cocoa text-cream' : 'bg-white/70 text-stone-700 hover:bg-white'}`}
+              title="Let the room change its own view, day to day, from your favourites"
+            >
+              🔀 rotate
+            </button>
+          </div>
           <div className="flex flex-wrap gap-1">
             {ENVIRONMENTS.map((e) => (
-              <button key={e.id} onClick={() => onChangeEnvironment(e.id)} className={`rounded-lg px-2 py-1 ${environment === e.id ? 'bg-cocoa text-cream' : 'bg-white/70 text-stone-700 hover:bg-white'}`}>
-                {e.emoji} {e.label}
-              </button>
+              <span key={e.id} className={`rounded-lg flex items-center overflow-hidden ${activeEnvironment === e.id ? 'bg-cocoa text-cream' : 'bg-white/70 text-stone-700'}`}>
+                <button onClick={() => onChangeEnvironment(e.id)} className="px-2 py-1 hover:opacity-80" title="Pick this view directly (turns rotation off)">
+                  {e.emoji} {e.label}
+                </button>
+                {/* favourite (9g) — only meaningful once rotation is on, but can be set any time */}
+                <button onClick={() => onToggleFavorite(e.id)} className="pr-1.5 opacity-70 hover:opacity-100" title={favorites.includes(e.id) ? 'Remove from favourites' : 'Add to favourites'}>
+                  {favorites.includes(e.id) ? '★' : '☆'}
+                </button>
+              </span>
             ))}
           </div>
           <div className="text-stone-500 mt-1">Light</div>
@@ -245,7 +307,7 @@ export function Room({ state, gaze, environment, time, happening, onPet, onChang
   )
 }
 
-function Window({ env, band, L }: { env: EnvironmentId; band: Band; L: (typeof LIGHT)[Band] }): React.JSX.Element {
+function Window({ env, band, L, weather }: { env: EnvironmentId; band: Band; L: (typeof LIGHT)[Band]; weather: Weather }): React.JSX.Element {
   return (
     <g>
       <rect x="40" y="30" width="180" height="170" rx="10" fill="url(#sky)" />
@@ -300,10 +362,26 @@ function Window({ env, band, L }: { env: EnvironmentId; band: Band; L: (typeof L
           <Tree x={100} y={130} h={44} band={band} />
         </g>
       )}
-      {/* sun / moon */}
-      {L.sun && <circle cx={band === 'morning' ? 70 : band === 'day' ? 130 : 190} cy={band === 'day' ? 60 : 92} r="14" fill={L.sun} opacity="0.95" />}
-      {L.moon && (
-        <g>
+      {/* weather (9g): clouds soften the sky before the sun/moon; kept subtle, a mood over the scene rather than
+          a replacement for it — a literal storm is already the "Rainy window" environment. */}
+      {weather === 'cloudy' && (
+        <g opacity="0.6" style={{ transition: 'opacity 2.5s ease' }}>
+          <ellipse cx="82" cy="52" rx="30" ry="12" fill="#EDEAE3" />
+          <ellipse cx="116" cy="46" rx="22" ry="10" fill="#EDEAE3" />
+          <ellipse cx="58" cy="58" rx="16" ry="7" fill="#EDEAE3" />
+        </g>
+      )}
+      {/* sun / moon: always mounted, crossfading via opacity — a band change used to pop one out and the other in
+          with no transition at all; this is the "no abrupt swap" fix (9g). */}
+      <circle
+        cx={band === 'morning' ? 70 : band === 'day' ? 130 : 190}
+        cy={band === 'day' ? 60 : 92}
+        r="14"
+        fill={L.sun ?? LIGHT.evening.sun!}
+        opacity={L.sun ? 0.95 : 0}
+        style={{ transition: 'opacity 2.5s ease, cx 2.5s ease, cy 2.5s ease' }}
+      />
+      <g opacity={L.moon ? 1 : 0} style={{ transition: 'opacity 2.5s ease' }}>
           <circle cx="176" cy="66" r="12" fill="#F2EBDD" opacity="0.95" />
           <circle cx="182" cy="62" r="11" fill={LIGHT.night.sky[0]} />
           <g fill="#F2EBDD">
@@ -313,6 +391,12 @@ function Window({ env, band, L }: { env: EnvironmentId; band: Band; L: (typeof L
             <circle cx="112" cy="96" r="0.8" />
             <circle cx="205" cy="110" r="1" />
           </g>
+        </g>
+      {/* misty weather (9g) sits closest to the viewer, a soft ground fog over whatever else is in the window */}
+      {weather === 'misty' && (
+        <g style={{ transition: 'opacity 2.5s ease' }}>
+          <ellipse cx="130" cy="176" rx="95" ry="16" fill="#D9D5CB" opacity="0.7" />
+          <ellipse cx="130" cy="190" rx="95" ry="12" fill="#D9D5CB" opacity="0.85" />
         </g>
       )}
       {/* frame */}
@@ -343,6 +427,19 @@ function Books({ x, y }: { x: number; y: number }): React.JSX.Element {
         <rect key={i} x={x + i * 12} y={y + (i % 2) * 3} width="10" height={26 - (i % 2) * 3} rx="1.5" fill={c} />
       ))}
       <rect x={x + 62} y={y + 14} width="26" height="12" rx="1.5" fill="#C9B27A" transform={`rotate(-90 ${x + 75} ${y + 20})`} />
+    </g>
+  )
+}
+
+/** Objects accumulate naturally (9g) — a small, quiet stack of finished things once there genuinely have been a
+ *  few, sitting on the shelf like any other small object. No badge, no counter, no fanfare on the shelf itself —
+ *  just there, or not, exactly like everything else in the room. */
+function Mementos({ x, y }: { x: number; y: number }): React.JSX.Element {
+  return (
+    <g style={{ transition: 'opacity 1.5s ease' }}>
+      <ellipse cx={x + 8} cy={y + 20} rx="9" ry="3" fill="#B5836D" />
+      <ellipse cx={x + 8} cy={y + 16} rx="9" ry="3" fill="#C9A688" />
+      <ellipse cx={x + 8} cy={y + 12} rx="9" ry="3" fill="#D9B79F" />
     </g>
   )
 }

@@ -11,6 +11,7 @@ import { TICK_MS, startScheduler, startupSweep, stopScheduler, tick } from './sc
 import { buildDay, buildDays, occurrencesBetween } from './calendar'
 import { maybeSendMorningBriefing } from './briefing'
 import { maybeSendFollowUp } from './followUp'
+import { maybeOfferName } from './naming'
 import { inferImportance } from '../core/importance'
 import { describeProgress, planProgress } from '../core/plans'
 import { createTray, refreshTrayMenu } from './tray'
@@ -287,6 +288,17 @@ function createWindow(): BrowserWindow {
     } catch (e) {
       log('error', 'followup.failed', (e as Error).message)
     }
+    // The naming moment (9g): own independent try/catch, same reasoning as the two above — asked at most once,
+    // ever, regardless of what else this window-show does or fails to do.
+    try {
+      const msg = maybeOfferName()
+      if (msg) {
+        log('info', 'naming.offered', msg.content)
+        setTimeout(() => win.webContents.send(IPC.messageAdded, msg), 400)
+      }
+    } catch (e) {
+      log('error', 'naming.failed', (e as Error).message)
+    }
   })
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
@@ -553,7 +565,10 @@ function registerIpc(): void {
     return buildDays(fromDateLocal, Math.max(1, Math.min(42, Math.floor(Number(days) || 7))))
   })
   // UI settings (scene choice). Only whitelisted keys, so the renderer cannot touch anything else in the table.
-  const UI_SETTING = /^scene\.(environment|timeOfDay)$|^companion\.[a-z_]+$|^calendar\.(weekStart|view)$|^ui\.theme$/
+  // scene.favorites/rotation (9g) persist the room's own scene preferences the same way environment/timeOfDay
+  // already did; creature.name is readable here so the room can display it once set, even though it is only ever
+  // WRITTEN through the set_creature_name tool (the naming moment is a conversation, not a settings field).
+  const UI_SETTING = /^scene\.(environment|timeOfDay|favorites|rotation)$|^companion\.[a-z_]+$|^calendar\.(weekStart|view)$|^ui\.theme$|^creature\.name$/
   ipcMain.handle(IPC.getSetting, (_e, key: string) => {
     if (!UI_SETTING.test(key)) return null
     const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined

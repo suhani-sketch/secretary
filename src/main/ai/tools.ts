@@ -388,6 +388,13 @@ export const toolSchemas = {
       .describe('default_reminder_time: "HH:MM" used when a reminder is asked for on a day with no clock time. day_start/day_end: "HH:MM". name: what to call the user.'),
     value: z.string().min(1).max(100)
   }),
+  set_creature_name: z.object({
+    name: z
+      .string()
+      .min(1)
+      .max(30)
+      .describe('What the USER wants to call THE CREATURE — only after it has asked "I think I should have a name" (9g), or the user names it unprompted ("I\'ll call you X"). Never set_preference — that is for what to call the USER.')
+  }),
   undo_last: z.object({}).describe('Reverse the most recent change ("undo that"). Works on the last created/updated/completed/cancelled item or reminder change.'),
   get_item: z.object({ id: idRef }),
   search_memory: z.object({ query: z.string().min(1).max(200).describe('Words to look for in titles and details.') }),
@@ -460,6 +467,7 @@ const descriptions: Record<ToolName, string> = {
   pause_reminder: 'Pause a (recurring) reminder without cancelling it, or resume it.',
   record_activity: 'Record something the user has ALREADY DONE ("I emailed the professor", "I drafted the first email") as history, not as a task. Optionally attach it to the item it was progress on, and create a waiting item if they are now waiting on someone.',
   set_preference: 'Remember a stated preference such as the default reminder time ("remind me at 8 by default").',
+  set_creature_name: 'The user is naming the creature — only after it asked "I think I should have a name", or unprompted ("I\'ll call you X", "your name is X"). Never for what to call the user (that is set_preference key=name).',
   undo_last: 'Undo the most recent change when the user says "undo", "undo that", "revert that".',
   get_item: 'Fetch full details for one item by id.',
   search_memory: 'Search saved items by keyword when the context above does not already include what you need.',
@@ -518,6 +526,7 @@ const WRITE_TOOLS: ReadonlySet<string> = new Set([
   'pause_reminder',
   'record_activity',
   'set_preference',
+  'set_creature_name',
   'undo_last'
 ])
 export const isWriteTool = (name: string): boolean => WRITE_TOOLS.has(name)
@@ -2214,6 +2223,20 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       act({ targetType: 'preference', targetId: x.key, verb: 'updated', summary: `${x.key.replace(/_/g, ' ')} set to ${x.value}`, before: before.value || null, after: x.value, reversible: false })
       const summary = `Remembered ${x.key.replace(/_/g, ' ')} = ${x.value}`
       const phrase = `Got it — your ${x.key.replace(/_/g, ' ')} is now ${x.value}.`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase } }
+    }
+    case 'set_creature_name': {
+      // The naming moment (9g) — asked at most once, ever, answered whenever the user gets to it. Not a
+      // set_preference (that stores what to call the USER); this is the one thing this tool exists for.
+      const x = a as z.infer<typeof toolSchemas.set_creature_name>
+      const cleanName = x.name.trim().replace(/\s+/g, ' ')
+      if (!cleanName) throw new ToolValidationError('That name is empty')
+      const before = repo.getSettingValue('creature.name')
+      repo.setSettingValue('creature.name', cleanName)
+      act({ targetType: 'preference', targetId: 'creature.name', verb: 'updated', summary: `Named the creature "${cleanName}"`, before, after: cleanName, reversible: false })
+      clearOffer()
+      const summary = `Creature named "${cleanName}"`
+      const phrase = `${cleanName}. I like that.`
       return { result: { ok: true, summary }, applied: { tool: name, summary, phrase } }
     }
     case 'undo_last': {

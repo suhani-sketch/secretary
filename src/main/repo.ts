@@ -903,6 +903,13 @@ export function recentMessages(limit = 10): ChatMessage[] {
   return rows.reverse()
 }
 
+/** How many distinct calendar days the user has actually talked to it — the naming moment's (9g) sense of "a real
+ *  relationship has had time to form", never a first-launch count. */
+export function distinctUserMessageDays(): number {
+  const row = getDb().prepare(`SELECT COUNT(DISTINCT substr(created_at, 1, 10)) AS n FROM messages WHERE role = 'user'`).get() as { n: number }
+  return row.n
+}
+
 export function insertExtraction(messageId: string | null, toolsJson: string, applied: boolean, error: string | null): void {
   getDb()
     .prepare(`INSERT INTO extractions (id, message_id, tools_json, applied, error, created_at) VALUES (?, ?, ?, ?, ?, ?)`)

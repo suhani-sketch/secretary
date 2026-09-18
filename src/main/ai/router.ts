@@ -364,6 +364,12 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     return null
   }
 
+  // ---- the naming moment (9g): explicit phrasing works any time, whether or not the app happened to ask first ----
+  if ((m = /^(?:i'?ll |i will |let'?s |we'?ll )?(?:call you|name you)\s+(.+?)[.!]?$/.exec(text)) || (m = /^your name(?:'?s| is| will be)\s+(.+?)[.!]?$/.exec(text))) {
+    const proposed = restoreCase(m[1].trim())
+    if (proposed && words(proposed).length <= 3) return [{ name: 'set_creature_name', args: { name: proposed } }]
+  }
+
   // ---- conversational planning (7g): "plan my week" starts ONE evolving proposal — every rule below except the
   //      first is gated on a draft already being open, so none of these words mean anything different in ordinary
   //      conversation; they only take on this meaning mid-planning-session. ----
@@ -1186,6 +1192,17 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     const title = cleanTitle(body, when.text)
     if (!title || words(title).length === 0) return null
     return [{ name: 'create_item', args: { kind: hard ? 'deadline' : 'task', title, ...dueArgs(when), ...(hard ? { hardness: 'hard' } : {}) } }]
+  }
+
+  // ---- the naming moment (9g), continued: a bare short reply right after the app asked answers it directly —
+  // checked LAST, so anything that matches a real command above still wins; this only ever catches what would
+  // otherwise have fallen through to the model with nothing else to say about it. Common non-answers ("no",
+  // "later") are excluded so declining, or simply moving on, never gets misread as a name.
+  if (getOffer()?.kind === 'naming') {
+    const NOT_A_NAME = /^(?:no|nope|not now|later|skip|maybe later|i don'?t know|dunno|not sure|no thanks|no thank you|nah|hmm|idk|pass|not yet)$/
+    if (!NOT_A_NAME.test(text) && words(text).length <= 2 && /^[a-z][a-z' -]*$/i.test(originalText.trim())) {
+      return [{ name: 'set_creature_name', args: { name: restoreCase(text) } }]
+    }
   }
 
   return null

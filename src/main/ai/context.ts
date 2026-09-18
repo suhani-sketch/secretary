@@ -48,6 +48,9 @@ export type Offer =
    *  already passed — there is nothing to book, and "book it" must be refused deterministically, never left for the model
    *  to improvise a time or override a clash on its own initiative. */
   | { kind: 'slot_proposal'; title: string; itemId: string | null; startsAtLocal: string | null; endsAtLocal: string | null }
+  /** The naming moment (9g): "I think I should have a name. What would you like to call me?" — a short, bare
+   *  reply right after this ("Biscuit") answers it directly, alongside the always-valid explicit phrasings. */
+  | { kind: 'naming' }
 let offer: Offer | null = null
 export const setOffer = (o: Offer): void => {
   offer = o
@@ -213,7 +216,9 @@ export function assembleContext(userText: string): string {
                   ? offer.startsAtLocal
                     ? `Standing proposal (7e): you proposed ${offer.startsAtLocal}–${offer.endsAtLocal} for "${offer.title}"; nothing is booked yet. "book it"/"yes" is handled deterministically. Do not propose or book a different time yourself, and never add override_conflicts on your own initiative.`
                     : `Standing proposal (7e): the last scheduling search for "${offer.title}" found nothing workable (infeasible or the deadline had passed). "book it"/"yes" is handled deterministically and will refuse. Do NOT book anything for it yourself, with or without override_conflicts — call propose_slot again only if the user gives a new deadline or duration.`
-                  : `Standing question: a booking was refused because it clashes with the user's availability. If they say to book it anyway, call ${offer.toolName} again with the same arguments plus override_conflicts=true; if they pick another time, book that instead.`
+                  : offer.kind === 'naming'
+                    ? `Standing question (9g): you just asked "I think I should have a name. What would you like to call me?" — whatever they answer with (even just a bare word) is very likely the name; call set_creature_name with it, never set_preference. If they decline or clearly move on to something else, drop it silently — never ask again.`
+                    : `Standing question: a booking was refused because it clashes with the user's availability. If they say to book it anyway, call ${offer.toolName} again with the same arguments plus override_conflicts=true; if they pick another time, book that instead.`
       : '',
     ``,
     prefs.length
