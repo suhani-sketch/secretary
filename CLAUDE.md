@@ -3,8 +3,8 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 8 — Proactivity. 8a (morning briefing), 8b (approaching-deadline alerts) and 8c (missed-task and
-waiting-item follow-up) built, testable; 8d–8e (adaptive intensity/quiet hours, conversational replanning) not started. **Phase 7 — Intelligence is
+## Current phase: Phase 8 — Proactivity. 8a (morning briefing), 8b (approaching-deadline alerts), 8c (missed-task and
+waiting-item follow-up) and 8d (adaptive intensity, quiet hours) built, testable; 8e (conversational replanning) not started. **Phase 7 — Intelligence is
 COMPLETE** (7a brain dump typed+voice, 7b deadline intelligence, 7c what-should-I-do-now, 7d what-am-I-forgetting, 7e smart
 scheduling, 7f replanning, 7g conversational planning; unit tests cover 7b/7c/7e/7f/7g core logic). Governing rule for Phase 7
 carries forward into 8: compute in code, the model only phrases — every answer costs at most ONE model call (§11G 14; 8a costs
@@ -45,6 +45,70 @@ was not performed; 25 passes against planted history (see below).** Phase 5 comp
   morning briefing and `get_day`'s own independent phrasing (same underlying `summary.status` field, confirming
   the fix is consistent across every surface that reads it, not just the one that was complained about); a
   genuinely empty day still correctly reads "Nothing pressing today."
+
+## Phase 8d — adaptive intensity and quiet hours (2026-09-18)
+- **Cross-cutting, not a new surface of its own.** `src/core/quietHours.ts` (`isWithinQuietHours(nowMinutes, {start,
+  end})`, pure — handles a same-day window and one spanning midnight identically, start inclusive/end exclusive,
+  opt-in: an unset boundary is never inferred or defaulted) + `src/main/notifyPrefs.ts` (settings glue: `isQuietNow`,
+  `getIntensity`/`setIntensity`, `intensityEffects()`) are read by EVERY existing proactive surface rather than each
+  one growing its own notion of "pushy" — spec §5's "Follow-through" line named quiet hours and preferences as
+  inputs to follow-up intensity back in the original Phase 1 spec, before any of 8a–8c existed, so this slice is
+  the belated fulfilment of that, not a new concept.
+- **Quiet hours hold TOASTS, never conversational messages.** Reminder delivery (`scheduler.ts#deliver`, both
+  `tick()` and `startupSweep()`) and 8b's `sweepDeadlineRisk` are skipped entirely while `isQuietNow()` — a due
+  reminder stays `'pending'` (never marked delivered), so the FIRST tick after quiet hours end picks it up through
+  the ordinary due-reminders query with no special casing, and — since real time has passed while it sat held —
+  correctly shows as "Missed reminder (N late)" through the SAME missed-reminder recovery path that already exists
+  for "the app wasn't running." Nothing new was built for this; quiet hours just withhold the trigger. A happening
+  ending (`endDueHappenings`) still ends and updates its own state on schedule either way — only its toast is
+  withheld. Deliberately does NOT touch 8a's morning briefing or 8c's follow-up: both only ever appear when the
+  user opens the app themselves, so there is nothing to "disturb" — quiet hours are about interruption, not content.
+- **"Less pushy" has three concrete, uniform effects, defined once in `notifyPrefs.ts#intensityEffects` so nothing
+  drifts between the surfaces that read it:** (1) every toast (reminders AND 8b's deadline alerts) stops demanding
+  acknowledgement — `persistent: false` instead of `true`. (2) 8b's deadline alerts only fire on `infeasible` — the
+  one verdict that is unarguable — not `tight`, which is a real signal but a softer, more debatable one; "less
+  pushy" should stop interrupting for the debatable case while still surfacing the unarguable one. (3) 8c's daily
+  follow-up cap drops from 3 named items to 1 (still says how many more are waiting, honestly — the "+N more,
+  sitting quietly" phrasing is untouched). Deliberately did NOT touch: 8a's briefing content (it is not really
+  "pushy", it only shows when the user opens the app); the morning briefing's day-status wording; anything about
+  WHAT gets tracked — intensity only ever changes how loudly something already-computed gets surfaced.
+- **Conversational, deterministic where the phrasing is common, model fallback for looser wording.** Two new write
+  tools, `set_notification_intensity {level}` and `set_quiet_hours {start_local?, end_local?, clear?}` (both go
+  through the usual confirm/apply path, `applied.phrase` states the concrete effect in plain words so the user
+  knows exactly what changed, e.g. "Toasts won't demand a response, deadline alerts only fire when things
+  genuinely won't fit…"). Tier-0 router rules cover the exact phrasings from the spec ("be less pushy about
+  reminders", "ease up", "stop nagging me" → low; "back to normal" → normal; "don't disturb me after 10" / "…
+  before 8" / "quiet hours from 10pm to 8am" / "turn off quiet hours" → set_quiet_hours, `parseQuietClock`
+  disambiguating a bare hour by DIRECTION rather than by an existing item's own time the way `parseClock` does
+  elsewhere — "after 10" defaults to evening, "before 8" stays morning, since that is how people actually say
+  this) — all zero model calls. A prompt section (orchestrator.ts, right after the Reminders section) covers
+  looser phrasing the router does not match; verified live with "can you dial down how much you notify me" →
+  correctly called `set_notification_intensity {level:'low'}` via the model, 1 call.
+- **A missing settings primitive, added along the way:** `repo.deleteSettingValue(key)` — "turn off quiet hours"
+  genuinely needs to REMOVE both boundary settings (an empty string would leave them "set" and confuse `isQuietNow`
+  into thinking a zero-width, always-false window was deliberately configured, which is a different state from
+  "not configured at all"), and no delete existed before this (only `getSettingValue`/`setSettingValue`, an upsert).
+- **A stating-only-one-side default, so "don't disturb me after 10" alone is immediately usable:** if the user
+  gives a start with no end configured yet (or vice versa), the missing side defaults to 08:00 (end) / 22:00
+  (start) rather than leaving a half-configured, silently-inert window — `core/quietHours.ts` treats either side
+  unset as "never quiet", so without this default the user's very own example phrase would have done nothing
+  until they also stated an end. Saying BOTH sides later overrides the default normally.
+- **Verified live** on scratch DBs via `SECRETARY_CHAT`/`SECRETARY_USER_DATA`: both of the spec's own example
+  phrases work standalone, tier 0, confirmed in the `settings` table (`notify.intensity=low`,
+  `notify.quiet_start=22:00`, `notify.quiet_end=08:00` from "don't disturb me after 10" alone, via the one-sided
+  default above). Full quiet-hours lifecycle: a reminder due inside a window bracketing the current real time →
+  `sweep.quiet_hold`, stays `'pending'`, confirmed directly in the database, no toast; "turn off quiet hours" then
+  a relaunch → delivers immediately as "Missed reminder (2 min late)". 8b under low intensity: a `tight` deadline
+  → correctly silent; the SAME scratch DB's `infeasible` deadline → still alerts (the threshold genuinely moved,
+  not a blanket suppression). 8c under low intensity: 3 new overdue tasks → only 1 named, "2 more … not
+  forgotten." "back to normal" → intensity setting reset, confirmed. 12 unit checks in `tests/quietHours.test.ts`
+  covering the pure time-window arithmetic: opt-in unset boundaries, same-day vs. midnight-spanning windows, the
+  inclusive-start/exclusive-end boundary edges precisely, and a zero-width window.
+- **Not built here**: 8e (conversational replanning — the last Phase 8 slice). No per-surface quiet-hours override
+  (e.g. "let deadline alerts through even when quiet" is not offered) — quiet hours are all-or-nothing across every
+  toast, matching the spec's own single example ("don't disturb me after 10") rather than inventing finer controls
+  nobody asked for. No numeric/graduated intensity scale beyond normal/low — the spec's own example ("be less
+  pushy") is a single downward adjustment, not a request for a dial.
 
 ## Phase 8c — missed-task and waiting-item follow-up (2026-09-18)
 - **"Surfaces once, caps out, never nags" — three separate mechanisms, one each.** `src/main/followUp.ts#

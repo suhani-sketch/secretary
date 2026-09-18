@@ -20,6 +20,7 @@ import { afterConflicts, blockingConflicts, bookingWindowForDue, conflictsFor, d
 import { formatClock, formatDue, isOverdue } from '../../shared/format'
 import { assessSlot, bufferRules, describeBuffer } from '../planning'
 import { describeProgress, generateSessionSlots, planProgress } from '../../core/plans'
+import { setIntensity, getQuietHours, setQuietStart, setQuietEnd, clearQuietHours } from '../notifyPrefs'
 import type { ToolDefinition } from './provider'
 import type { Actor, AppliedChange, Item, Note, Reminder, Plan } from '../../shared/types'
 
@@ -178,6 +179,16 @@ export const toolSchemas = {
   decline_ritual: z.object({
     kind: z.string().min(1).max(30).describe('The kind of happening the user does not want timer offers for: tea, egg, focus, break.')
   }),
+  set_notification_intensity: z.object({
+    level: z.enum(['normal', 'low']).describe('low = "less pushy": reminder and deadline-alert toasts stop demanding acknowledgement, deadline alerts only fire when truly infeasible (not merely tight), and the daily follow-up names fewer things at once. normal = the default.')
+  }),
+  set_quiet_hours: z
+    .object({
+      start_local: z.string().regex(/^\d{2}:\d{2}$/).optional().describe('"HH:MM", 24-hour — when quiet hours begin. "don\'t disturb me after 10" → "22:00".'),
+      end_local: z.string().regex(/^\d{2}:\d{2}$/).optional().describe('"HH:MM", 24-hour — when quiet hours end. "don\'t disturb me before 8" → "08:00". If the user never says an end and none is set yet, default to "08:00".'),
+      clear: z.boolean().optional().describe('true to turn quiet hours off entirely ("notify me anytime again").')
+    })
+    .refine((v) => v.clear || v.start_local || v.end_local, 'Give start_local, end_local, or clear'),
   note_context: z.object({
     kind: z.enum(['energy', 'mood', 'location', 'availability', 'other']).describe('energy = tired/exhausted/wired; mood = how they feel; location = where they are; availability = free/busy today; other.'),
     text: z.string().min(1).max(200).describe('The statement in a few words, e.g. "exhausted", "at TISS until 17:00".')
@@ -404,6 +415,8 @@ const descriptions: Record<ToolName, string> = {
   finish_happening: 'A running happening ended: "laundry\'s done", "egg\'s ready", "I\'m out of the shower" (done) or "never mind the egg" (abandoned).',
   time_happening: 'Put a timer on a running open-ended happening ("yes" to a timer offer, "make the tea 4 minutes").',
   decline_ritual: 'The user said no to a timer offer for a kind of happening; the app will not offer it for that kind again.',
+  set_notification_intensity: '"Be less pushy about reminders" / "you don\'t need to nag me" / "back to normal" — how insistently toasts and follow-ups interrupt. Never affects what is tracked, only how loudly it is surfaced.',
+  set_quiet_hours: '"Don\'t disturb me after 10" / "quiet hours from 10pm to 8am" / "no notifications before 9" / "turn off quiet hours" — a local time window where toasts (reminders, deadline alerts) are held rather than shown; they still appear once the window ends. Never affects the morning briefing or the daily follow-up, which only ever appear when the user opens the app themselves.',
   note_context: 'Today\'s context — "I\'m exhausted today", "I\'m at TISS until 5", "feeling low". Shapes today\'s recommendations, expires tonight, is NEVER a task, note or memory. Do not use for durable patterns ("I work better in the afternoon" → set_preference).',
   get_forgetting: '"What am I forgetting?" — the app lists commitments (with who they were made to) ahead of everything else, then overdue, waiting and due-soon items.',
   create_event: 'Put something on the calendar that occupies time: "meeting with Professor X Thursday at 3", "dentist Friday 10:30", "class every Tuesday 2–4". NOT for tasks (a task due Thursday is create_item). The app checks clashes.',
@@ -459,6 +472,8 @@ const WRITE_TOOLS: ReadonlySet<string> = new Set([
   'finish_happening',
   'time_happening',
   'decline_ritual',
+  'set_notification_intensity',
+  'set_quiet_hours',
   'note_context',
   'create_event',
   'update_event',
@@ -899,6 +914,31 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       clearOffer()
       const summary = `No more timer offers for ${kind}`
       return { result: { ok: true, summary }, applied: { tool: name, summary, phrase: `Okay — I won't offer a timer for ${kind} again.` } }
+    }
+    case 'set_notification_intensity': {
+      const x = a as z.infer<typeof toolSchemas.set_notification_intensity>
+      setIntensity(x.level)
+      const summary = `Notification intensity: ${x.level}`
+      const phrase = x.level === 'low' ? "Okay — I'll ease up. Toasts won't demand a response, deadline alerts only fire when things genuinely won't fit, and I'll mention fewer things at once." : "Back to normal — toasts and follow-ups go back to how they were."
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase } }
+    }
+    case 'set_quiet_hours': {
+      const x = a as z.infer<typeof toolSchemas.set_quiet_hours>
+      if (x.clear) {
+        clearQuietHours()
+        return { result: { ok: true, summary: 'Quiet hours off' }, applied: { tool: name, summary: 'Quiet hours off', phrase: "Quiet hours are off — I'll notify you anytime again." } }
+      }
+      const before = getQuietHours()
+      if (x.start_local) setQuietStart(x.start_local)
+      if (x.end_local) setQuietEnd(x.end_local)
+      // A start with no end (or vice versa) yet is not a usable window — default the missing side rather than
+      // leave quiet hours half-configured and silently inert (core/quietHours.ts treats an unset side as "off").
+      if (x.start_local && !x.end_local && !before.end) setQuietEnd('08:00')
+      if (x.end_local && !x.start_local && !before.start) setQuietStart('22:00')
+      const after = getQuietHours()
+      const summary = `Quiet hours: ${after.start ?? '?'}–${after.end ?? '?'}`
+      const phrase = `Got it — quiet from ${after.start ?? '?'} to ${after.end ?? '?'}. Toasts stay held until then; nothing about what I track changes, just when I interrupt.`
+      return { result: { ok: true, summary }, applied: { tool: name, summary, phrase } }
     }
     case 'note_context': {
       // Phase 5d. Today only, never memory: no act(), no item, no note. Read back by the context assembler and the personality guard.

@@ -5,19 +5,20 @@
  * "Surfaces once": every item that gets named is recorded in a permanent `followup.surfaced_ids` set and never
  * named again, regardless of how long it stays overdue/unresolved — unlike 8b's deadline risk (which clears and
  * can re-arm as feasibility genuinely changes), a missed task does not become "un-missed" on its own, so there is
- * nothing to re-arm here. "Caps out": at most FOLLOWUP_CAP NEW items are named in any one day's message; a backlog
- * beyond that waits quietly for tomorrow rather than flooding one message or firing again sooner. "Never nags": at
- * most one message per day (gated the same way as 8a's briefing), phrased in `core/followup.ts` per the app's own
- * Emotional UX rule — "this didn't get done, we still have time", never "you should have".
+ * nothing to re-arm here. "Caps out": at most `intensityEffects().followUpCap` NEW items are named in any one day's
+ * message (3 normally, 1 under 8d's "low" intensity — see `notifyPrefs.ts`); a backlog beyond that waits quietly
+ * for tomorrow rather than flooding one message or firing again sooner. "Never nags": at most one message per day
+ * (gated the same way as 8a's briefing), phrased in `core/followup.ts` per the app's own Emotional UX rule — "this
+ * didn't get done, we still have time", never "you should have".
  */
 import { DateTime } from 'luxon'
 import * as repo from './repo'
 import { describeFollowUp, type FollowUpEntry } from '../core/followup'
+import { intensityEffects } from './notifyPrefs'
 import type { ChatMessage, Item } from '../shared/types'
 
 const SETTING_SURFACED = 'followup.surfaced_ids'
 const SETTING_LAST_DATE = 'followup.lastDate'
-const CAP = 3
 
 function loadSurfaced(): Set<string> {
   const raw = repo.getSettingValue(SETTING_SURFACED)
@@ -67,7 +68,7 @@ export function maybeSendFollowUp(nowLocal = DateTime.local()): ChatMessage | nu
     return null
   }
 
-  const named = allNew.slice(0, CAP)
+  const named = allNew.slice(0, intensityEffects().followUpCap)
   const overflow = allNew.length - named.length
   // A wait's own title is already "Waiting on Priya — the transcript" (createWaiting's auto-generated display
   // title); phrasing that AGAIN as "Still no word from Priya on ..." would repeat "Priya" and "Waiting on"

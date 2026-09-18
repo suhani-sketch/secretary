@@ -217,6 +217,23 @@ function parseClock(tail: string, existing: Item): { hour: number; minute: numbe
   return { hour, minute }
 }
 
+/** "10", "10pm", "22:00" → "HH:MM", for quiet-hours boundaries (8d). No am/pm stated: "after 10" defaults to
+ *  evening (people mean 10pm when setting a DND start), "before 8" stays as the bare morning hour (people mean
+ *  8am when setting a DND end) — the direction itself disambiguates, the way `parseClock` uses an existing item's
+ *  own hour for the same kind of bare-number problem elsewhere. */
+function parseQuietClock(raw: string, direction: 'after' | 'before'): string | null {
+  const m = /^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/.exec(raw.trim())
+  if (!m) return null
+  let hour = Number(m[1])
+  const minute = m[2] ? Number(m[2]) : 0
+  if (hour > 23 || minute > 59) return null
+  if (m[3] === 'pm' && hour < 12) hour += 12
+  else if (m[3] === 'am' && hour === 12) hour = 0
+  else if (!m[3] && direction === 'after' && hour >= 1 && hour <= 11) hour += 12
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${pad(hour % 24)}:${pad(minute)}`
+}
+
 /**
  * Chat shorthand chrono does not know. "tom"/"tmrw"/"tmr" mean tomorrow when they sit where a date would:
  * at the end, or right before a time or part of day ("call tom at 3"). "email tom about the report" keeps Tom.
@@ -454,6 +471,34 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
         { name: 'note_context', args: { kind: 'location', text: `at ${place} until ${end.toFormat('HH:mm')}` } },
         { name: 'add_constraint', args: { kind: 'unavailable', label: `at ${place}`, starts_at_local: today.toFormat("yyyy-MM-dd'T'HH:mm"), ends_at_local: end.toFormat("yyyy-MM-dd'T'HH:mm") } }
       ]
+    }
+  }
+
+  // ---- adaptive intensity and quiet hours (8d): conversational, deterministic — "be less pushy about reminders",
+  //      "don't disturb me after 10". Never affects what is tracked, only how insistently it interrupts. ----
+  if (/^(?:okay,? |please )?(?:be less pushy|ease up|ease off|tone it down|dial it back|stop (?:being so )?pushy|stop nagging(?: me)?|don'?t nag(?: me)?|less naggy|go easy on me)(?: about (?:reminders|notifications|alerts))?\.?$/.test(text)) {
+    return [{ name: 'set_notification_intensity', args: { level: 'low' } }]
+  }
+  if (/^(?:okay,? |please )?(?:back to normal|normal (?:intensity|notifications)|be (?:more )?(?:proactive|pushy) again|nag me again|you can nag me again)\.?$/.test(text)) {
+    return [{ name: 'set_notification_intensity', args: { level: 'normal' } }]
+  }
+  if (/^(?:okay,? |please )?(?:turn off quiet hours|quiet hours off|no more quiet hours|notify me any ?time(?: again)?|stop being quiet)\.?$/.test(text)) {
+    return [{ name: 'set_quiet_hours', args: { clear: true } }]
+  }
+  {
+    const DND = "(?:don'?t disturb me|no notifications|nothing|do not notify me|quiet(?: hours)?)"
+    if ((m = new RegExp(`^(?:please )?${DND} (?:from |between )?(\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)?) (?:to|and|until|till|-|–) (\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)?)\\.?$`).exec(text))) {
+      const start = parseQuietClock(m[1], 'after')
+      const end = parseQuietClock(m[2], 'before')
+      if (start && end) return [{ name: 'set_quiet_hours', args: { start_local: start, end_local: end } }]
+    }
+    if ((m = new RegExp(`^(?:please )?${DND} after (\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)?)\\.?$`).exec(text))) {
+      const start = parseQuietClock(m[1], 'after')
+      if (start) return [{ name: 'set_quiet_hours', args: { start_local: start } }]
+    }
+    if ((m = new RegExp(`^(?:please )?${DND} (?:before|until|till) (\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)?)\\.?$`).exec(text))) {
+      const end = parseQuietClock(m[1], 'before')
+      if (end) return [{ name: 'set_quiet_hours', args: { end_local: end } }]
     }
   }
 

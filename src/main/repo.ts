@@ -1000,6 +1000,10 @@ export function setSettingValue(key: string, value: string): void {
   getDb().prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, value)
 }
 
+export function deleteSettingValue(key: string): void {
+  getDb().prepare('DELETE FROM settings WHERE key = ?').run(key)
+}
+
 /** The last N things the user typed, newest first. */
 export function recentUserTexts(limit = 4): string[] {
   return (getDb().prepare(`SELECT content FROM messages WHERE role = 'user' ORDER BY created_at DESC, rowid DESC LIMIT ?`).all(limit) as { content: string }[]).map((r) => r.content)

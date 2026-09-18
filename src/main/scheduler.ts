@@ -7,6 +7,7 @@ import type { Reminder } from '../shared/types'
 import { doneLineFor } from './ai/tools'
 import { sessionsToMarkMissed } from '../core/plans'
 import { sweepDeadlineRisk } from './deadlineAlerts'
+import { isQuietNow, intensityEffects } from './notifyPrefs'
 
 export const TICK_MS = 30_000
 
@@ -115,6 +116,9 @@ function deliver(r: Reminder, opts: { missed: boolean; now: DateTime }): void {
     repo.acknowledgeReminder(r.id)
     repo.insertActivity({ targetType: 'reminder', targetId: r.id, verb: 'dismissed', actor: 'user', summary: `Dismissed reminder for "${title}"`, reversible: false })
   }
+  // "Less pushy" (8d): under low intensity, reminder toasts stop demanding acknowledgement and auto-dismiss
+  // instead of staying on screen — the SAME definition every proactive surface in this app reads, from notifyPrefs.
+  const persistent = intensityEffects().toastPersistent
   if (opts.missed) {
     const late = describeLateness(r.fire_at_utc, opts.now)
     log('warn', 'deliver.missed', `"${title}" was due ${scheduled}, delivered ${late} late (app was not running)`, r.id)
@@ -124,7 +128,7 @@ function deliver(r: Reminder, opts: { missed: boolean; now: DateTime }): void {
       body: `${title} — was due ${scheduled}. Do it now, or move it?`,
       reminderId: r.id,
       actions,
-      persistent: true,
+      persistent,
       onClose: ack
     })
     if (!shown) repo.insertActivity({ targetType: 'reminder', targetId: r.id, verb: 'delivery_failed', actor: 'system', summary: `Could not show toast for "${title}"`, reversible: false })
@@ -136,7 +140,7 @@ function deliver(r: Reminder, opts: { missed: boolean; now: DateTime }): void {
       body: conditional ? `No reply by ${scheduled}. Want to follow up?` : `Reminder — ${scheduled}`,
       reminderId: r.id,
       actions,
-      persistent: true,
+      persistent,
       onClose: ack
     })
     if (!shown) repo.insertActivity({ targetType: 'reminder', targetId: r.id, verb: 'delivery_failed', actor: 'system', summary: `Could not show toast for "${title}"`, reversible: false })
@@ -154,7 +158,7 @@ function deliver(r: Reminder, opts: { missed: boolean; now: DateTime }): void {
  * Nothing is written to `activities`, `items` or `reminders` — a happening is not an obligation and leaves no history
  * beyond its own row. `late` = the app was not running when it ended; we say when it finished rather than pretend.
  */
-function endDueHappenings(now: DateTime, late: boolean): number {
+function endDueHappenings(now: DateTime, late: boolean, quiet: boolean): number {
   const due = repo.dueHappenings(now.toISO()!)
   for (const h of due) {
     const ended = repo.finishHappening(h.id, 'done')
@@ -164,8 +168,10 @@ function endDueHappenings(now: DateTime, late: boolean): number {
     const wasLate = late || lateBy > TICK_MS * 2
     const title = h.metaphor ? doneLineFor(h.label, h.metaphor) : `${capital(h.label)} — time's up.`
     const body = wasLate ? `Finished at ${endedAt}, while I wasn't running.` : `${capital(h.label)} · started ${DateTime.fromISO(h.started_at, { zone: 'utc' }).toLocal().toFormat('HH:mm')}`
-    log('info', 'happening.ended', `"${h.label}"${wasLate ? ` (ended ${endedAt}, noticed late)` : ''}`)
-    showToast({ title, body, persistent: false })
+    log('info', 'happening.ended', `"${h.label}"${wasLate ? ` (ended ${endedAt}, noticed late)` : ''}${quiet ? ' (quiet hours — no toast)' : ''}`)
+    // The happening still ends on schedule either way (spec: it "expires on its own") — quiet hours only withhold
+    // the toast popup, same as everywhere else in this slice; nothing about ending it is deferred or re-tried.
+    if (!quiet) showToast({ title, body, persistent: false })
   }
   if (due.length) onDeliveredCb?.()
   return due.length
@@ -190,9 +196,16 @@ function sweepMissedSessions(now: DateTime): void {
 
 export function startupSweep(): number {
   const now = DateTime.utc()
-  endDueHappenings(now, true)
-  sweepDeadlineRisk(now.toISO()!)
+  const quiet = isQuietNow(now.toLocal())
+  endDueHappenings(now, true, quiet)
+  if (!quiet) sweepDeadlineRisk(now.toISO()!)
   const due = repo.duePendingReminders(now.toISO()!)
+  if (quiet) {
+    // Held, not delivered: they stay 'pending' and will be picked up (correctly shown as late) by the first tick
+    // once quiet hours end — the exact same mechanism that already recovers a reminder from the app not running.
+    log('info', 'sweep.quiet_hold', `${due.length} overdue reminder(s) found at launch, held for quiet hours`)
+    return 0
+  }
   log('info', 'sweep.start', `${due.length} overdue reminder(s) found at launch`)
   for (const r of due) deliver(r, { missed: true, now })
   const next = repo.nextPendingReminder()
@@ -210,15 +223,22 @@ export function tick(reason = 'interval'): void {
   ticking = true
   try {
     const now = DateTime.utc()
-    endDueHappenings(now, false)
+    const quiet = isQuietNow(now.toLocal())
+    endDueHappenings(now, false, quiet)
     sweepMissedSessions(now)
-    sweepDeadlineRisk(now.toISO()!)
+    if (!quiet) sweepDeadlineRisk(now.toISO()!)
     const due = repo.duePendingReminders(now.toISO()!)
-    if (due.length > 0) log('info', 'tick.due', `${due.length} reminder(s) due (${reason})`)
-    for (const r of due) {
-      // If a tick was delayed by sleep/hibernate by more than one interval, treat as missed.
-      const lateMs = now.toMillis() - DateTime.fromISO(r.fire_at_utc, { zone: 'utc' }).toMillis()
-      deliver(r, { missed: lateMs > TICK_MS * 2, now })
+    if (quiet) {
+      // Left 'pending' on purpose — never delivered, never marked missed, while quiet hours are active. The first
+      // tick after they end picks these up through the normal due-reminders query above, with no special casing.
+      if (due.length > 0) log('info', 'tick.quiet_hold', `${due.length} reminder(s) due but held for quiet hours (${reason})`)
+    } else {
+      if (due.length > 0) log('info', 'tick.due', `${due.length} reminder(s) due (${reason})`)
+      for (const r of due) {
+        // If a tick was delayed by sleep/hibernate by more than one interval, treat as missed.
+        const lateMs = now.toMillis() - DateTime.fromISO(r.fire_at_utc, { zone: 'utc' }).toMillis()
+        deliver(r, { missed: lateMs > TICK_MS * 2, now })
+      }
     }
   } catch (e) {
     log('error', 'tick.exception', (e as Error).stack ?? String(e))
