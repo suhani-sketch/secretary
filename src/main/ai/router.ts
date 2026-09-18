@@ -12,6 +12,8 @@ import { RITUALS as RITUAL_OFFERS } from './tools'
 import { occurrencesBetween } from '../calendar'
 import { parseBareOrdinalDay } from '../ordinal-date'
 import { hasActiveWeekPlan } from '../weekplan'
+import { proposeSlot, describeProposal, proposalBookingArgs } from '../schedule'
+import { DEFAULT_ASSUMED_EFFORT_MIN } from '../../core/deadline'
 
 /** A bare "I'm making dinner": an ordinary reply, nothing created, no offer (invariant 9). */
 function plainAcknowledgement(label: string): string {
@@ -726,6 +728,24 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
       if (/\b(?:with|w\/)\b/.test(m[2]) || /meeting|call|appointment|dentist|doctor|gp|interview|viva|lunch|dinner|coffee|drinks|catch/.test(m[1])) args.kind = 'commitment'
       if (title && words(title).length) return [{ name: 'create_event', args }]
     }
+  }
+
+  // ---- forward-looking reluctance: "I don't want to do the case study tonight" is a feeling about something
+  //      still ahead, not a request to block that time off — the same invariant-9 discipline that keeps a bare
+  //      statement from becoming an unwanted item/reminder/constraint. It used to fall through to the model, which
+  //      mechanically logged an `avoid` constraint and replied with no warmth at all — no guilt, and a real
+  //      alternative, computed the same deterministic way `propose_slot` already does (§11D 5 bug fix). Scoped to
+  //      phrasing that names WHEN, so it never swallows an unrelated "I don't want to ..." aside. ----
+  if ((m = /^i (?:don'?t|do not) (?:want to (?:do )?|feel like (?:doing )?)(.+?) (tonight|today|right now|this (?:morning|afternoon|evening)|anymore|any more)[.!]?$/.exec(text))) {
+    const item = resolveTarget(m[1])
+    if (!item) {
+      return [{ name: REPLY, args: { text: `That's okay — no guilt about it. Tell me what to move it to (or just leave it for now).` } }]
+    }
+    const minutes = item.effort_minutes ?? DEFAULT_ASSUMED_EFFORT_MIN
+    const proposal = proposeSlot({ title: item.title, minutes, deadlineUtc: item.due_at_utc, deadlinePrecision: item.due_precision })
+    const bookArgs = proposalBookingArgs(proposal)
+    setOffer({ kind: 'slot_proposal', title: item.title, itemId: item.id, startsAtLocal: bookArgs?.starts_at_local ?? null, endsAtLocal: bookArgs?.ends_at_local ?? null })
+    return [{ name: REPLY, args: { text: `That's okay — no guilt about it. ${describeProposal(proposal)}` } }]
   }
 
   // ---- availability (3f): "I'm busy tomorrow afternoon" / "I'm travelling on Friday" / "I'm out on the 20th" ----

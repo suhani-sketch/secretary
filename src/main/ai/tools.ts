@@ -636,6 +636,46 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
   const focusIds = getFocus().map((f) => f.itemId)
 
   /**
+   * Reference resolution must check entity type before attempting a tool call (§11D 6/10 bug fix): the model
+   * sometimes reuses the id of whatever was last focused (an item) as if it were a different kind of row (an
+   * event, a reminder). These never throw — a caller checks for null and either reroutes to the right tool or
+   * says plainly that there is nothing of that kind to act on, instead of a raw "No event/reminder with id" error.
+   */
+  const tryResolveEventId = (ref: string): string | null => {
+    try {
+      return repo.resolveEventId(ref)
+    } catch {
+      return null
+    }
+  }
+  const tryResolveItemId = (ref: string): string | null => {
+    try {
+      return repo.resolveItemId(ref)
+    } catch {
+      return null
+    }
+  }
+  const tryResolveReminderId = (ref: string): string | null => {
+    try {
+      return repo.resolveReminderId(ref)
+    } catch {
+      return null
+    }
+  }
+  /** Shared by the reminder-mutation tools (§11D 10 bug fix): the id might be an ITEM's, not a reminder's — the
+   *  model sometimes reuses the last-focused item's id regardless of what kind of row the tool actually needs.
+   *  Resolves to the item's one unambiguous pending reminder when there is exactly one, or hands back the item
+   *  itself so the caller can say plainly there's nothing there instead of a raw "no reminder" tool error. */
+  const resolveReminderOrItsItem = (ref: string): { reminderId: string } | { item: Item } | null => {
+    const rid = tryResolveReminderId(ref)
+    if (rid) return { reminderId: rid }
+    const itemId = tryResolveItemId(ref)
+    if (!itemId) return null
+    const pending = repo.pendingRemindersForItems([itemId])
+    return pending.length ? { reminderId: pending[0].id } : { item: repo.getItem(itemId)! }
+  }
+
+  /**
    * Conflict gate (spec 3f / §6): booking an exact time inside an "unavailable" window or over an event is not done
    * silently — the round is rolled back with a question unless the caller passed override_conflicts. Softer clashes
    * (avoid/prefer) are allowed but named. Returns the note to append, or throws NeedsConfirmation via `confirm`.
@@ -1063,7 +1103,23 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
     }
     case 'update_event': {
       const x = a as z.infer<typeof toolSchemas.update_event>
-      const ev = repo.getEvent(repo.resolveEventId(x.id))
+      const eventId = tryResolveEventId(x.id)
+      if (!eventId) {
+        // Not an event — the id may actually be an ITEM's ("move it" naming a task/deadline's due date, not a
+        // calendar event). Reroute to the right tool rather than failing outright; only when there's a real date
+        // to apply, since a mismatched id with nothing to reschedule genuinely has nothing to do.
+        const itemId = tryResolveItemId(x.id)
+        if (itemId) {
+          const patch: Record<string, unknown> = { id: itemId }
+          if (x.starts_at_local) patch.due_at_local = x.starts_at_local
+          else if (x.date_local) patch.due_date_local = x.date_local
+          if (Object.keys(patch).length > 1) return executeTool('update_item', patch, ctx)
+          const item = repo.getItem(itemId)!
+          throw new ToolValidationError(`"${item.title}" is a task, not a calendar event — say what date or time to move it to.`)
+        }
+        throw new ToolValidationError(`No event with id "${x.id}"`)
+      }
+      const ev = repo.getEvent(eventId)
       if (!ev) throw new Error('No such event')
       const zone = ev.tz || DateTime.local().zoneName
       const oldDur = ev.ends_at_utc ? DateTime.fromISO(ev.ends_at_utc).toMillis() - DateTime.fromISO(ev.starts_at_utc).toMillis() : 60 * 60_000
@@ -1864,7 +1920,16 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
         patch.dueAtUtc = null
         changed.push('due removed')
       } else if (x.due_at_local || x.due_date_local) {
-        const due = repo.resolveDue(x.due_date_local, x.due_at_local, x.due_looseness)
+        // A bare day given for something that already has an exact time carries that time forward instead of
+        // silently dropping it (§11D 9 bug fix) — "move it to Tuesday" changes the day, it does not ask to
+        // remove the time. An explicit clock (due_at_local) or an explicit looseness (week/vague) always wins.
+        const carryTime = !x.due_at_local && x.due_date_local && !x.due_looseness && before.due_precision === 'exact' && before.due_at_utc
+        const due = carryTime
+          ? {
+              dueAtUtc: repo.dateAtClockToUtc(x.due_date_local!, DateTime.fromISO(before.due_at_utc!, { zone: 'utc' }).setZone(DateTime.local().zoneName).toFormat('HH:mm')),
+              precision: 'exact' as const
+            }
+          : repo.resolveDue(x.due_date_local, x.due_at_local, x.due_looseness)
         const gate = conflictGate(due.dueAtUtc, due.precision, x.override_conflicts, `Moving "${before.title}" to ${formatDue(due.dueAtUtc, due.precision)}`, { toolName: name, args: rawArgs })
         if (gate.confirm) return { result: { ok: false, needs_confirmation: true, question: gate.confirm.question }, confirm: gate.confirm }
         if (gate.note) changed.push(gate.note.trim().replace(/^[—(]\s*/, '').replace(/\)$/, ''))
@@ -2017,7 +2082,13 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
     }
     case 'update_reminder': {
       const x = a as z.infer<typeof toolSchemas.update_reminder>
-      const id = repo.resolveReminderId(x.id)
+      const resolved = resolveReminderOrItsItem(x.id)
+      if (!resolved) throw new ToolValidationError(`No reminder with id "${x.id}"`)
+      if ('item' in resolved) {
+        const summary = `"${resolved.item.title}" has no reminder to move`
+        return { result: { ok: true, nothing_to_cancel: true, summary }, applied: { tool: name, summary, phrase: `There's no reminder on "${resolved.item.title}" to move — nothing to do.`, itemId: resolved.item.id } }
+      }
+      const id = resolved.reminderId
       const before = repo.getReminder(id)!
       if (before.state === 'cancelled') throw new Error('That reminder is cancelled; create a new one instead')
       const patch: repo.ReminderPatch = {}
@@ -2046,7 +2117,13 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
     }
     case 'cancel_reminder': {
       const x = a as z.infer<typeof toolSchemas.cancel_reminder>
-      const id = repo.resolveReminderId(x.id)
+      const resolved = resolveReminderOrItsItem(x.id)
+      if (!resolved) throw new ToolValidationError(`No reminder with id "${x.id}"`)
+      if ('item' in resolved) {
+        const summary = `"${resolved.item.title}" has no reminder to cancel`
+        return { result: { ok: true, nothing_to_cancel: true, summary }, applied: { tool: name, summary, phrase: `There's no reminder on "${resolved.item.title}" to cancel — nothing to do.`, itemId: resolved.item.id } }
+      }
+      const id = resolved.reminderId
       const before = repo.getReminder(id)!
       repo.cancelReminder(id)
       const after = repo.getReminder(id)!
@@ -2059,7 +2136,13 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
     }
     case 'snooze_reminder': {
       const x = a as z.infer<typeof toolSchemas.snooze_reminder>
-      const id = repo.resolveReminderId(x.id)
+      const resolvedSnooze = resolveReminderOrItsItem(x.id)
+      if (!resolvedSnooze) throw new ToolValidationError(`No reminder with id "${x.id}"`)
+      if ('item' in resolvedSnooze) {
+        const summary = `"${resolvedSnooze.item.title}" has no reminder to snooze`
+        return { result: { ok: true, nothing_to_cancel: true, summary }, applied: { tool: name, summary, phrase: `There's no reminder on "${resolvedSnooze.item.title}" to snooze — nothing to do.`, itemId: resolvedSnooze.item.id } }
+      }
+      const id = resolvedSnooze.reminderId
       const before = repo.getReminder(id)!
       const r = repo.snoozeReminder(id, x.minutes)
       const title = r.item_title ?? 'that'

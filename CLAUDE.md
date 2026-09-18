@@ -3,8 +3,17 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 8 — Proactivity. 8a (morning briefing), 8b (approaching-deadline alerts), 8c (missed-task and
-waiting-item follow-up) and 8d (adaptive intensity, quiet hours) built, testable; 8e (conversational replanning) not started. **Phase 7 — Intelligence is
+## Current phase: Phase 8 — Proactivity is COMPLETE. 8a (morning briefing), 8b (approaching-deadline alerts), 8c
+(missed-task and waiting-item follow-up), 8d (adaptive intensity, quiet hours) built and tested; SPEC.md's own Phase 8 line
+has no lettered slices at all (8a–8d were this session's own organisational split, not spec text) — "conversational
+replanning" is PARTIALLY covered by 7f (full preview, nothing moves without approval, a proactive nudge) but NOT by a
+7g-style multi-turn refined-proposal loop for `replan_sessions`; a real, known gap, confirmed live, not built (see §11D
+section below). **§11D application acceptance run 2026-09-18 on a fresh scratch DB across a real restart: 7 of 10 steps
+passed outright; 3 genuine bugs found (a forward-looking reluctance statement mechanically logged an avoid constraint
+instead of empathy+alternative; "move it"/"cancel the reminder" reused the last-focused item's id as the wrong entity type
+and threw instead of rerouting/answering gracefully; a bare-day move on an exact-time item silently dropped the time) — all
+three FIXED and re-verified live + via direct DB read on a fresh scratch DB (see their own section below).** **Phase 7 —
+Intelligence is
 COMPLETE** (7a brain dump typed+voice, 7b deadline intelligence, 7c what-should-I-do-now, 7d what-am-I-forgetting, 7e smart
 scheduling, 7f replanning, 7g conversational planning; unit tests cover 7b/7c/7e/7f/7g core logic). Governing rule for Phase 7
 carries forward into 8: compute in code, the model only phrases — every answer costs at most ONE model call (§11G 14; 8a costs
@@ -22,6 +31,59 @@ several real quit + relaunch cycles: 24 of 27 steps pass outright; 4 and 12 pass
 was not performed; 25 passes against planted history (see below).** Phase 5 complete (§11F passed).
 **Restart (Phase 0 reboot) test is DEFERRED at the user's request — do not raise it.** The user registered a Task Scheduler logon task
 `Secretary` (20 s delay) after Explorer's Shell-Core log showed the HKCU Run entry being skipped; `<userData>/startup.log` logs each launch.
+
+## §11D application acceptance run + three fixes, and the "8e" question (2026-09-18)
+- **SPEC.md's Phase 8 has no lettered slices** — one line: "Daily briefing. Deadline preparation. Missed-task and
+  waiting-item follow-up. Adaptive intensity, quiet hours. Conversational replanning." 8a–8e were this session's own
+  organisational split, not spec text. Checked live whether "conversational replanning" is already covered by 7f: opened
+  a real replan preview, then refined mid-preview ("actually keep Wednesdays free too") — it did NOT update the open
+  proposal the way 7g's `refine_week_plan` does for `plan_week`; it created an unrelated new constraint and required
+  re-asking "replan the sessions" from scratch. So: the core safety guarantee (full preview, nothing moves without
+  approval) and a proactive nudge ARE delivered by 7f; the specific 7g-style "one evolving proposal, refined across
+  turns" ergonomics were never extended to `replan_sessions` — a real, known gap, not built here.
+- **§11D run, all 10 steps, on a fresh scratch DB across a real restart** (three separate `electron .` launches against
+  the same DB): 7 passed outright (1–4 project/checklist/complete/waiting-item setup; 7–8 recommend-now and
+  what-am-I-forgetting phrased correctly, step 7's reasoning was thin only because the dataset gave it little signal to
+  work with, not a defect). **3 failed — all three genuine, all three now fixed below and re-verified.**
+- **Step 5 FAILED, now fixed.** "I don't want to do the case study tonight" created an `avoid` constraint and replied
+  with zero warmth — spec explicitly wants "no guilt, an alternative offered". Root cause: nothing anywhere told the
+  model (or gave tier 0 a rule) that a forward-looking reluctance statement is a FEELING, not a request to block time
+  off — the same invariant-9 gap that a bare "I'm making tea" used to have (5d), just never closed for this phrasing.
+  Fixed with a new tier-0 rule (`router.ts`, scoped to phrasing that names WHEN — "tonight"/"today"/"right now"/etc, so
+  it never swallows an unrelated "I don't want to…" aside): resolves the named item, computes a REAL alternative time
+  the same deterministic way `propose_slot` already does (`schedule.ts#proposeSlot`/`describeProposal`), sets the SAME
+  `slot_proposal` offer `propose_slot` itself uses (a following "yes"/"book it" just works — no new mechanism), and
+  replies "That's okay — no guilt about it. …" — zero model calls. Looser phrasing that reaches the model gets the same
+  instruction in the system prompt: never `add_constraint` from a reluctance statement, call `propose_slot` instead.
+- **Steps 6 and 10 FAILED, now fixed — same root cause.** "Move it to tomorrow afternoon" → `"I couldn't do that: No
+  event with id "0adda90a""` (the deadline item's own id, reused as if it were an event's); "Cancel the reminder" →
+  the identical bogus-id pattern, this time as if it were a reminder's, against a dataset with NO reminder at all.
+  Both were caught safely by the tool layer (nothing corrupted, "nothing was changed"), but the user got a raw tool
+  error either way instead of the right outcome. Root cause: nothing in the tool layer checked that an id was the
+  right KIND of row for what the tool needed, and the model reused the last-focused item's id regardless. Fixed in
+  `tools.ts`: `update_event` now tries the id as an event first, and if it isn't one, tries it as an ITEM id — if that
+  resolves, it REROUTES to `update_item`'s own due-date reschedule (so "move it" naming a task/deadline now actually
+  reschedules it, not just fails more politely); `cancel_reminder`/`update_reminder`/`snooze_reminder` share a new
+  `resolveReminderOrItsItem` helper — an id that isn't a reminder's but IS an item's resolves to that item's one
+  unambiguous pending reminder when it has exactly one, or otherwise returns a plain, honest "There's no reminder on
+  'X' to cancel/move/snooze — nothing to do." instead of a thrown error. The system prompt's Reference resolution
+  section now says explicitly to check entity type before calling a tool with an id.
+- **Step 9 "worked" but silently dropped precision — now fixed.** "Actually move the application to Tuesday" (an item
+  that had an EXACT due time, 17:00) correctly moved the day but silently downgraded to day-only precision, since the
+  user only stated a day. Defensible under the honest-precision rule taken alone, but a real information loss: "move X
+  to Tuesday" is a day change, not a request to remove the time. Fixed in `tools.ts#update_item`: a bare `due_date_local`
+  on an item that already has an EXACT due time now carries that time-of-day forward onto the new date (via
+  `repo.dateAtClockToUtc`) and keeps precision `exact`, rather than falling back to day-only — an explicit `due_at_local`
+  (a real new time) or an explicit `due_looseness` (week/vague) always wins outright and is never overridden by this.
+- **Re-verified after the fix**, on a fresh scratch DB, via direct manual tool calls exercising the exact failure shapes
+  plus one live NL turn for step 5 (router tier 0, zero model calls): the reluctance statement now computes a genuine
+  alternative slot and creates NO constraint (`constraints` table empty, confirmed by direct query); `update_event` and
+  `cancel_reminder` called with an item's id (not that entity's own) now reroute/answer gracefully instead of throwing
+  (confirmed both by the tool's own reply text and directly against the `reminders` table, which stayed empty); a
+  bare-day move on an exact-time item now reads "now due Tue, 22 Sept at 20:00" — the time carried forward, not dropped
+  (confirmed against `items.due_at_utc`/`due_precision` directly).
+- **Not built here**: the 7g-style multi-turn replanning ergonomics gap noted above is a separate, known limitation of
+  `replan_sessions`, out of Phase 8's own scope — not part of what this fix touched.
 
 ## Fixed: "light" next to an overdue item read as the app not noticing (2026-09-18)
 - User feedback on the 8a briefing: `"Today looks light"` sat right next to `"Pay the electricity bill" (overdue)`
