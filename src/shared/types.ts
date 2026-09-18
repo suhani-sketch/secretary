@@ -324,6 +324,8 @@ export interface SecretaryApi {
   getPlanProgress(planId: string): Promise<PlanView>
   /** History of one thing of any type (item, event, reminder), newest first — what changed and when (6e). */
   activitiesForTarget(targetType: string, targetId: string, limit?: number): Promise<Activity[]>
+  /** Stated/inferred preferences (default reminder time etc.) for the Settings surface (9h) — read-only, never written directly. */
+  listPreferences(): Promise<{ key: string; value: string; source: string }[]>
 }
 
 /** One occurrence of an event: the series row plus this instance's start/end. `occurrence_start_utc` identifies it in `exdates`. */
@@ -444,5 +446,6 @@ export const IPC = {
   activitiesForTarget: 'activities:target',
   listUnscheduled: 'calendar:unscheduled',
   listPlans: 'plans:list',
-  getPlanProgress: 'plans:progress'
+  getPlanProgress: 'plans:progress',
+  listPreferences: 'preferences:list'
 } as const

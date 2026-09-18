@@ -22,6 +22,9 @@ import { formatClock, formatDue, isOverdue } from '../../shared/format'
 import { RightNow } from './Happenings'
 import type { Happening } from '../../shared/types'
 import { CalendarSurface, type CalendarMode } from './calendar/CalendarSurface'
+import { CONSTRAINT_ICON } from './calendar/grammar'
+import { ThingsSurface } from './ThingsSurface'
+import { SettingsSurface } from './SettingsSurface'
 
 const fmtLocal = (utcIso: string | null): string => (utcIso ? formatClock(utcIso) : '—')
 
@@ -315,6 +318,10 @@ export default function App(): React.JSX.Element {
       if (p) setEditing({ kind: 'project', project: p, tab: hash === 'timeline' ? 'timeline' : 'overview' })
     } else if (hash === 'history') {
       setEditing({ kind: 'history', item: items[0] })
+    } else if (hash.split(',').includes('things')) {
+      setSurface('things')
+    } else if (hash.split(',').includes('settings')) {
+      setSurface('settings')
     }
     setAutoOpened(true)
   }, [items, info, autoOpened])
@@ -470,6 +477,15 @@ export default function App(): React.JSX.Element {
     if (child && live(child)) partsOf.set(l.to_item, (partsOf.get(l.to_item) ?? 0) + 1)
   }
   const projects = openItems.filter((i) => i.kind === 'project')
+  const archivedProjects = items.filter((i) => i.kind === 'project' && (i.status === 'done' || i.status === 'archived'))
+  // Things surface (9h): the most recent activity touching each project, for a light "last activity" freshness cue —
+  // the same information ProjectView's own timeline already shows in full, just the top line of it.
+  const lastActivityAt = new Map<string, string>()
+  for (const a of activities) {
+    if (!a.project_id) continue
+    const cur = lastActivityAt.get(a.project_id)
+    if (!cur || a.created_at > cur) lastActivityAt.set(a.project_id, a.created_at)
+  }
   // Blocked = has an open blocker via a `blocks` link. Computed here from the links table, never stored.
   const blockersOf = new Map<string, Item[]>()
   for (const l of links) {
@@ -643,19 +659,32 @@ export default function App(): React.JSX.Element {
         </div>
       )}
       {surface === 'things' && (
-        <div className="flex-1 min-h-0 rounded-3xl bg-white/50 p-6 flex items-center justify-center text-sm text-stone-400 text-center">
-          <div>
-            <div className="text-base text-stone-500 mb-1">Things — its own surface, later.</div>
-            <div>For now, open a Thing from the conversation's rail.</div>
-          </div>
+        <div className="flex-1 min-h-0">
+          <ThingsSurface
+            active={projects}
+            archived={archivedProjects}
+            partsOf={partsOf}
+            lastActivityAt={lastActivityAt}
+            onOpen={(project) => setEditing({ kind: 'project', project })}
+          />
         </div>
       )}
       {surface === 'settings' && (
-        <div className="flex-1 min-h-0 rounded-3xl bg-white/50 p-6 flex items-center justify-center text-sm text-stone-400 text-center">
-          <div>
-            <div className="text-base text-stone-500 mb-1">Settings — its own surface, later.</div>
-            <div>The scene chooser is in the room; the week start is in the calendar header.</div>
-          </div>
+        <div className="flex-1 min-h-0">
+          <SettingsSurface
+            theme={theme}
+            onSetTheme={(t) => setTheme(t)}
+            weekStart={weekStart}
+            onSetWeekStart={(n) => {
+              setWeekStart(n)
+              void window.api.setSetting('calendar.weekStart', String(n))
+            }}
+            info={info}
+            say={say}
+            refresh={refresh}
+            quick={quick}
+            creatureName={creatureName}
+          />
         </div>
       )}
 
@@ -781,7 +810,7 @@ export default function App(): React.JSX.Element {
                 <ul className="flex flex-col gap-1 overflow-y-auto">
                   {overdueItems.slice(0, 8).map((it) => (
                     <li key={it.id} className="group text-sm flex items-start gap-2 rounded-lg px-1 py-1 hover:bg-white/80 cursor-pointer" onClick={() => setEditing({ kind: 'item', item: it })}>
-                      <span className="mt-0.5 text-xs">⚠️</span>
+                      <span className="mt-0.5 text-xs">⚠</span>
                       <div className="min-w-0 flex-1">
                         <div className="truncate">{it.title}</div>
                         <div className="text-xs text-amber-800">was due {formatDue(it.due_at_utc, it.due_precision)}</div>
@@ -844,7 +873,7 @@ export default function App(): React.JSX.Element {
                 <ul className="flex flex-col gap-0.5 overflow-y-auto">
                   {constraints.slice(0, 8).map((c) => (
                     <li key={c.id} className="group text-xs flex items-center gap-2 rounded-lg px-1 py-0.5 hover:bg-white/80">
-                      <span>{c.label.startsWith('buffer|') ? '↔' : c.kind === 'unavailable' ? '🚫' : c.kind === 'avoid' ? '⚠️' : '👍'}</span>
+                      <span>{c.label.startsWith('buffer|') ? '↔' : CONSTRAINT_ICON[c.kind as 'unavailable' | 'avoid' | 'prefer']}</span>
                       {c.label.startsWith('buffer|') ? (
                         <span className="flex-1 truncate text-stone-700" title="A transition buffer: bookings tighter than this are flagged as a poor fit">
                           <span className="font-medium">buffer</span>

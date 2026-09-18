@@ -5,8 +5,8 @@ Update it at the end of every session (spec §11).
 
 ## Current phase: Phase 9 — The living world. 9a (the room as a place), 9b (the creature as a character system),
 9c (autonomous ambient behaviour), 9d (direct interaction), 9e (rare initiation), 9f (familiarity through real
-memory) and 9g (room persistence and the deferred Phase 4 features) built, testable; 9h–9i (coherent product
-language, micro-interactions) not started. **Phase 8 — Proactivity is COMPLETE.** 8a (morning briefing), 8b (approaching-deadline alerts), 8c
+memory), 9g (room persistence and the deferred Phase 4 features) and 9h (coherent product language) built,
+testable; 9i (micro-interactions and motion) not started. **Phase 8 — Proactivity is COMPLETE.** 8a (morning briefing), 8b (approaching-deadline alerts), 8c
 (missed-task and waiting-item follow-up), 8d (adaptive intensity, quiet hours) built and tested; SPEC.md's own Phase 8 line
 has no lettered slices at all (8a–8d were this session's own organisational split, not spec text) — "conversational
 replanning" is PARTIALLY covered by 7f (full preview, nothing moves without approval, a proactive nudge) but NOT by a
@@ -16,6 +16,81 @@ passed outright; 3 genuine bugs found (a forward-looking reluctance statement me
 instead of empathy+alternative; "move it"/"cancel the reminder" reused the last-focused item's id as the wrong entity type
 and threw instead of rerouting/answering gracefully; a bare-day move on an exact-time item silently dropped the time) — all
 three FIXED and re-verified live + via direct DB read on a fresh scratch DB (see their own section below).**
+
+## Phase 9h — coherent product language (2026-09-19)
+- **The real gap wasn't styling drift — Things and Settings were still literal placeholder text** ("Things — its
+  own surface, later." / "Settings — its own surface, later.", unchanged since Phase 6a). You cannot judge whether
+  four surfaces read as one product when two of them are a sentence in a grey box. Built both for real, reusing
+  ONLY what already exists (no new backend capability, no new tool): `ThingsSurface.tsx` lists every project via the
+  same `Item[]`/`partsOf` data `App.tsx` already computed for the rail, `SettingsSurface.tsx` exposes 8d's
+  `set_notification_intensity`/`set_quiet_hours` and the pre-existing `set_preference` tool through real controls —
+  every write still goes through the identical `quick()` tool-call path a conversational instruction already used,
+  so an activity is logged and the same validation applies either way (spec §7: "manual changes record activities
+  exactly as AI changes do").
+- **Chrome is deliberately copy-pasted, not merely "similar".** Both new surfaces reuse the Calendar surface's own
+  literal classes — `rounded-3xl bg-white/50 px-5 py-3` header, `rounded-xl bg-white/80 p-0.5` tab switch with
+  `bg-cocoa text-cream` active state, `rounded-2xl bg-white/60 p-4` section chrome and `text-xs font-medium
+  uppercase tracking-wide text-stone-500` headers lifted straight from the rail (unchanged since Phase 1) — so
+  the visual sameness isn't a judgement call, it's the same Tailwind utility strings appearing in three files.
+- **A real, if small, icon-language drift found and fixed:** the rail used its own ad hoc `⚠️` (with the emoji
+  variation selector) while `calendar/grammar.tsx`'s shared vocabulary (Phase 6c, the ONE glyph table every
+  calendar surface already read from) used plain `⚠` — two different renders of "overdue" depending on which
+  surface you were looking at. Normalized to `⚠` everywhere (`App.tsx`, `ProjectView.tsx`'s activity-verb icons).
+  The rail's inline `🚫/⚠️/👍` ternary for constraint kinds (unavailable/avoid/prefer) — invented locally, never
+  shared — became `grammar.tsx#CONSTRAINT_ICON`, so a future surface that also needs to show constraint kinds reads
+  from the one table instead of re-inventing its own guess.
+- **Things surface deliberately has no "+ new" button.** Spec 3a is explicit: a project is "inferred from
+  conversation, never created by hand" — a create button here would contradict that invariant, not just be
+  redundant with it. Cards: `TypeGlyph`/`Marks`/`titleClass` from grammar.tsx (the exact same components Calendar's
+  Day/Month/Week/Agenda already use), open-parts count, due date via the shared `formatDue`, and a light "last
+  activity" freshness line computed client-side from `activities.project_id` (the same field 3a's `act()` already
+  denormalizes onto every activity row) — no new query, no new backend logic. Active/Done tabs mirror the exact
+  Month/Week/Day/Agenda tab pattern. Empty state names the actual phrasing that creates one ("... 'the TISS mailing
+  is something I need to deal with.'") rather than a generic "nothing here".
+- **Settings surface holds only what didn't already have a home, and — this took an actual grep, not a guess —
+  only preferences a real consumer reads.** Week start already has a shortcut in the Calendar header; scene
+  favourites/rotation live in the room's own scene button (9g) and were deliberately NOT duplicated here (two
+  places editing one stateful list risks drift; Settings names where it lives instead: "favourite scenes and
+  rotation live in the room's own scene button"). `set_preference`'s schema also accepts `day_start`/`day_end`/
+  `name`, but `grep -rn "day_start\|day_end" src/main src/core` and the same for the `name` preference came back
+  with ZERO consumers anywhere in the scheduling code (the workable-hours window is a hardcoded constant, not read
+  from this preference) — exposing a control for a setting that silently does nothing would be exactly the kind of
+  dishonest UI this app's own invariants forbid elsewhere, so those three were left out. Only
+  `default_reminder_time` (genuinely read by `tools.ts#reminderFromDate`) and the already-real, previously
+  debug-panel-only "Start with Windows" checkbox made the cut.
+- **A read-only widening, not a new write path.** Notification intensity and quiet hours needed to be DISPLAYED
+  honestly on load, but `settings:get`/`settings:set` in `index.ts` shared one narrow whitelist regex that didn't
+  include `notify.*` at all (writes to those keys have only ever gone through `set_notification_intensity`/
+  `set_quiet_hours`, which also apply the one-sided quiet-hours default and log an activity — a raw `settings:set`
+  would silently skip both). Split into `UI_SETTING` (write, unchanged) and a new `UI_SETTING_READ_ONLY` (adds
+  `notify\.(intensity|quiet_start|quiet_end)$` for GET only) — the Settings page reads through this, but every
+  write still goes through the tool layer. New `repo.listPreferences()` was already written (context.ts uses it)
+  but never exposed to the renderer; added the one read-only IPC channel (`preferences:list`) needed to show
+  `default_reminder_time`'s current value and whether it is the user's own stated figure or the app's default.
+- **Notification tone was already right — this was an audit, not a rewrite.** Read every `showToast` call site
+  (`scheduler.ts`, `deadlineAlerts.ts`): "Missed reminder (12 late) — X, was due Y. Do it now, or move it?", "Tea's
+  ready.", "Deadline at risk: X" — concise, calm, offers a next step, never a guilt line, never invented urgency.
+  8c's `describeFollowUp` was already asserted tone-clean by its own unit tests (Phase 8c). Nothing needed changing
+  here; confirmed rather than assumed.
+- **Verified live on a scratch DB** (`SECRETARY_USER_DATA`), a realistic seeded state (a project with checklist
+  parts, a commitment, an overdue task, a hard deadline, a blocked link, `notify.intensity=low`,
+  `notify.quiet_start/end=22:00/08:00`): all four surfaces screenshotted side by side (new dev-hook hash tokens
+  `#things`/`#settings`, matching the existing `#calendar[:date]` convention) — Things shows the one project with
+  its real progress and a "blocked by" state; Settings reads back the exact seeded intensity/quiet-hours/theme/week
+  -start correctly. Re-verified in dark mode (`,theme:dark`) — both new surfaces invert correctly with zero
+  surface-specific dark-mode code, because every colour used is the same `bg-white/NN`/`bg-cocoa` Tailwind theme
+  token the rest of the app already themes globally. Re-verified on a genuinely empty scratch DB: Things shows an
+  honest empty state instead of a blank grid; Settings shows the real, honest defaults (quiet hours "Not set —
+  notify any time", intensity "normal", no false "(your usual time)" label on an unstated default).
+- **Caught and fixed while testing, not left in:** the first cut of the new dev-hook hash tokens used strict
+  equality (`hash === 'things'`), which silently failed to combine with `theme:dark` in the same hash string
+  (`#things,theme:dark`) — the same comma-joined-hash convention every other dev hook here already supports.
+  Switched to `hash.split(',').includes('things')`, matching how `theme:`/`light:` are already parsed permissively
+  elsewhere in the same effect.
+- **Not built here** (9i, the last Phase 9 slice): micro-interactions and motion — sending a message, completing
+  something, undoing, receiving a reminder, interacting with the creature all still use whatever transition (or
+  lack of one) they happened to ship with; no reduced-motion preference is read anywhere yet. Settings does not
+  (yet) duplicate the room's own scene controls — a deliberate scope line, not an oversight, see above.
 
 ## Phase 9g — room persistence and the deferred Phase 4 features (2026-09-19)
 - **Six pieces, all from the spec line, all verified live:** room state survives close/restart/computer-restart;

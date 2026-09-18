@@ -569,8 +569,13 @@ function registerIpc(): void {
   // already did; creature.name is readable here so the room can display it once set, even though it is only ever
   // WRITTEN through the set_creature_name tool (the naming moment is a conversation, not a settings field).
   const UI_SETTING = /^scene\.(environment|timeOfDay|favorites|rotation)$|^companion\.[a-z_]+$|^calendar\.(weekStart|view)$|^ui\.theme$|^creature\.name$/
+  // The Settings surface (9h) needs to DISPLAY notify.intensity/quiet_start/quiet_end (8d) so the page isn't lying about
+  // the app's current state — but it must still WRITE them only through set_notification_intensity/set_quiet_hours (the
+  // tool layer), which log an activity and apply the one-sided quiet-hours default; a raw settings:set for these keys
+  // would silently skip both. Hence a wider read-only allowance layered on top of the same write whitelist.
+  const UI_SETTING_READ_ONLY = /^notify\.(intensity|quiet_start|quiet_end)$/
   ipcMain.handle(IPC.getSetting, (_e, key: string) => {
-    if (!UI_SETTING.test(key)) return null
+    if (!UI_SETTING.test(key) && !UI_SETTING_READ_ONLY.test(key)) return null
     const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined
     return row?.value ?? null
   })
@@ -579,6 +584,9 @@ function registerIpc(): void {
     getDb().prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, value)
     log('info', 'ui.setting', `${key} = ${value}`)
   })
+  // Read-only: stated/inferred preferences (default_reminder_time etc.) for the Settings surface (9h) to display
+  // honestly. Writing still goes only through set_preference (the tool layer), same reasoning as above.
+  ipcMain.handle(IPC.listPreferences, () => repo.listPreferences())
 
   // Conversation (Phase 1)
   ipcMain.handle(IPC.sendChat, (_e, text: string) => {

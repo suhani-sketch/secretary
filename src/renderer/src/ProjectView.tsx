@@ -36,7 +36,7 @@ const verbIcon: Record<string, string> = {
   updated: '✎',
   note_added: '📝',
   reminder_fired: '🔔',
-  reminder_missed: '⚠️',
+  reminder_missed: '⚠',
   dismissed: '–',
   snoozed: '⏲',
   undone: '↶',

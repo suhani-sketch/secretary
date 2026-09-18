@@ -57,7 +57,8 @@ const api: SecretaryApi = {
   activitiesForTarget: (targetType, targetId, limit) => ipcRenderer.invoke(IPC.activitiesForTarget, targetType, targetId, limit),
   listUnscheduled: () => ipcRenderer.invoke(IPC.listUnscheduled),
   listPlans: () => ipcRenderer.invoke(IPC.listPlans),
-  getPlanProgress: (planId) => ipcRenderer.invoke(IPC.getPlanProgress, planId)
+  getPlanProgress: (planId) => ipcRenderer.invoke(IPC.getPlanProgress, planId),
+  listPreferences: () => ipcRenderer.invoke(IPC.listPreferences)
 }
 
 contextBridge.exposeInMainWorld('api', api)

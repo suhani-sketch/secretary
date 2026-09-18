@@ -42,6 +42,10 @@ export const TYPE: Record<Grammar, { glyph: string; word: string; chip: string }
 
 export const grammarOf = (i: Item): Grammar => (isHard(i) && i.kind !== 'commitment' ? 'deadline' : i.kind === 'commitment' ? 'commitment' : i.kind === 'waiting' ? 'waiting' : i.kind === 'project' ? 'project' : i.kind === 'checklist_item' ? 'checklist_item' : i.kind === 'idea' ? 'idea' : i.kind === 'note' ? 'note' : 'task')
 
+/** The three constraint kinds (spec 3f), one glyph each — shared by the rail and any future calendar surface that
+ * needs to tell them apart, rather than each place inventing its own emoji for "a window of time set aside". */
+export const CONSTRAINT_ICON: Record<'unavailable' | 'avoid' | 'prefer', string> = { unavailable: '🚫', avoid: '⚠', prefer: '👍' }
+
 /** Both axes of an item, as glyph + word each: "◆ hard deadline" and "! high". The tone is extra, never the only signal. */
 export function Marks({ item, overdue, className = '' }: { item: Item; overdue?: boolean; className?: string }): React.JSX.Element {
   const imp = IMPORTANCE[importanceOf(item)]
