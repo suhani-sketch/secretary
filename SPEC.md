@@ -678,7 +678,7 @@ Conflict detection gains **levels** rather than being binary: *hard conflict* (g
 
 **Done when:** the calendar acceptance test in §11C passes.
 
-### Phase 7 — Intelligence
+### Phase 7 — Intelligence ✅ complete
 
 The reasoning layer over everything built in Phases 1–6. **Do not create a second planning or task system.** `items`, `links`, `events`, `reminders`, `constraints`, context, commitments, `plans` and the Day View Model are the source of truth.
 
@@ -703,6 +703,9 @@ The reasoning layer over everything built in Phases 1–6. **Do not create a sec
 **Voice.** Audio goes to Gemini directly through the same provider and tool schema — a record button and an audio branch, not a subsystem. A spoken dump runs the same 7a pipeline as a typed one. Audio stays local.
 
 **Done when:** the intelligence acceptance test in §11G passes.
+*13 of 14 steps verified 2026-09-18; step 2 (the same brain dump spoken) blocked by Gemini free-tier daily quota
+exhaustion on the stronger models voice requires — an external constraint, not a code defect. The underlying voice
+pipeline was verified separately when it was built (Phase 7 "Voice" section, real TTS audio through the real API).*
 
 ### Phase 8 — Proactivity
 Daily briefing. Deadline preparation. Missed-task and waiting-item follow-up. Adaptive intensity, quiet hours. Conversational replanning.

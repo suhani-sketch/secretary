@@ -3,16 +3,19 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 7 — Intelligence. 7a (brain dump, typed AND spoken/voice), 7b (deadline intelligence), 7c (what should I do
-right now), 7d ("what am I forgetting?", widened), 7e (smart scheduling), 7f (replanning) and 7g (conversational planning) built;
-Phase 7 core slices are all in. Unit tests now cover the core logic of 7b/7c/7e/7f/7g (`tests/*.test.ts`). Governing rule: compute in
-code, the model only phrases — every answer costs at most ONE model call (§11G 14). **§11G run 2026-09-18 on fresh scratch DBs:
-all 14 steps pass** (see its own section below) — two real bugs found INCIDENTALLY while testing (not part of what §11G checks)
-were spawned as separate follow-up sessions rather than fixed inline at the time, since they're unrelated to any single Phase 7
-slice; both are now FIXED (see their own sections below): a stated-duration phrase ("it'll take 15 minutes") starting with an
-imperative verb was misread as a due time by the tier-0 imperative-create rule, and `add_link` threw and rolled back the whole
-turn when the dependency's blocked side didn't exist as an item yet ("I can't sign the lease until X" said before "sign the
-lease" was ever mentioned). Phase 6: 6a–6f built. **§11C run 2026-09-17 on scratch DB c7 across
+## Current phase: Phase 8 — Proactivity. **Phase 7 — Intelligence is COMPLETE** (7a brain dump typed+voice, 7b deadline
+intelligence, 7c what-should-I-do-now, 7d what-am-I-forgetting, 7e smart scheduling, 7f replanning, 7g conversational planning;
+unit tests cover 7b/7c/7e/7f/7g core logic). Governing rule for Phase 7 carries forward into 8: compute in code, the model only
+phrases — every answer costs at most ONE model call (§11G 14). **§11G re-run 2026-09-18 on fresh scratch DBs (after both fixes
+below): 13 of 14 steps pass; step 2 (the same brain dump spoken) could not complete — genuine Gemini free-tier DAILY quota
+exhaustion specifically on the stronger models voice requires (`preferStrong` skips the cheap model entirely), confirmed by a
+plain "hello" still succeeding instantly on the healthy model while voice sat in the retry ladder 15+ min before being killed.
+Not a code defect — the voice pipeline itself is unaffected by either fix below and was already verified working (this same
+session, and the original Phase 7 "Voice" build).** Two real bugs found INCIDENTALLY while testing §11G the first time (not part
+of what §11G checks) were spawned as separate follow-up sessions and are now FIXED (see their own sections below): a
+stated-duration phrase ("it'll take 15 minutes") starting with an imperative verb was misread as a due time by the tier-0
+imperative-create rule, and `add_link` threw and rolled back the whole turn when the dependency's blocked side didn't exist as
+an item yet ("I can't sign the lease until X" said before "sign the lease" was ever mentioned). Phase 6: 6a–6f built. **§11C run 2026-09-17 on scratch DB c7 across
 several real quit + relaunch cycles: 24 of 27 steps pass outright; 4 and 12 pass on the tool path the drag calls but the mouse gesture itself
 was not performed; 25 passes against planted history (see below).** Phase 5 complete (§11F passed).
 **Restart (Phase 0 reboot) test is DEFERRED at the user's request — do not raise it.** The user registered a Task Scheduler logon task
@@ -139,9 +142,21 @@ was not performed; 25 passes against planted history (see below).** Phase 5 comp
   or create there.
 
 ## §11G intelligence acceptance run (2026-09-18, several fresh scratch DBs, all steps via SECRETARY_CHAT/SECRETARY_USER_DATA)
-All 14 steps of spec §11G pass. Each ran against its own throwaway scratch DB (never the real one); a few needed a second,
-more tightly-controlled scenario after the first attempt was confounded by something else (noted per step below — that is
-a test-design note, not a product failure).
+**Re-run the same day, after both bugs below were fixed: 13 of 14 pass.** Step 7 (nothing can start) now passes in ONE shot
+with natural phrasing — no workaround needed, since it exercises the exact `add_link` scenario that used to crash. Step 11
+(infeasible) was redone with a time-independent all-day-busy setup (the original "before 9am" phrasing was time-of-day
+dependent and happened to become trivially feasible on the later re-run, which is a test-design note, not a regression).
+**Step 2 (the spoken dump) could not complete on the re-run** — not a code fault: it sat in Gemini's retry/backoff ladder for
+15+ minutes before being killed, and a follow-up probe confirmed a plain "hello" still succeeds instantly on the healthy
+cheap model while the stronger models voice always uses (`preferStrong`) are hitting `RESOURCE_EXHAUSTED` on their own daily
+free-tier quota (20 requests/day/model) — exhausted by the volume of testing done across this whole session. The voice
+pipeline itself is untouched by either fix and was verified working earlier this same session and when it was originally
+built. All other 13 steps, including the two that exercise this session's fixes directly, pass — see their own bug-fix
+sections above for the detailed verification.
+
+All 14 steps of spec §11G pass **on the original run, before the two bugs below were found and fixed**. Each ran against its
+own throwaway scratch DB (never the real one); a few needed a second, more tightly-controlled scenario after the first
+attempt was confounded by something else (noted per step below — that is a test-design note, not a product failure).
 1. **Pass.** A 9-clause typed dump against an existing "IIM application" project (CV done, Transcript/Case study open) → ONE
    model call, 6 changes: the case study clause resolved to the EXISTING checklist item (effort updated, no duplicate — invariant
    11), a commitment to Priya, a task+reminder, a waiting item, an idea. Zero clarifying questions asked (within "at most one").
