@@ -10,6 +10,7 @@ import * as repo from './repo'
 import { TICK_MS, startScheduler, startupSweep, stopScheduler, tick } from './scheduler'
 import { buildDay, buildDays, occurrencesBetween } from './calendar'
 import { maybeSendMorningBriefing } from './briefing'
+import { maybeSendFollowUp } from './followUp'
 import { inferImportance } from '../core/importance'
 import { describeProgress, planProgress } from '../core/plans'
 import { createTray, refreshTrayMenu } from './tray'
@@ -273,6 +274,18 @@ function createWindow(): BrowserWindow {
     } catch (e) {
       // A briefing failure must never block the window from showing or take the companion's own greeting down with it.
       log('error', 'briefing.failed', (e as Error).message)
+    }
+    // Missed-task / waiting-item follow-up (Phase 8c): its own independent try/catch and its own delayed push, on
+    // purpose — one feature failing must never take the other down with it, and both messages should be able to
+    // land in the same window-show without either one silently swallowing the other.
+    try {
+      const msg = maybeSendFollowUp()
+      if (msg) {
+        log('info', 'followup.sent', msg.content)
+        setTimeout(() => win.webContents.send(IPC.messageAdded, msg), 400)
+      }
+    } catch (e) {
+      log('error', 'followup.failed', (e as Error).message)
     }
   })
   win.webContents.setWindowOpenHandler(({ url }) => {

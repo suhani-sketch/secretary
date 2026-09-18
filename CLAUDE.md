@@ -3,8 +3,8 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 8 — Proactivity. 8a (morning briefing) and 8b (approaching-deadline alerts) built, testable; 8c–8e
-(missed-task and waiting-item follow-up, adaptive intensity/quiet hours, conversational replanning) not started. **Phase 7 — Intelligence is
+## Current phase: Phase 8 — Proactivity. 8a (morning briefing), 8b (approaching-deadline alerts) and 8c (missed-task and
+waiting-item follow-up) built, testable; 8d–8e (adaptive intensity/quiet hours, conversational replanning) not started. **Phase 7 — Intelligence is
 COMPLETE** (7a brain dump typed+voice, 7b deadline intelligence, 7c what-should-I-do-now, 7d what-am-I-forgetting, 7e smart
 scheduling, 7f replanning, 7g conversational planning; unit tests cover 7b/7c/7e/7f/7g core logic). Governing rule for Phase 7
 carries forward into 8: compute in code, the model only phrases — every answer costs at most ONE model call (§11G 14; 8a costs
@@ -45,6 +45,61 @@ was not performed; 25 passes against planted history (see below).** Phase 5 comp
   morning briefing and `get_day`'s own independent phrasing (same underlying `summary.status` field, confirming
   the fix is consistent across every surface that reads it, not just the one that was complained about); a
   genuinely empty day still correctly reads "Nothing pressing today."
+
+## Phase 8c — missed-task and waiting-item follow-up (2026-09-18)
+- **"Surfaces once, caps out, never nags" — three separate mechanisms, one each.** `src/main/followUp.ts#
+  maybeSendFollowUp`: (1) *surfaces once* — every item that gets named is recorded PERMANENTLY in a
+  `followup.surfaced_ids` setting and never named again, regardless of how long it stays overdue/unresolved.
+  Deliberately different from 8b's deadline-risk tracking (which clears and can re-arm as feasibility genuinely
+  changes): a missed task does not become "un-missed" on its own the way a deadline's feasibility fluctuates, so
+  there is nothing to re-arm — once told, told for good. (2) *caps out* — at most 3 NEW items are named in any one
+  day's message (`CAP`); a backlog beyond that waits quietly for a LATER day's sweep rather than flooding one
+  message, and the message says so honestly ("2 more are sitting quietly for another day, not forgotten") rather
+  than silently dropping them. (3) *never nags* — at most ONE message per local calendar day (gated the identical
+  way to 8a's briefing: the flag is written only after success, so a transient failure retries next window-show
+  rather than skipping the day), and a wait that already has an active EXPLICIT conditional reminder (Phase 3c's
+  "remind me if they haven't replied by Friday") is excluded from this sweep entirely — the user already asked to
+  be told about that one specifically; naming it again here would be exactly the nagging this slice exists to
+  prevent.
+- **Reuses existing queries, invents no new overdue/staleness detection.** Missed tasks: `repo.openItemsOverdue`
+  (the SAME precision-aware honesty already used by the rail's own Overdue section — exact: time passed; day: a
+  full day over; week/vague: a week over), filtered to kind task/deadline/commitment (never checklist steps,
+  projects, or waits — those are a different category or live elsewhere). Stale waits: `repo.openWaitingItems`
+  filtered to `due_at_utc` (the expected-reply date) already passed. Both filtered against the permanent surfaced
+  set and, for waits, against `repo.pendingRemindersForItems` for an existing `condition_json`.
+- **Phrasing lives in `core/followup.ts#describeFollowUp`** (platform-independent, no model), following the app's
+  own Emotional UX rule verbatim (spec §8 Phase 4: never "you failed", never a guilt line): "X didn't get done ·
+  Still no word from Y on Z · We still have time — say what to do with these." Missed tasks and stale waits combine
+  into ONE message when both are present, missed named first. `tests/followup.test.ts` (11 checks): singular vs
+  plural grammar for both categories; the two categories combine coherently; the tone genuinely never contains
+  blame language (asserted directly, not just eyeballed); overflow is stated honestly with correct singular/plural
+  grammar; zero entries produces `null` (never an empty or manufactured line).
+- **A real, non-obvious phrasing bug caught by actually reading the live output, not just the unit tests:** a
+  wait's own `title` is already the auto-generated "Waiting on Priya — the transcript" (`createWaiting`'s display
+  title) — phrasing `Still no word from Priya on "${title}"` around that repeated "Priya" and "Waiting on"
+  awkwardly. Fixed by using the wait's `details` field (just the "about" part, "the transcript") instead of its
+  full title, falling back to the title only if `details` is empty. The unit tests never would have caught this on
+  their own since they use clean, already-short fixture titles — this only showed up against a wait created the
+  normal way, through the real `create_waiting` tool.
+- **Delivered exactly like 8a**: a real `role:'assistant', tier:0` message, pushed to the renderer over the SAME
+  `onMessageAdded` channel 8a already built (no new plumbing), from its own independent `try/catch` inside the
+  SAME `win.on('show', …)` handler — one feature's failure can never take the other's message down with it, and
+  both a briefing and a follow-up can land from the same window-show without either swallowing the other (verified
+  live: both `briefing.sent` and `followup.sent` log lines fire from one relaunch when both have something to say).
+  Also an `activities` row per named item (`verb:'followup_surfaced'`), same as every other proactive system event
+  in this app.
+- **Verified live** through the full lifecycle on scratch DBs via `SECRETARY_CHAT`/`SECRETARY_USER_DATA` (window
+  `show` only fires meaningfully on a SECOND launch, same dev-hook quirk as 8a/8b, since the sweep needs the items
+  to already exist): one overdue task + one stale wait → one combined message naming both; a second relaunch the
+  SAME day → correctly silent; 5 new stale items (4 tasks + 1 wait) → exactly 3 named (oldest-due-first), "2 more
+  … not forgotten"; a SIMULATED next day (backdating `followup.lastDate`) → the 2 held-back items surface, the 3
+  already-named ones correctly never repeat; a wait with an active conditional reminder → correctly excluded,
+  no double-mention.
+- **Not built here**: 8d (adaptive intensity/quiet hours — like 8b, this has no quiet-hours awareness yet and the
+  message could in principle appear the moment the window shows regardless of hour), 8e (conversational
+  replanning). No unit test for `main/followUp.ts` itself, matching the established convention (only `core/*.ts`
+  gets plain-Node unit tests; DB/Electron-coupled glue is verified live) — `core/followup.ts`, the part that
+  actually decides the wording, is fully covered.
 
 ## Phase 8b — approaching-deadline alerts (2026-09-18)
 - **"Only fires when the evidence is clear, never speculatively" — enforced by reusing 7b's own arithmetic verbatim,
