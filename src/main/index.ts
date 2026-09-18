@@ -9,6 +9,7 @@ import { NOTIFICATION_ID_PREFIX, PROTOCOL, dispatchToastAction, setToastActionHa
 import * as repo from './repo'
 import { TICK_MS, startScheduler, startupSweep, stopScheduler, tick } from './scheduler'
 import { buildDay, buildDays, occurrencesBetween } from './calendar'
+import { maybeSendMorningBriefing } from './briefing'
 import { inferImportance } from '../core/importance'
 import { describeProgress, planProgress } from '../core/plans'
 import { createTray, refreshTrayMenu } from './tray'
@@ -253,6 +254,25 @@ function createWindow(): BrowserWindow {
       e.preventDefault()
       win.hide()
       log('info', 'window.hidden', 'window closed to tray; scheduler keeps running')
+    }
+  })
+  // Morning briefing (Phase 8a): every time the window becomes visible, not just the very first — the gate that
+  // makes this once-per-day lives inside maybeSendMorningBriefing itself, so a later re-show the same day is a no-op.
+  // Pushed directly to this window rather than via notifyRendererChanged + a chatHistory refetch, so it can never
+  // race with or duplicate an in-flight send. The gate + insert run right away (so a second 'show' this same day is
+  // still correctly a no-op even if this window is somehow shown twice inside 400ms); only delivery to the
+  // renderer is delayed, on the same "let it finish loading first" precedent as the reschedule prefill above — on a
+  // cold launch this fires close to 'ready-to-show', before the renderer's own listeners are necessarily attached.
+  win.on('show', () => {
+    try {
+      const msg = maybeSendMorningBriefing()
+      if (msg) {
+        log('info', 'briefing.sent', msg.content)
+        setTimeout(() => win.webContents.send(IPC.messageAdded, msg), 400)
+      }
+    } catch (e) {
+      // A briefing failure must never block the window from showing or take the companion's own greeting down with it.
+      log('error', 'briefing.failed', (e as Error).message)
     }
   })
   win.webContents.setWindowOpenHandler(({ url }) => {

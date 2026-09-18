@@ -286,6 +286,9 @@ export interface SecretaryApi {
   onChatStatus(cb: (status: ChatStatus) => void): () => void
   /** Main asks the renderer to put text in the input box (e.g. "Reschedule" from a toast button). */
   onChatPrefill(cb: (text: string) => void): () => void
+  /** A message inserted by main outside a normal chat exchange (Phase 8a morning briefing) — pushed directly rather
+   *  than via a chatHistory refetch, so it can never race with or duplicate an in-flight send. */
+  onMessageAdded(cb: (message: ChatMessage) => void): () => void
 
   // Manual editing — same tool layer as the AI (spec hard rule 3)
   runTool(name: string, args: Record<string, unknown>): Promise<ToolRunResult>
@@ -423,6 +426,7 @@ export const IPC = {
   listExtractions: 'chat:extractions',
   chatStatus: 'chat:status',
   chatPrefill: 'chat:prefill',
+  messageAdded: 'chat:messageAdded',
   runTool: 'tools:run',
   listActivities: 'activities:list',
   listAiCalls: 'ai:calls',

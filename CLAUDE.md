@@ -3,10 +3,12 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 8 — Proactivity. **Phase 7 — Intelligence is COMPLETE** (7a brain dump typed+voice, 7b deadline
-intelligence, 7c what-should-I-do-now, 7d what-am-I-forgetting, 7e smart scheduling, 7f replanning, 7g conversational planning;
-unit tests cover 7b/7c/7e/7f/7g core logic). Governing rule for Phase 7 carries forward into 8: compute in code, the model only
-phrases — every answer costs at most ONE model call (§11G 14). **§11G re-run 2026-09-18 on fresh scratch DBs (after both fixes
+## Current phase: Phase 8 — Proactivity. 8a (morning briefing) built, testable; 8b–8e (deadline preparation, missed-task
+and waiting-item follow-up, adaptive intensity/quiet hours, conversational replanning) not started. **Phase 7 — Intelligence is
+COMPLETE** (7a brain dump typed+voice, 7b deadline intelligence, 7c what-should-I-do-now, 7d what-am-I-forgetting, 7e smart
+scheduling, 7f replanning, 7g conversational planning; unit tests cover 7b/7c/7e/7f/7g core logic). Governing rule for Phase 7
+carries forward into 8: compute in code, the model only phrases — every answer costs at most ONE model call (§11G 14; 8a costs
+ZERO). **§11G re-run 2026-09-18 on fresh scratch DBs (after both fixes
 below): 13 of 14 steps pass; step 2 (the same brain dump spoken) could not complete — genuine Gemini free-tier DAILY quota
 exhaustion specifically on the stronger models voice requires (`preferStrong` skips the cheap model entirely), confirmed by a
 plain "hello" still succeeding instantly on the healthy model while voice sat in the retry ladder 15+ min before being killed.
@@ -20,6 +22,78 @@ several real quit + relaunch cycles: 24 of 27 steps pass outright; 4 and 12 pass
 was not performed; 25 passes against planted history (see below).** Phase 5 complete (§11F passed).
 **Restart (Phase 0 reboot) test is DEFERRED at the user's request — do not raise it.** The user registered a Task Scheduler logon task
 `Secretary` (20 s delay) after Explorer's Shell-Core log showed the HKCU Run entry being skipped; `<userData>/startup.log` logs each launch.
+
+## Phase 8a — the morning briefing (2026-09-18)
+- **One concise message, computed and phrased entirely in code — zero model calls.** `src/core/briefing.ts`
+  (`describeBriefing(bundle, opts) → string`, platform-independent) is deliberately tiny: it invents NO second ranking
+  system, it reuses the exact `priorities` (already scored, already sorted) and `summary` that `core/calendar/
+  aggregate.ts#assembleDay` already computes for TODAY'S Day View Model — the same one every calendar surface
+  consumes. All this module does is decide how much of that ranked list is worth saying in one message, and write
+  the sentence: a greeting word that follows the actual hour (morning/afternoon/evening, never a fixed "good
+  morning" regardless of when it fires), the day's load word (light/normal/busy/overloaded), up to 3 named
+  priorities with their top reason and an honest "+N more" beyond that (never silently dropped, never a full dump),
+  the first TIMED event of the day (all-day events excluded, since they don't answer "what's first"), and — new
+  ground beyond what `assembleDay` covers — a "Coming up" clause for hard deadlines/dated Things due after today but
+  soon (spec 7b's "surface it before it is urgent" idea, reused via `main/deadlines.ts#upcomingDeadlineTargets`
+  rather than invented fresh). An empty day says so plainly ("Nothing pressing today") — never a manufactured
+  "all clear!" when there is simply nothing to report.
+- **A real, non-obvious bug found and fixed while wiring this up:** the "coming up" window was first computed as
+  `upcomingDeadlineTargets(3, nowUtc)`, whose own cutoff is an exact 72-HOUR count from the current moment, not a
+  calendar-day boundary. A deadline due 17:00 three calendar days out was silently missed by a briefing that ran at
+  04:39 local, because 72 exact hours from 04:39 lands mid-afternoon on day 3 — before 17:00. Fixed in
+  `main/briefing.ts#comingUpSoon`: over-fetch one extra day from `upcomingDeadlineTargets`, then apply the real
+  bound by comparing LOCAL CALENDAR DATES, not elapsed hours. Caught by actually running it against a hard deadline
+  3 days out and noticing it never appeared — exactly the kind of thing that would have shipped silently wrong.
+- **Trigger: every time the window becomes visible** (`win.on('show', …)` in `src/main/index.ts` — covers cold
+  launch's initial show, a tray-icon restore, and everything else, in one hook), gated to fire at most once per
+  local calendar day by `main/briefing.ts#maybeSendMorningBriefing` via a `briefing.lastDate` setting. The gate is
+  written only AFTER the message is successfully built and inserted — a transient failure (a momentarily locked
+  DB, say) leaves the flag unset, so the very next window-show tries again instead of silently going without a
+  briefing for the rest of the day. The whole handler is wrapped in try/catch (`briefing.failed` logged on error):
+  a briefing failure must never block the window from showing or take the companion's own greeting down with it.
+- **Delivered as a real assistant message** (`role:'assistant', tier:0` — renders with the existing "instant · no
+  model call" badge, same as any other tier-0 answer), pushed to the renderer over a NEW dedicated IPC channel
+  (`onMessageAdded`/`IPC.messageAdded`) rather than the existing generic `onChanged` → refetch-everything path.
+  This was a deliberate choice, not an oversight: `onChanged` already exists and `refresh()` could have been
+  extended to also refetch `chatHistory`, but that refetch would race an in-flight `sendMessage`/`sendVoice` call —
+  the real user message is inserted into the DB before the model call returns, so a wholesale chatHistory refetch
+  mid-exchange would show it early, and the send flow's own `setMessages((m) => [...m.filter(id!==tempId),
+  res.userMessage, …])` would then re-append it, duplicating the bubble. A message pushed and appended by id (with
+  a dedupe guard) can never race or duplicate that flow, regardless of what else the renderer is doing. Delivery is
+  delayed 400 ms (`setTimeout`, mirroring the EXISTING identical precedent for the toast "Reschedule" prefill a few
+  lines above it in `index.ts`) since on a cold launch this fires close to `ready-to-show`, before the renderer's
+  own `ipcRenderer.on` listener is necessarily attached yet — the initial `chatHistory(60)` fetch on mount is a
+  natural fallback net even if that delay were somehow still too short.
+- **Deliberately NOT touched:** the companion's own "first open of the day" greeting (Phase 4, `App.tsx`,
+  localStorage `companion.greeted`) is left completely independent — a separate, robust, purely-visual mechanism
+  that must keep working even if the briefing computation fails for any reason. They are not coupled to the same
+  flag; in practice both fire within the same window-show, so they read as one moment to the user without actually
+  being one mechanism.
+- **Verified live** on scratch DBs via `SECRETARY_CHAT`/`SECRETARY_USER_DATA`, DB state confirmed directly: an
+  empty day → "Nothing pressing today."; a rich day (an overdue bill, something due today whose importance was
+  correctly inferred from being due-within-a-day per the existing 6a `inferImportance` rule, a hard deadline 3
+  days out, one calendar event) → `Good morning — Friday 18 September. Today looks light. Top of mind: "Pay the
+  electricity bill" (overdue); "Call the vet" (high importance). First up: "Team meeting" at 14:00. Coming up:
+  "Submit the visa application" (Mon 21 Sep).`; a second launch the SAME day → correctly silent (no
+  `briefing.sent` log line, `messages` table unchanged); a simulated NEXT day (backdating the `briefing.lastDate`
+  setting) → fires fresh, correctly. 16 unit checks in `tests/briefing.test.ts` (run via `node tests/
+  briefing.test.ts`, no cross-core imports so no loader-hook needed) cover all of the above plus edge cases
+  (three-or-fewer priorities never show "+N more"; a priority with no reason is still named, just without a
+  parenthetical; scheduled events sort chronologically for "first up" regardless of input order; "coming up" is
+  never lost when today itself is empty). One test-authoring mistake caught by running it: a fixture defaulted
+  `summary.status` to `'light'`, so a test expecting "Coming up: …" with NO status line was wrong about the
+  code's actual (correct) behaviour — fixed the assertion, not the code.
+- **A dev-hook quirk worth remembering, not a product bug:** `SECRETARY_CHAT` scripts that complete very fast (only
+  tier-0 manual calls, no real model latency) can quit the app before the window's `ready-to-show`/`show` sequence
+  has actually finished — the briefing silently never fires in that specific case, because the window never really
+  showed. Adding one turn with genuine model latency (any ordinary typed message) reliably gives the window enough
+  wall-clock time to show first. This only matters for scripted testing; a real user's window always finishes
+  showing since nothing is racing to quit the app.
+- **Not built here** (later Phase 8 slices per spec, not 8a's scope): deadline preparation, missed-task/waiting-item
+  follow-up, adaptive intensity, quiet hours, conversational replanning. The briefing also does not yet mention
+  waiting items going stale or plans falling behind — those are 7d/`get_forgetting`'s job today; whether the
+  morning briefing should eventually fold in a condensed version of that is an open question for a later slice, not
+  answered here.
 
 ## Phase 6 — architecture decisions (2026-09-16)
 - **Library: FullCalendar pinned to 6.1.21** (`@fullcalendar/core|react|daygrid|timegrid|list|interaction`, exact versions — they

@@ -34,6 +34,11 @@ const api: SecretaryApi = {
     ipcRenderer.on(IPC.chatPrefill, handler)
     return () => ipcRenderer.removeListener(IPC.chatPrefill, handler)
   },
+  onMessageAdded: (cb) => {
+    const handler = (_e: unknown, message: Parameters<typeof cb>[0]): void => cb(message)
+    ipcRenderer.on(IPC.messageAdded, handler)
+    return () => ipcRenderer.removeListener(IPC.messageAdded, handler)
+  },
 
   runTool: (name, args) => ipcRenderer.invoke(IPC.runTool, name, args),
   listActivities: (limit) => ipcRenderer.invoke(IPC.listActivities, limit),

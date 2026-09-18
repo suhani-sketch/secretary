@@ -252,11 +252,18 @@ export default function App(): React.JSX.Element {
       setDraft(text)
       inputRef.current?.focus()
     })
+    // Phase 8a: the morning briefing (and anything else main ever inserts outside a normal exchange) arrives here,
+    // pushed directly rather than via a chatHistory refetch — appending by id can never race with or duplicate an
+    // in-flight send the way overwriting the whole list from a refetch could.
+    const offMessageAdded = window.api.onMessageAdded((message) => {
+      setMessages((m) => (m.some((x) => x.id === message.id) ? m : [...m, message]))
+    })
     const t = setInterval(() => void refresh(), 10000)
     return () => {
       offChanged()
       offStatus()
       offPrefill()
+      offMessageAdded()
       clearInterval(t)
     }
   }, [refresh])
