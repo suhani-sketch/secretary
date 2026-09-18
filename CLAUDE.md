@@ -3,8 +3,8 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 8 — Proactivity. 8a (morning briefing) built, testable; 8b–8e (deadline preparation, missed-task
-and waiting-item follow-up, adaptive intensity/quiet hours, conversational replanning) not started. **Phase 7 — Intelligence is
+## Current phase: Phase 8 — Proactivity. 8a (morning briefing) and 8b (approaching-deadline alerts) built, testable; 8c–8e
+(missed-task and waiting-item follow-up, adaptive intensity/quiet hours, conversational replanning) not started. **Phase 7 — Intelligence is
 COMPLETE** (7a brain dump typed+voice, 7b deadline intelligence, 7c what-should-I-do-now, 7d what-am-I-forgetting, 7e smart
 scheduling, 7f replanning, 7g conversational planning; unit tests cover 7b/7c/7e/7f/7g core logic). Governing rule for Phase 7
 carries forward into 8: compute in code, the model only phrases — every answer costs at most ONE model call (§11G 14; 8a costs
@@ -22,6 +22,60 @@ several real quit + relaunch cycles: 24 of 27 steps pass outright; 4 and 12 pass
 was not performed; 25 passes against planted history (see below).** Phase 5 complete (§11F passed).
 **Restart (Phase 0 reboot) test is DEFERRED at the user's request — do not raise it.** The user registered a Task Scheduler logon task
 `Secretary` (20 s delay) after Explorer's Shell-Core log showed the HKCU Run entry being skipped; `<userData>/startup.log` logs each launch.
+
+## Phase 8b — approaching-deadline alerts (2026-09-18)
+- **"Only fires when the evidence is clear, never speculatively" — enforced by reusing 7b's own arithmetic verbatim,
+  not a new heuristic.** `src/main/deadlineAlerts.ts#sweepDeadlineRisk` calls the exact same `upcomingDeadlineTargets`
+  + `assessTarget` that `assess_deadline` ("is X on track?") and `get_forgetting`'s "Deadlines to watch" already use
+  — no second, looser scoring system invented for this slice. It alerts on exactly TWO of the seven `Feasibility`
+  values, both genuine arithmetic rather than a judgement call: `infeasible` (needed time exceeds remaining
+  capacity) and `tight` (the needed/capacity ratio is past the threshold). Deliberately EXCLUDES: `unknown` (only
+  waits are left — genuine uncertainty, the opposite of clear evidence); a contradiction alone with no risky
+  feasibility (already voiced immediately at note time, 7b — repeating it here would be noise, not a new alert);
+  and `passed` — an "approaching" alert has nothing to say once a deadline has already gone by, that is simply
+  overdue, and overdue is already surfaced loudly and repeatedly elsewhere (rail, the 8a briefing's own "Top of
+  mind", `recommend_now`'s +50 weighting, `get_forgetting`). `passed` is also structurally unreachable through this
+  path regardless, since `upcomingDeadlineTargets` only looks FORWARD from now — confirmed live, not assumed (see
+  bug note below), rather than trusted from reading the code alone.
+- **Fires once per risk EPISODE, not once ever and not every tick.** A `deadline_alerts.alerted_ids` setting (a
+  JSON array of item ids) tracks which deadlines the user has already been told about while they are CURRENTLY
+  risky. Checked on every scheduler tick (30 s) and at startup (`sweepDeadlineRisk` called from both
+  `scheduler.ts#tick` and `#startupSweep`, alongside the existing missed-session/happening sweeps — same
+  established pattern, no new mechanism): a deadline newly risky (not already in the set) → toast + `activities`
+  row + added to the set; a deadline still risky → silent, already told; a deadline no longer risky → removed from
+  the set, so a LATER re-risk (a missed session, a new conflict booked over planned work, time simply passing)
+  alerts fresh instead of staying silenced forever. Verified live through the full lifecycle: infeasible → alert
+  fires once, two further relaunches stay silent → effort reduced to comfortable → relaunch clears the set, no
+  alert → effort pushed back to infeasible → relaunch alerts again. Cheap enough to run on every tick without
+  throttling, for the handful of deadlines a personal calendar actually has — no premature optimisation added.
+- **Delivered as a toast** (`showToast`, `persistent: true` so it does not vanish before being read, no action
+  buttons — this is informational, not a reminder with its own pending/acknowledged state machine) **and** an
+  `activities` row (`verb:'deadline_alert'`, attached to the item's own project when it has one) so it is visible in
+  that Thing's timeline afterwards, same as every other proactive system event in this app. Deliberately NOT also a
+  chat message (unlike 8a's briefing): a deadline alert is a system event, matching how reminder delivery already
+  works (toast + activity, never a `messages` row) — not a conversational exchange. If the user wants to talk about
+  it, "is X on track?" (7b) or "what am I forgetting?" (7d, which already surfaces the same `atRiskLines`) are right
+  there.
+- **A real bug caught by actually running the "passed" case rather than assuming it would work:** the original
+  design included `passed` in the trigger set. Testing it live (an already-overdue hard deadline) produced NO
+  alert at all — `upcomingDeadlineTargets`'s own query (`itemsDueBetween(nowUtc, end, ...)`) uses `nowUtc` as its
+  LOWER bound, so anything already due in the past never enters the candidate list in the first place; the
+  `passed` branch was unreachable dead code. Rather than changing the target-gathering to also look backward (which
+  would just duplicate the overdue surfacing this app already does everywhere), removed `passed` from the trigger
+  set entirely and documented why in the module's own header comment — the right fix turned out to be "this
+  shouldn't have been in scope," not a code patch.
+- **Verified live** on scratch DBs via `SECRETARY_CHAT`/`SECRETARY_USER_DATA` (an item created in one launch,
+  `startupSweep` on the NEXT launch is what actually exercises this, since the sweep runs before the scripted
+  turns): an infeasible 40 h deadline due the next day → `Deadline at risk: "Huge project"` toast, body
+  `"Huge project" (Sat, 19 Sept at 17:00, 1 day left): 0 of 1 part done. NOT feasible as it stands — about 40 h of
+  work left against roughly 12 h free before then.`; a tight-but-doable 8 h deadline → `Tight — about 8 h of work
+  left against roughly 12 h free before then.`, cross-checked against `assess_deadline`'s own independent
+  "Feasible but tight" verdict for the same item; a comfortable deadline → correctly silent, no false positive.
+- **Not built here**: 8c (missed-task/waiting-item follow-up), 8d (adaptive intensity/quiet hours — this alert has
+  no quiet-hours awareness yet and could in principle toast at 3 a.m. if a deadline's risk genuinely changes then),
+  8e (conversational replanning). No unit test: `main/deadlineAlerts.ts` is DB/Electron-coupled glue, not a
+  platform-independent `core/*.ts` module, matching this project's established convention that only `core/*.ts`
+  gets the plain-Node unit-test treatment — verification here is live, via the scenarios above.
 
 ## Phase 8a — the morning briefing (2026-09-18)
 - **One concise message, computed and phrased entirely in code — zero model calls.** `src/core/briefing.ts`

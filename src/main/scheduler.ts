@@ -6,6 +6,7 @@ import * as repo from './repo'
 import type { Reminder } from '../shared/types'
 import { doneLineFor } from './ai/tools'
 import { sessionsToMarkMissed } from '../core/plans'
+import { sweepDeadlineRisk } from './deadlineAlerts'
 
 export const TICK_MS = 30_000
 
@@ -190,6 +191,7 @@ function sweepMissedSessions(now: DateTime): void {
 export function startupSweep(): number {
   const now = DateTime.utc()
   endDueHappenings(now, true)
+  sweepDeadlineRisk(now.toISO()!)
   const due = repo.duePendingReminders(now.toISO()!)
   log('info', 'sweep.start', `${due.length} overdue reminder(s) found at launch`)
   for (const r of due) deliver(r, { missed: true, now })
@@ -210,6 +212,7 @@ export function tick(reason = 'interval'): void {
     const now = DateTime.utc()
     endDueHappenings(now, false)
     sweepMissedSessions(now)
+    sweepDeadlineRisk(now.toISO()!)
     const due = repo.duePendingReminders(now.toISO()!)
     if (due.length > 0) log('info', 'tick.due', `${due.length} reminder(s) due (${reason})`)
     for (const r of due) {
