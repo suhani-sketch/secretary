@@ -3,9 +3,9 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 9 — The living world. 9a (the room as a place) built, testable; 9b–9i (the creature as a
-character system, autonomous ambient behaviour, direct interaction, rare initiation, real-memory familiarity, room
-persistence, coherent product language, micro-interactions) not started. **Phase 8 — Proactivity is COMPLETE.** 8a (morning briefing), 8b (approaching-deadline alerts), 8c
+## Current phase: Phase 9 — The living world. 9a (the room as a place) and 9b (the creature as a character system)
+built, testable; 9c–9i (autonomous ambient behaviour, direct interaction, rare initiation, real-memory familiarity,
+room persistence, coherent product language, micro-interactions) not started. **Phase 8 — Proactivity is COMPLETE.** 8a (morning briefing), 8b (approaching-deadline alerts), 8c
 (missed-task and waiting-item follow-up), 8d (adaptive intensity, quiet hours) built and tested; SPEC.md's own Phase 8 line
 has no lettered slices at all (8a–8d were this session's own organisational split, not spec text) — "conversational
 replanning" is PARTIALLY covered by 7f (full preview, nothing moves without approval, a proactive nudge) but NOT by a
@@ -15,6 +15,59 @@ passed outright; 3 genuine bugs found (a forward-looking reluctance statement me
 instead of empathy+alternative; "move it"/"cancel the reminder" reused the last-focused item's id as the wrong entity type
 and threw instead of rerouting/answering gracefully; a bare-day move on an exact-time item silently dropped the time) — all
 three FIXED and re-verified live + via direct DB read on a fresh scratch DB (see their own section below).**
+
+## Phase 9b — the creature as a character system (2026-09-18)
+- **The spec names 16 states** (idle, awake, thinking, listening, working, reading, looking outside, waiting, happy,
+  quietly excited, concerned, sleepy, sleeping, greeting, celebrating, recovering); Phase 4 had built 12, several of
+  them conflating two different spec concepts under one name. This slice widened `companionState.ts`'s
+  `CompanionState` union to all 16 (plus `attentive`/`writing`, two pre-existing refinements the spec's list doesn't
+  contradict) and gave each a genuinely distinct pose/expression/transition rather than just adding names.
+- **Two real signals, not just re-labelled old ones.** `listening` is driven directly by the existing voice-recording
+  flag (Phase 7 "Voice") — pressing the mic now visibly changes the creature (direct eye contact, open eyes, ears
+  up), not just the UI's own recording indicator. `quietlyExcited` is a NEW, smaller tier below `celebrating`: an
+  ordinary `complete_item`/`complete_checklist_item`/`resolve_waiting` now earns a warm smile and one small sparkle,
+  while only finishing a whole project/archiving still earns the full `celebrating` (sparkles ×3, a stretch pose) —
+  previously every completion, big or small, only ever produced the same brief generic "happy" blip.
+- **One name split into two, so "waiting" means one thing.** The old `waiting` state conflated "genuinely waiting on
+  something" (the model is throttled/retrying) with "ambient gazing out the window for no particular reason" — both
+  used the same state name and the same expression. `looking` is now the ambient-only one (relaxed half-lidded eyes);
+  `waiting` is reserved for the real case (a touch more alert — open eyes) and only ever set from `chat.kind ===
+  'throttled'`. Both still use the window position/pose (9a) — they differ in expression and in WHY they happen, not
+  in where the creature is.
+- **`sleepy` vs `sleeping` — a real depth-of-night distinction, not a synonym.** `ambientPose`'s night logic now has
+  three phases: the edges of the night (22:00–01:00 falling asleep, 05:00–06:00 stirring) stay the lighter `sleepy`;
+  the deep core (01:00–05:00) is `sleeping` 92% of the time — fully closed eyes, a flatter/lower curl
+  (`bodyScaleY` 0.76 vs 0.82), an even flatter neutral mouth (a straight line, not sleepy's small gentle smile),
+  slower breathing (8.5s vs sleepy's 6.5s), and a third, bigger "z" than sleepy's two. Both still use the Phase 9a
+  sleeping nest — same place, different depth of sleep.
+- **`awake` is a bridge the creature inserts on itself, not a state anything else asks for.** Implemented in
+  `useCompanion` (not `resolveState`, which never returns it): a ref tracks what was actually last SHOWN (not the
+  raw signal, to avoid a stale-closure bug a naive first version would have had reading React state directly inside
+  the tick closure), and whenever a REAL interruption — anything `resolveState` would return other than the ambient
+  rotation's own five choices — arrives while the last shown state was `sleepy`/`sleeping`, the creature shows
+  `awake` (wide eyes, ears up, standing) for 1.2 s before the real target state takes over. The ambient rotation
+  moving itself on from `sleepy` to `idle` at dawn is deliberately NOT treated as an interruption — only something
+  that genuinely happened (the user typed, spoke, a message arrived) earns the "just woken up" moment.
+- **`recovering` closes the gap after a worry**, rather than snapping straight back to neutral: `resolveState` now
+  checks `concernedAt` in two windows — the original 6 s of visible concern, then a further 1.4 s of `recovering`
+  (drooped ears easing, a small relieved breath-puff animation, calm half-lidded eyes) before anything else can take
+  over. `quietlyExcited` gets a matching but opposite touch — a single one-shot bounce (a new outer `.lift` group,
+  kept deliberately separate from the existing `.pose` group so the bounce's `translateY` keyframe never fights the
+  pose group's own inline `rotate`/`scale` transform, which a first version sharing one element would have clobbered).
+- Not a new mechanism: eye contact stayed exactly as rare as before — the `EYE_CONTACT` set (greeting, celebrating,
+  happy, quietlyExcited, listening) is a small, deliberate list, matching the spec's own wording ("rare and
+  meaningful... not the default idle state"); everything else still looks away, at the desk, or out the window.
+- **Verified by screenshot** (`SECRETARY_VIEW=state:<x>` on a fresh scratch DB): `awake` (wide startled eyes, ears
+  up, standing on the rug), `listening` (direct eye contact, open eyes, ears up), `quietlyExcited` (smile, warm
+  cheeks, one small sparkle), `sleeping` (closed eyes, flat peaceful mouth, three "z"s, deeper curl in the nest, at
+  night with the lamp glowing), `recovering` (calm, ears drooping, evening light), `looking` (relaxed, gazing out
+  the window) — six of the new/changed states, all visually distinct from each other and from the pre-existing
+  `concerned`/`thinking` (re-screenshotted too, to confirm the refactor left them alone).
+- **Not built here** (later Phase 9 slices, not 9b's scope): the creature does not yet act autonomously on its own
+  initiative (9c — it only ever responds to real signals, still never "decides" to do something); no click/ask/greet
+  interaction (9d); no unprompted speech (9e); no real-memory familiarity in what it says, since it does not yet say
+  anything unprompted at all (9f). `writing`/`attentive` were kept as pre-existing refinements beyond the spec's own
+  16 but were not re-examined beyond confirming they still work (see the concerned/thinking screenshots above).
 
 ## Phase 9a — the room as a place (2026-09-18)
 - **The three Phase 9 invariants** (spec: never react to every action, never make the user responsible for maintaining

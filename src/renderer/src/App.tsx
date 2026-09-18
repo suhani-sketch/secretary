@@ -169,6 +169,7 @@ export default function App(): React.JSX.Element {
   const [lastToolNames, setLastToolNames] = useState<string[]>([])
   const [lastAppliedAt, setLastAppliedAt] = useState(0)
   const [celebrateAt, setCelebrateAt] = useState(0)
+  const [quietlyExcitedAt, setQuietlyExcitedAt] = useState(0)
   const [greetAt, setGreetAt] = useState(0)
   const [addressedAt, setAddressedAt] = useState(0)
   const [concernedAt, setConcernedAt] = useState(0)
@@ -340,7 +341,11 @@ export default function App(): React.JSX.Element {
           (a.tool === 'complete_checklist_item' && /last step/.test(a.phrase)) ||
           a.tool === 'archive_project'
       )
+      // An ordinary win — a task ticked off, a wait resolved — is worth noticing without the fuss a whole
+      // project finishing gets (spec 9b "quietly excited" vs "celebrating").
+      const small = !big && res.applied.some((a) => a.tool === 'complete_item' || a.tool === 'complete_checklist_item' || a.tool === 'resolve_waiting')
       if (big) setCelebrateAt(Date.now())
+      else if (small) setQuietlyExcitedAt(Date.now())
     } catch (e) {
       setConcernedAt(Date.now())
       setMessages((m) => [
@@ -549,9 +554,11 @@ export default function App(): React.JSX.Element {
     {
       chat: status,
       typing: draft.trim().length > 0 && Date.now() - typingAt < 8000,
+      recording,
       lastToolNames,
       lastAppliedAt,
       celebrateAt,
+      quietlyExcitedAt,
       greetAt,
       addressedAt,
       concernedAt,

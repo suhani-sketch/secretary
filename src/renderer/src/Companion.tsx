@@ -1,9 +1,10 @@
 import type { CompanionState, Gaze } from './companionState'
 
 /**
- * The creature (spec §8 Phase 4): an original dormouse-quokka. Round pear body, round ears, small dark nose, calm
- * half-lidded eyes, tiny paws, short curling tail, one knitted scarf. Drawn as layered SVG in a 120×120 box; poses are
- * whole-body transforms plus a prop, so state changes are a single CSS transition and the rest of the time it breathes.
+ * The creature (spec §8 Phase 4, a full character system in 9b): an original dormouse-quokka. Round pear body,
+ * round ears, small dark nose, calm half-lidded eyes, tiny paws, short curling tail, one knitted scarf. Drawn as
+ * layered SVG in a 120×120 box; poses are whole-body transforms plus a prop, so state changes are a single CSS
+ * transition and the rest of the time it breathes.
  */
 
 export type Pose = 'sit' | 'desk' | 'read' | 'window' | 'curl' | 'stand' | 'stretch' | 'kitchen'
@@ -15,11 +16,14 @@ export const poseFor = (state: CompanionState): Pose => {
       return 'desk'
     case 'reading':
       return 'read'
+    case 'looking':
     case 'waiting':
       return 'window'
     case 'sleepy':
+    case 'sleeping':
       return 'curl'
     case 'greeting':
+    case 'awake':
       return 'stand'
     case 'celebrating':
       return 'stretch'
@@ -37,6 +41,12 @@ const SCARF = '#B5836D'
 const SCARF_DARK = '#9C6E5A'
 const CHEEK = '#E9A48E'
 
+/** Ears perk up when something has its attention; droop when it is winding down or settling after a worry. */
+const EARS_UP = new Set<CompanionState>(['attentive', 'greeting', 'listening', 'awake'])
+const EARS_DOWN = new Set<CompanionState>(['concerned', 'sleepy', 'sleeping', 'recovering'])
+/** A warmer flush on the cheeks — genuine positive feeling, not the neutral default. */
+const CHEEKS_WARM = new Set<CompanionState>(['happy', 'celebrating', 'greeting', 'quietlyExcited'])
+
 interface Props {
   state: CompanionState
   gaze: Gaze
@@ -52,21 +62,26 @@ export function Companion({ state, gaze, dim = 0, pose: poseOverride }: Props): 
   const pupilDx = pose === 'kitchen' ? 3 : gaze === 'viewer' ? 0 : gaze === 'window' ? 3 : gaze === 'desk' ? -1 : 2
   const pupilDy = pose === 'kitchen' ? 1 : gaze === 'viewer' ? 0 : gaze === 'desk' ? 2 : gaze === 'window' ? -1 : 0
   const bodyTilt = pose === 'desk' ? 8 : pose === 'read' ? 4 : pose === 'window' ? -6 : pose === 'kitchen' ? 4 : pose === 'stretch' ? 0 : 0
-  const bodyScaleY = pose === 'curl' ? 0.82 : pose === 'stretch' ? 1.08 : 1
-  const headTilt = state === 'thinking' ? -10 : state === 'concerned' ? 4 : pose === 'window' ? -8 : pose === 'kitchen' ? 6 : pose === 'read' || pose === 'desk' ? 8 : 0
+  const bodyScaleY = pose === 'curl' ? (state === 'sleeping' ? 0.76 : 0.82) : pose === 'stretch' ? 1.08 : 1
+  const headTilt = state === 'thinking' ? -10 : state === 'concerned' ? 4 : state === 'recovering' ? 3 : state === 'awake' ? -6 : pose === 'window' ? -8 : pose === 'kitchen' ? 6 : pose === 'read' || pose === 'desk' ? 8 : 0
+  const breathClass = state === 'sleeping' ? 'sleeping' : state === 'sleepy' ? 'sleepy' : ''
 
   return (
     <svg viewBox="0 0 120 120" width="100%" height="100%" className="companion" aria-hidden style={{ filter: dim ? `brightness(${1 - dim * 0.25})` : undefined, overflow: 'visible' }}>
       <style>{`
         .companion .breath { animation: breathe 4.6s ease-in-out infinite; transform-origin: 60px 104px; }
         .companion .breath.sleepy { animation-duration: 6.5s; }
+        .companion .breath.sleeping { animation-duration: 8.5s; }
         .companion .blink { animation: blink 7s ease-in-out infinite; transform-origin: center; }
+        .companion .lift { transition: transform .55s cubic-bezier(.4,0,.2,1); }
+        .companion .lift.bounce { animation: bounce .8s ease-in-out 1; }
         .companion .pose { transition: transform .55s cubic-bezier(.4,0,.2,1); transform-origin: 60px 104px; }
         .companion .head { transition: transform .55s cubic-bezier(.4,0,.2,1); transform-origin: 60px 58px; }
         .companion .pupil { transition: transform .3s ease; }
         .companion .prop { transition: opacity .35s ease; }
         .companion .tail { animation: tail 9s ease-in-out infinite; transform-origin: 96px 96px; }
         .companion .sparkle { animation: sparkle 1.3s ease-out infinite; }
+        .companion .puff { animation: puff 3s ease-out infinite; }
         .companion .dots circle { animation: dots 1.6s ease-in-out infinite; }
         .companion .dots circle:nth-child(2) { animation-delay: .25s } .companion .dots circle:nth-child(3) { animation-delay: .5s }
         .companion .wave { animation: wave 1.1s ease-in-out 2; transform-origin: 34px 76px; }
@@ -74,15 +89,20 @@ export function Companion({ state, gaze, dim = 0, pose: poseOverride }: Props): 
         @keyframes blink { 0%,93%,100% { transform: scaleY(1); } 96% { transform: scaleY(.08); } }
         @keyframes tail { 0%,100% { transform: rotate(0deg); } 50% { transform: rotate(-6deg); } }
         @keyframes sparkle { 0% { opacity: 0; transform: translateY(0) scale(.6); } 40% { opacity: 1; } 100% { opacity: 0; transform: translateY(-10px) scale(1); } }
+        @keyframes puff { 0% { opacity: 0; transform: translateY(0) scale(.7); } 30% { opacity: .55; } 100% { opacity: 0; transform: translateY(-9px) scale(1.15); } }
         @keyframes dots { 0%,100% { opacity: .25; } 50% { opacity: .9; } }
         @keyframes wave { 0%,100% { transform: rotate(0deg); } 50% { transform: rotate(-35deg); } }
+        @keyframes bounce { 0%,100% { transform: translateY(0); } 35% { transform: translateY(-5px); } 65% { transform: translateY(1px); } }
       `}</style>
 
       {/* shadow on the floor */}
       <ellipse cx="60" cy="110" rx={pose === 'curl' ? 34 : 26} ry="4" fill={NOSE} opacity="0.10" />
 
+      {/* a small, once-only lift for a quietly excited moment — separate from the pose group so it never fights
+          the rotate/scale that bodyTilt/bodyScaleY already own */}
+      <g className={`lift ${state === 'quietlyExcited' ? 'bounce' : ''}`}>
       <g className="pose" style={{ transform: `rotate(${bodyTilt}deg) scale(1, ${bodyScaleY})` }}>
-        <g className={`breath ${pose === 'curl' ? 'sleepy' : ''}`}>
+        <g className={`breath ${breathClass}`}>
           {/* tail */}
           <path className="tail" d="M88 96 C 104 96, 108 84, 100 78 C 96 75, 92 80, 95 84" stroke={COCOA} strokeWidth="7" fill="none" strokeLinecap="round" />
           {/* body */}
@@ -106,16 +126,16 @@ export function Companion({ state, gaze, dim = 0, pose: poseOverride }: Props): 
           {/* head */}
           <g className="head" style={{ transform: `rotate(${headTilt}deg)` }}>
             {/* ears */}
-            <ellipse cx="38" cy="36" rx="11" ry="12" fill={COCOA} transform={`rotate(-10 38 36) ${state === 'attentive' || state === 'greeting' ? 'translate(0 -3)' : state === 'concerned' || state === 'sleepy' ? 'translate(-1 3)' : ''}`} />
+            <ellipse cx="38" cy="36" rx="11" ry="12" fill={COCOA} transform={`rotate(-10 38 36) ${EARS_UP.has(state) ? 'translate(0 -3)' : EARS_DOWN.has(state) ? 'translate(-1 3)' : ''}`} />
             <ellipse cx="38" cy="37" rx="6" ry="7" fill={CHEEK} opacity="0.55" transform="rotate(-10 38 36)" />
-            <ellipse cx="82" cy="36" rx="11" ry="12" fill={COCOA} transform={`rotate(10 82 36) ${state === 'attentive' || state === 'greeting' ? 'translate(0 -3)' : state === 'concerned' || state === 'sleepy' ? 'translate(1 3)' : ''}`} />
+            <ellipse cx="82" cy="36" rx="11" ry="12" fill={COCOA} transform={`rotate(10 82 36) ${EARS_UP.has(state) ? 'translate(0 -3)' : EARS_DOWN.has(state) ? 'translate(1 3)' : ''}`} />
             <ellipse cx="82" cy="37" rx="6" ry="7" fill={CHEEK} opacity="0.55" transform="rotate(10 82 36)" />
             {/* face */}
             <ellipse cx="60" cy="52" rx="30" ry="26" fill={COCOA} />
             <ellipse cx="60" cy="58" rx="20" ry="15" fill={OAT} />
             {/* cheeks */}
-            <circle cx="42" cy="58" r="4.5" fill={CHEEK} opacity={state === 'happy' || state === 'celebrating' || state === 'greeting' ? 0.75 : 0.4} />
-            <circle cx="78" cy="58" r="4.5" fill={CHEEK} opacity={state === 'happy' || state === 'celebrating' || state === 'greeting' ? 0.75 : 0.4} />
+            <circle cx="42" cy="58" r="4.5" fill={CHEEK} opacity={CHEEKS_WARM.has(state) ? 0.75 : 0.4} />
+            <circle cx="78" cy="58" r="4.5" fill={CHEEK} opacity={CHEEKS_WARM.has(state) ? 0.75 : 0.4} />
             {/* eyes */}
             <Eyes shape={eyes} dx={pupilDx} dy={pupilDy} />
             {/* brows for concern */}
@@ -130,6 +150,7 @@ export function Companion({ state, gaze, dim = 0, pose: poseOverride }: Props): 
             <Mouth state={state} />
           </g>
         </g>
+      </g>
       </g>
 
       {/* props by pose */}
@@ -158,11 +179,24 @@ export function Companion({ state, gaze, dim = 0, pose: poseOverride }: Props): 
           <path className="sparkle" d="M60 8 l1.5 4 4 1.5 -4 1.5 -1.5 4 -1.5 -4 -4 -1.5 4 -1.5z" style={{ animationDelay: '.6s' }} />
         </g>
       )}
-      {/* sleepy z */}
-      {state === 'sleepy' && (
-        <g className="dots" fill={COCOA_DARK} fontSize="9" fontFamily="ui-sans-serif, system-ui" opacity="0.6">
-          <text x="92" y="34">z</text>
-          <text x="100" y="24" fontSize="11">z</text>
+      {/* one small sparkle for a quiet win — a fraction of celebrating's, never as much fuss */}
+      {state === 'quietlyExcited' && (
+        <g fill={SCARF}>
+          <path className="sparkle" d="M92 24 l1.6 4 4 1.6 -4 1.6 -1.6 4 -1.6 -4 -4 -1.6 4 -1.6z" />
+        </g>
+      )}
+      {/* a small relieved breath, easing back from a worry */}
+      {state === 'recovering' && (
+        <g stroke={COCOA_DARK} strokeWidth="1.3" fill="none" opacity="0.5">
+          <path className="puff" d="M90 32 q3 -5 0 -10" />
+        </g>
+      )}
+      {/* sleepy / sleeping z — bigger and one more of them the deeper it sleeps */}
+      {(state === 'sleepy' || state === 'sleeping') && (
+        <g className="dots" fill={COCOA_DARK} fontFamily="ui-sans-serif, system-ui" opacity={state === 'sleeping' ? 0.75 : 0.6}>
+          <text x="92" y="34" fontSize="9">z</text>
+          <text x="100" y="24" fontSize={state === 'sleeping' ? 13 : 11}>z</text>
+          {state === 'sleeping' && <text x="109" y="15" fontSize="16">z</text>}
         </g>
       )}
     </svg>
@@ -172,9 +206,10 @@ export function Companion({ state, gaze, dim = 0, pose: poseOverride }: Props): 
 type EyeShape = 'half' | 'open' | 'wide' | 'closed' | 'smile'
 
 function eyeShape(state: CompanionState, gaze: Gaze): EyeShape {
-  if (gaze === 'closed' || state === 'sleepy') return 'closed'
-  if (state === 'happy' || state === 'celebrating' || state === 'greeting') return 'smile'
-  if (state === 'attentive' || state === 'concerned') return 'open'
+  if (gaze === 'closed' || state === 'sleepy' || state === 'sleeping') return 'closed'
+  if (state === 'happy' || state === 'celebrating' || state === 'greeting' || state === 'quietlyExcited') return 'smile'
+  if (state === 'awake') return 'wide' // just startled awake
+  if (state === 'attentive' || state === 'concerned' || state === 'listening' || state === 'waiting') return 'open'
   if (state === 'thinking') return 'half'
   return 'half'
 }
@@ -217,6 +252,7 @@ function Eyes({ shape, dx, dy }: { shape: EyeShape; dx: number; dy: number }): R
 function Mouth({ state }: { state: CompanionState }): React.JSX.Element {
   if (state === 'working' || state === 'writing') return <ellipse cx="60" cy="67" rx="2.6" ry="2" fill={NOSE} opacity="0.7" />
   if (state === 'concerned') return <path d="M56 68 q4 -1.5 8 0" stroke={NOSE} strokeWidth="1.8" fill="none" strokeLinecap="round" />
-  if (state === 'celebrating' || state === 'greeting' || state === 'happy') return <path d="M54 65 q6 6 12 0" stroke={NOSE} strokeWidth="2" fill="none" strokeLinecap="round" />
+  if (state === 'celebrating' || state === 'greeting' || state === 'happy' || state === 'quietlyExcited') return <path d="M54 65 q6 6 12 0" stroke={NOSE} strokeWidth="2" fill="none" strokeLinecap="round" />
+  if (state === 'sleeping') return <line x1="57" y1="67" x2="63" y2="67" stroke={NOSE} strokeWidth="1.6" strokeLinecap="round" />
   return <path d="M56 66 q4 3 8 0" stroke={NOSE} strokeWidth="1.8" fill="none" strokeLinecap="round" />
 }
