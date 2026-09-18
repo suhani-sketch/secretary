@@ -26,7 +26,10 @@ export const poseFor = (state: CompanionState): Pose => {
     case 'awake':
       return 'stand'
     case 'celebrating':
+    case 'stretching':
       return 'stretch'
+    case 'tea':
+      return 'kitchen'
     default:
       return 'sit'
   }
@@ -63,7 +66,7 @@ export function Companion({ state, gaze, dim = 0, pose: poseOverride }: Props): 
   const pupilDy = pose === 'kitchen' ? 1 : gaze === 'viewer' ? 0 : gaze === 'desk' ? 2 : gaze === 'window' ? -1 : 0
   const bodyTilt = pose === 'desk' ? 8 : pose === 'read' ? 4 : pose === 'window' ? -6 : pose === 'kitchen' ? 4 : pose === 'stretch' ? 0 : 0
   const bodyScaleY = pose === 'curl' ? (state === 'sleeping' ? 0.76 : 0.82) : pose === 'stretch' ? 1.08 : 1
-  const headTilt = state === 'thinking' ? -10 : state === 'concerned' ? 4 : state === 'recovering' ? 3 : state === 'awake' ? -6 : pose === 'window' ? -8 : pose === 'kitchen' ? 6 : pose === 'read' || pose === 'desk' ? 8 : 0
+  const headTilt = state === 'thinking' ? -10 : state === 'concerned' ? 4 : state === 'recovering' ? 3 : state === 'awake' ? -6 : pose === 'stretch' ? -5 : pose === 'window' ? -8 : pose === 'kitchen' ? 6 : pose === 'read' || pose === 'desk' ? 8 : 0
   const breathClass = state === 'sleeping' ? 'sleeping' : state === 'sleepy' ? 'sleepy' : ''
 
   return (
@@ -111,11 +114,11 @@ export function Companion({ state, gaze, dim = 0, pose: poseOverride }: Props): 
           {/* paws */}
           <ellipse cx="44" cy="100" rx="8" ry="5" fill={COCOA_DARK} />
           <ellipse cx="76" cy="100" rx="8" ry="5" fill={COCOA_DARK} />
-          {/* arms (one may wave) */}
+          {/* arms (one may wave; both reach up together for a genuine stretch) */}
           <g className={state === 'greeting' ? 'wave' : ''}>
-            <path d={state === 'greeting' ? 'M34 80 C 26 72, 24 60, 30 54' : 'M34 82 C 30 88, 34 96, 42 96'} stroke={COCOA} strokeWidth="7" fill="none" strokeLinecap="round" />
+            <path d={state === 'greeting' || pose === 'stretch' ? 'M34 80 C 26 72, 24 60, 30 54' : 'M34 82 C 30 88, 34 96, 42 96'} stroke={COCOA} strokeWidth="7" fill="none" strokeLinecap="round" />
           </g>
-          <path d={pose === 'desk' || pose === 'read' ? 'M86 82 C 88 90, 80 96, 70 92' : 'M86 82 C 90 88, 86 96, 78 96'} stroke={COCOA} strokeWidth="7" fill="none" strokeLinecap="round" />
+          <path d={pose === 'stretch' ? 'M86 80 C 94 72, 96 60, 90 54' : pose === 'desk' || pose === 'read' ? 'M86 82 C 88 90, 80 96, 70 92' : 'M86 82 C 90 88, 86 96, 78 96'} stroke={COCOA} strokeWidth="7" fill="none" strokeLinecap="round" />
 
           {/* scarf — the one accessory */}
           <path d="M40 66 C 50 74, 70 74, 80 66 C 82 70, 82 74, 80 76 C 68 82, 52 82, 40 76 C 38 74, 38 70, 40 66 Z" fill={SCARF} />
@@ -206,7 +209,7 @@ export function Companion({ state, gaze, dim = 0, pose: poseOverride }: Props): 
 type EyeShape = 'half' | 'open' | 'wide' | 'closed' | 'smile'
 
 function eyeShape(state: CompanionState, gaze: Gaze): EyeShape {
-  if (gaze === 'closed' || state === 'sleepy' || state === 'sleeping') return 'closed'
+  if (gaze === 'closed' || state === 'sleepy' || state === 'sleeping' || state === 'stretching') return 'closed'
   if (state === 'happy' || state === 'celebrating' || state === 'greeting' || state === 'quietlyExcited') return 'smile'
   if (state === 'awake') return 'wide' // just startled awake
   if (state === 'attentive' || state === 'concerned' || state === 'listening' || state === 'waiting') return 'open'
@@ -254,5 +257,6 @@ function Mouth({ state }: { state: CompanionState }): React.JSX.Element {
   if (state === 'concerned') return <path d="M56 68 q4 -1.5 8 0" stroke={NOSE} strokeWidth="1.8" fill="none" strokeLinecap="round" />
   if (state === 'celebrating' || state === 'greeting' || state === 'happy' || state === 'quietlyExcited') return <path d="M54 65 q6 6 12 0" stroke={NOSE} strokeWidth="2" fill="none" strokeLinecap="round" />
   if (state === 'sleeping') return <line x1="57" y1="67" x2="63" y2="67" stroke={NOSE} strokeWidth="1.6" strokeLinecap="round" />
+  if (state === 'stretching') return <ellipse cx="60" cy="66" rx="3.4" ry="3.2" fill={NOSE} opacity="0.85" />
   return <path d="M56 66 q4 3 8 0" stroke={NOSE} strokeWidth="1.8" fill="none" strokeLinecap="round" />
 }

@@ -34,6 +34,8 @@ export type CompanionState =
   | 'celebrating'
   | 'greeting'
   | 'recovering'
+  | 'stretching'
+  | 'tea'
 
 /** Where the creature looks. Eye contact ("viewer") is rare and meaningful. */
 export type Gaze = 'viewer' | 'away' | 'desk' | 'window' | 'closed'
@@ -69,13 +71,16 @@ const DUR = { celebrating: 2600, greeting: 2400, happy: 1400, quietlyExcited: 18
 const MIN_DWELL = 700
 /** Ambient pose rotation: one change every 3–6 minutes, deterministic per slot so a re-render never jumps. */
 const AMBIENT_SLOT_MS = 4 * 60 * 1000
+/** Sparse flourishes layered on top of the slot-level pose (9c) — re-rolled far more often than the slot itself,
+ *  but each only WINS for a short window within its own slot, so they read as a brief aside, not a new activity. */
+const FLOURISH_SLOT_MS = 90 * 1000
 
 const READ_TOOLS = /^(get_|search_)/
 const WRITE_TOOLS = /^(add_note|update_note|record_activity|create_waiting)$/
 
 /** States the ambient rotation itself can choose — a real interruption of any of the OTHER states while asleep is
  *  what earns the brief `awake` bridge; the rotation moving itself from sleepy to idle at 6 a.m. does not. */
-const AMBIENT_STATES = new Set<CompanionState>(['idle', 'looking', 'reading', 'working', 'sleepy', 'sleeping'])
+const AMBIENT_STATES = new Set<CompanionState>(['idle', 'looking', 'reading', 'working', 'sleepy', 'sleeping', 'tea', 'stretching'])
 
 function ambientPose(now: number, waitingOpen: number, hour: number): CompanionState {
   const slot = Math.floor(now / AMBIENT_SLOT_MS)
@@ -87,10 +92,20 @@ function ambientPose(now: number, waitingOpen: number, hour: number): CompanionS
   if (hour >= 22 || hour < 6) return r < 80 ? 'sleepy' : 'idle'
   if (hour < 8) return r < 45 ? 'sleepy' : 'idle'
   if (waitingOpen > 0 && r < 35) return 'reading'
-  if (r < 55) return 'idle'
-  if (r < 75) return 'reading'
-  if (r < 90) return 'looking' // gazing out the window, for no particular reason
-  return 'working' // tidying at the desk
+  if (r < 50) return 'idle'
+  if (r < 66) return 'reading'
+  if (r < 80) return 'looking' // gazing out the window, for no particular reason
+  if (r < 90) return 'working' // tidying at the desk
+  if (r < 95) return 'tea' // decided to make tea, entirely on its own — no task, no happening row, just the room
+  return 'idle'
+}
+
+/** A short, low-probability window inside its own re-roll period — the mechanism behind both flourishes below.
+ *  `seed` keeps the two independent so they don't always coincide or always avoid each other. */
+function inFlourishWindow(now: number, seed: number, chancePct: number, windowMs: number): boolean {
+  const slot = Math.floor(now / FLOURISH_SLOT_MS)
+  const r = ((slot * 2654435761 + seed * 97) >>> 0) % 100
+  return r < chancePct && now % FLOURISH_SLOT_MS < windowMs
 }
 
 export function resolveState(s: Signals, now: number): { state: CompanionState; gaze: Gaze } {
@@ -119,8 +134,13 @@ export function resolveState(s: Signals, now: number): { state: CompanionState; 
   if (s.happening === 'focus') return { state: 'working', gaze: 'desk' }
   if (s.happening === 'cooking') return { state: 'idle', gaze: 'away' } // the Room places 'idle' beside the kitchen object
   if (s.happening === 'waiting') return { state: 'reading', gaze: 'desk' }
-  // 5. Ambient life.
+  // 5. Ambient life — independent of anything the user did (spec 9c). The slot-level rotation above picks the
+  //    "activity"; these two are brief, sparse asides layered on top of it, each reverting to that activity on its
+  //    own once its short window passes. Neither is attention-seeking: a stretch does not pause for acknowledgement,
+  //    and the glance below is a look, not a request.
   const pose = ambientPose(now, s.waitingOpen, s.hour)
+  if ((pose === 'idle' || pose === 'working') && inFlourishWindow(now, 17, 6, 2500)) return { state: 'stretching', gaze: 'away' }
+  if (pose === 'idle' && inFlourishWindow(now, 41, 8, 1600)) return { state: 'idle', gaze: 'viewer' } // looks toward the user, then back to what it was doing
   const gaze: Gaze = pose === 'sleepy' || pose === 'sleeping' ? 'closed' : pose === 'reading' || pose === 'working' ? 'desk' : pose === 'looking' ? 'window' : 'away'
   return { state: pose, gaze }
 }

@@ -3,9 +3,9 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 9 — The living world. 9a (the room as a place) and 9b (the creature as a character system)
-built, testable; 9c–9i (autonomous ambient behaviour, direct interaction, rare initiation, real-memory familiarity,
-room persistence, coherent product language, micro-interactions) not started. **Phase 8 — Proactivity is COMPLETE.** 8a (morning briefing), 8b (approaching-deadline alerts), 8c
+## Current phase: Phase 9 — The living world. 9a (the room as a place), 9b (the creature as a character system) and
+9c (autonomous ambient behaviour) built, testable; 9d–9i (direct interaction, rare initiation, real-memory
+familiarity, room persistence, coherent product language, micro-interactions) not started. **Phase 8 — Proactivity is COMPLETE.** 8a (morning briefing), 8b (approaching-deadline alerts), 8c
 (missed-task and waiting-item follow-up), 8d (adaptive intensity, quiet hours) built and tested; SPEC.md's own Phase 8 line
 has no lettered slices at all (8a–8d were this session's own organisational split, not spec text) — "conversational
 replanning" is PARTIALLY covered by 7f (full preview, nothing moves without approval, a proactive nudge) but NOT by a
@@ -15,6 +15,48 @@ passed outright; 3 genuine bugs found (a forward-looking reluctance statement me
 instead of empathy+alternative; "move it"/"cancel the reminder" reused the last-focused item's id as the wrong entity type
 and threw instead of rerouting/answering gracefully; a bare-day move on an exact-time item silently dropped the time) — all
 three FIXED and re-verified live + via direct DB read on a fresh scratch DB (see their own section below).**
+
+## Phase 9c — autonomous ambient behaviour (2026-09-18)
+- **The slot-level ambient rotation already existed (Phase 4/9b)** — this slice is specifically about closing the
+  gap between that and what spec 9c actually asks for: three named behaviours ("stretches", "makes tea", "looks
+  toward the user and returns to what it was doing") that nothing built so far produced, plus making sure the
+  "sparse, not attention-seeking" balance holds once they're added.
+- **Two different mechanisms, because the two kinds of behaviour are a different SHAPE.** "Making tea" is genuinely
+  activity-length (comparable to reading or tidying at the desk), so it was added straight into `ambientPose`'s
+  existing 4-minute slot table (`tea`, 5% of daytime slots) — same mechanism, one more option, no happening row and
+  no task ever created (invariant 9): the Room shows the same Kitchen object a real cooking happening uses, gated
+  now on `pose === 'kitchen'` OR the real happening, not the real happening alone. "Stretching" and "glances at the
+  user" are momentary asides, wrong to model as a 4-minute activity — they get their OWN independent, faster-rolling
+  90-second window (`inFlourishWindow`, a small helper) that only wins for a couple of seconds within that window,
+  then reverts to whatever the slot-level rotation already had it doing. Two different seeds keep the two flourishes
+  from always coinciding or always avoiding each other.
+- **The glance needed no new state at all.** "Looks toward the user and returns to what it was doing" is not a new
+  activity — it's the SAME ambient state (`idle`) with gaze temporarily flipped to `viewer`, reverting automatically
+  once its short window passes. This also means it inherits the existing rare-eye-contact discipline (9b) exactly,
+  rather than needing its own special-cased exception.
+- **`stretching` is a new state** with its own genuinely distinct look, not a recolour of `celebrating` (which
+  already used the `stretch` pose): eyes shut (a real stretch, not a performance), a small round open mouth, both
+  arms raised together rather than one relaxed — celebrating incidentally picked up the same two-arms-up look along
+  the way, which reads better than its previous one-arm-down default and was kept.
+- **Sparsity was sized deliberately, not left to feel right by accident.** At the day-table's actual shares (idle
+  55%, working 10%), `stretching`'s 6%-per-90s roll (gated on idle/working) works out to roughly once every half
+  hour of continuous ambient time; the glance's 8%-per-90s roll (gated on idle only) to roughly once every 35
+  minutes; `tea`'s 5%-per-4-minute-slot roll to roughly once every 80 minutes. All three stay well under idle's own
+  55% share — idle doing nothing remains the single most common outcome, matching the spec's explicit "idle silence
+  is a correct state, not a missing animation."
+- **Verified by screenshot** (forced via `SECRETARY_VIEW=state:stretching` / `state:tea`, since the dev hook's force
+  path bypasses the probability roll entirely and shows exactly what each state looks like): `stretching` — eyes
+  shut, both arms up, elongated pose, small open mouth, no sparkles (confirming it reads as a stretch, not a
+  celebration); `tea` — the same Kitchen table-and-pot object a real cooking happening produces, beside the creature
+  at its usual kitchen spot. Confirmed directly against a fresh scratch database that triggering `tea` this way
+  wrote NOTHING to `happenings` or `activities` — a real query, zero rows, not an assumption. Re-screenshotted the
+  plain default view afterward to confirm the wider rotation and the Kitchen-render gate change didn't disturb
+  anything already working.
+- **Not built here** (later Phase 9 slices, not 9c's scope): the creature still never initiates anything the user
+  would notice as a MESSAGE or a request for attention (9d/9e are the click/ask/speak-up layer) — every 9c behaviour
+  is silent, visual-only flavour, exactly the "not attention-seeking" the spec asks for. "Moves around" and
+  "interacts with an object" were judged already satisfied structurally by 9a/9b (the rotation already moves the
+  creature between five different positions, and each pose already shows its own prop) rather than re-built here.
 
 ## Phase 9b — the creature as a character system (2026-09-18)
 - **The spec names 16 states** (idle, awake, thinking, listening, working, reading, looking outside, waiting, happy,

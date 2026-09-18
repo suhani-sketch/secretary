@@ -187,7 +187,9 @@ export function Room({ state, gaze, environment, time, happening, onChangeEnviro
         {environment === 'fireplace' && <Hearth x={14} y={682} />}
 
         {/* living activities: a small kitchen object appears only while something cooks (spec Phase 5) */}
-        {happening === 'cooking' && <Kitchen x={190} y={694} night={band === 'night'} />}
+        {/* a real cooking happening (Phase 5) OR the creature's own ambient decision to make tea (9c) — either
+            way the room shows the same small kitchen object; only one of the two ever creates a real row. */}
+        {(happening === 'cooking' || pose === 'kitchen') && <Kitchen x={190} y={694} night={band === 'night'} />}
 
         {/* paper grain, over everything */}
         <rect x="0" y="0" width="260" height="900" fill="url(#grain)" />
