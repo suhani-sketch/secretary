@@ -1,12 +1,13 @@
 import { DateTime } from 'luxon'
 import { log } from '../log'
 import * as repo from '../repo'
-import { assembleContext, getOffer, setOffer } from './context'
+import { assembleContext, getFocus, getOffer, setOffer } from './context'
 import { ProviderUnavailableError, type Provider, type ProviderMessage, type ToolCall, type ToolResult } from './provider'
 import { REPLY, looksLikeDump, routeTier0 } from './router'
 import { executeTool, inTransaction, isWriteTool, toolDefinitions, type ExecContext } from './tools'
 import { formatDue } from '../../shared/format'
-import { personalityLine } from '../personality'
+import { personalityLine, tryProactiveLine } from '../personality'
+import { familiarityNote } from '../familiarity'
 import type { Actor, AppliedChange, ChatResponse, ChatStatus, ToolRunResult } from '../../shared/types'
 
 /** Spec §4: one user message costs at most one API call. Asserted, not hoped for. */
@@ -184,6 +185,32 @@ const plural = (n: number, w: string): string => `${n} ${w}${n === 1 ? '' : 's'}
 const joinPhrases = (applied: AppliedChange[]): string =>
   applied.length >= 3 ? `Got it — ${applied.length} things:\n${applied.map((a) => `• ${a.phrase}`).join('\n')}` : applied.map((a) => a.phrase).join(' ')
 
+/**
+ * Familiarity (spec 9f): whatever the round was fundamentally ABOUT — the top of the focus stack, which read tools
+ * (get_project, assess_deadline) now push to just as surely as a write does (asking about a Thing is returning to
+ * it too) — gets checked for a genuine multi-session pattern. Prepended, not appended: "Back to X?" reads as how
+ * the reply OPENS, not a closing remark the way personality.ts's own lines are. Shares personality.ts's exact
+ * budget via `tryProactiveLine`, so this can never add a SECOND aside on top of an already-spent personality line
+ * in the same reply — one creature-speaks-up moment per round, at most, whichever it is.
+ */
+function withFamiliarity(replyText: string, userText: string, sinceIso: string): string {
+  // Only an entity genuinely touched THIS round counts — the focus stack persists across turns for "it"/"that"
+  // resolution, so without this check a bare "hey" right after an unrelated exchange would wrongly inherit
+  // whatever was last focused and open with a familiarity line about something this message never mentioned.
+  const top = getFocus()[0]
+  if (!top || top.kind === 'event' || top.at < sinceIso) return replyText
+  try {
+    const note = familiarityNote(top.itemId)
+    if (!note) return replyText
+    if (!tryProactiveLine([note.line], userText)) return replyText
+    log('info', 'familiarity.line', note.line)
+    return `${note.line} ${replyText}`
+  } catch (e) {
+    log('warn', 'familiarity.failed', (e as Error).message)
+    return replyText
+  }
+}
+
 async function handleChat(deps: OrchestratorDeps, rawText: string): Promise<ChatResponse> {
   const text = rawText.trim()
   const userMessage = repo.insertMessage('user', text, null)
@@ -193,6 +220,7 @@ async function handleChat(deps: OrchestratorDeps, rawText: string): Promise<Chat
   let tier = 2
   let modelCalls = 0
   const started = Date.now()
+  const startedIso = new Date(started).toISOString()
 
   try {
     // ---- Tier 0: deterministic, no model call ----
@@ -310,6 +338,7 @@ async function handleChat(deps: OrchestratorDeps, rawText: string): Promise<Chat
       log('warn', 'personality.failed', (e as Error).message)
     }
   }
+  if (!error) replyText = withFamiliarity(replyText!, text, startedIso)
   const assistantMessage = repo.insertMessage('assistant', replyText!, tier)
   deps.onChanged()
   return { userMessage, assistantMessage, applied, error }
@@ -331,6 +360,7 @@ async function handleVoice(deps: OrchestratorDeps, audio: { base64: string; mime
   let transcript = ''
   let modelCalls = 0
   const started = Date.now()
+  const startedIso = new Date(started).toISOString()
 
   try {
     if (!deps.provider) {
@@ -426,6 +456,7 @@ async function handleVoice(deps: OrchestratorDeps, audio: { base64: string; mime
       log('warn', 'personality.failed', (e as Error).message)
     }
   }
+  if (!error) replyText = withFamiliarity(replyText!, transcript, startedIso)
   const assistantMessage = repo.insertMessage('assistant', replyText!, 2)
   deps.onChanged()
   return { userMessage, assistantMessage, applied, error }

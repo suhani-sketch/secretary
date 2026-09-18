@@ -4,8 +4,8 @@ Source of truth for the design is `SPEC.md`. This file tracks where the build ac
 Update it at the end of every session (spec §11).
 
 ## Current phase: Phase 9 — The living world. 9a (the room as a place), 9b (the creature as a character system),
-9c (autonomous ambient behaviour), 9d (direct interaction) and 9e (rare initiation) built, testable; 9f–9i
-(real-memory familiarity, room persistence, coherent product language, micro-interactions) not started. **Phase 8 — Proactivity is COMPLETE.** 8a (morning briefing), 8b (approaching-deadline alerts), 8c
+9c (autonomous ambient behaviour), 9d (direct interaction), 9e (rare initiation) and 9f (familiarity through real
+memory) built, testable; 9g–9i (room persistence, coherent product language, micro-interactions) not started. **Phase 8 — Proactivity is COMPLETE.** 8a (morning briefing), 8b (approaching-deadline alerts), 8c
 (missed-task and waiting-item follow-up), 8d (adaptive intensity, quiet hours) built and tested; SPEC.md's own Phase 8 line
 has no lettered slices at all (8a–8d were this session's own organisational split, not spec text) — "conversational
 replanning" is PARTIALLY covered by 7f (full preview, nothing moves without approval, a proactive nudge) but NOT by a
@@ -15,6 +15,58 @@ passed outright; 3 genuine bugs found (a forward-looking reluctance statement me
 instead of empathy+alternative; "move it"/"cancel the reminder" reused the last-focused item's id as the wrong entity type
 and threw instead of rerouting/answering gracefully; a bare-day move on an exact-time item silently dropped the time) — all
 three FIXED and re-verified live + via direct DB read on a fresh scratch DB (see their own section below).**
+
+## Phase 9f — familiarity through real memory (2026-09-18)
+- **A prefix, not a suffix — deliberately the opposite shape from 9e's own lines.** "Back to the application?" is
+  how a reply OPENS; personality.ts's existing lines ("That's one thing out of your head.") are how one CLOSES.
+  New `main/familiarity.ts#familiarityNote(itemId)` computes the one honest observation for a Thing (or, far more
+  often, none — most Things have no pattern worth naming), and a new `withFamiliarity` in the orchestrator
+  prepends it to whatever the reply already was, for both `handleChat` and `handleVoice`, after both tier-0 and
+  tier-2 rounds alike.
+- **Four categories, all computed from `activities`/`items` that already exist — nothing new is tracked for this
+  slice.** `struggled` (≥3 `rescheduled` activities — checked first, since it is the strongest, truest thing to
+  say when more than one applies) → `""X" again — this one has had a few goes."`; `achievement` (status done, and
+  the `completed` activity is ≥7 days old — a fresh completion is 9e's job, not this one) → `""X" — you already
+  finished that one."`; `recurring` (activity on ≥4 distinct calendar days) → `"Back to "X"?"`, the spec's own
+  flagship example, verified working verbatim; `long_running` (still open, created ≥21 days ago) → `""X" has been
+  on the list a while now."` Each threshold is a real, if arbitrary, bar — one or two touches is not a pattern,
+  and firing on that would be exactly the "pretends to remember" the spec forbids.
+- **A real gap closed to make this possible at all: read tools didn't touch the focus stack.** The focus stack
+  (`pushFocus`/`getFocus`, spec §4 "reference resolution") previously updated only on WRITES — asking "what's left
+  for the IIM application?" or "is it on track?" left it untouched, so there was no signal anywhere that the user
+  had just returned to something old by asking about it, only by editing it. Added one `pushFocus` call each to
+  `get_project` and `assess_deadline` (the two "returning to a Thing" read tools) — a small, additive, low-risk
+  change (it can only ever make "it"/"that" resolution MORE correct afterward, never less) that also happens to be
+  the exact mechanism 9f needed, rather than inventing a second, parallel "what was this round about" signal.
+  `get_item`/`search_memory`/`recommend_now` and the rest were deliberately left untouched — this slice only
+  needed the two tools where "returning to a specific named Thing" is the whole point of asking.
+- **A real, non-obvious bug caught before it ever ran, by reasoning through the ordering rather than trusting it:**
+  the focus stack persists ACROSS turns (that is its whole purpose, for "it"/"that" in a later message) — so
+  checking "what's on top of the stack" right after an unrelated bare "hey" would have wrongly inherited whatever
+  was last discussed several messages ago and opened with a familiarity line about a Thing that message never
+  mentioned. Fixed by recording each round's own start time (`startedIso`) and only ever honouring a focus entry
+  PUSHED DURING this round (`top.at >= startedIso`) — verified live: asked about a long-running project, then said
+  a bare "hey" immediately after, and the "hey" correctly carried no familiarity line at all.
+- **Shares 9e's exact budget, not a new one** — `withFamiliarity` calls the same `tryProactiveLine` personality.ts
+  already exports for 9e's proactive triggers, so a round that already spent the day's "creature speaks up" moment
+  on a reactive or proactive 9e line correctly stays silent here too, and vice versa. One creature, one sense of
+  how much it says, regardless of which Phase 9 slice the line technically came from.
+- **Verified live, all four categories, through real chat exchanges (not forced), across all three round types**
+  (tier-0 write, tier-0 read, tier-2 model — confirming the hook in the shared orchestrator tail reaches all of
+  them, not just one): three reschedules of the same task via real "move it to …" messages → `struggled` fired on
+  the third, correctly prepended, tier-0 write. A project finished, its completion backdated 10 days, then asked
+  about again → `achievement`, tier-2 model round. A project with four notes backdated across four distinct days,
+  then asked about → `"Back to "IIM application"?"` verbatim, tier-0 read. A project backdated to 25 days old,
+  asked about → `long_running`, tier-0 read. The stale-focus fix re-verified as above. The shared-budget
+  persistence re-verified incidentally too: a second query for the same long-running project, in a later launch of
+  the same scratch database, correctly stayed silent — the 90-minute gate from the earlier test was still in
+  effect, read back correctly from settings across a real restart, not just held in memory.
+- **Not built here** (later Phase 9 slices, not 9f's scope; also explicitly out of THIS slice even though spec 9f's
+  own sentence lists them): preferences and routines as a source of familiarity — spec names them alongside the
+  four built here, but they describe patterns in the USER's habits generally (a default reminder time, how they
+  usually schedule things) rather than a specific returned-to Thing, and did not fit the "Back to X?" shape this
+  slice is built around; a dedicated line for that would be a genuinely different kind of moment, better suited to
+  its own pass once there is a concrete example to build toward rather than a guess.
 
 ## Phase 9e — the creature initiates, rarely (2026-09-18)
 - **Six named triggers, split across two genuinely different mechanisms — not because one is easier, but because

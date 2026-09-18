@@ -832,6 +832,9 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const notes = [...repo.notesFor('item', id), ...parts.flatMap((c) => repo.notesFor('item', c.id).map((n) => ({ ...n, body: `${c.title}: ${n.body}` })))]
       // 7b: a dated Thing carries its deadline assessment (bottleneck, feasibility) — computed, never asked for.
       const assessment = p.due_at_utc ? assessTarget(p.id) : null
+      // 9f: asking about a Thing IS returning to it — the focus stack (and so familiarity, personality.ts)
+      // should know that just as surely as if it had been edited, not only when it was.
+      pushFocus(p.id, p.title, 'reviewed')
       return {
         result: {
           project: publicItem(p),
@@ -1315,6 +1318,9 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       if (!id) throw new ToolValidationError(`I don't know which deadline you mean${x.title ? ` by "${x.title}"` : ''}`)
       const assessment = assessTarget(id)
       if (!assessment) throw new Error('No such item')
+      // 9f: same reasoning as get_project — asking about a deadline is returning to it.
+      const assessedItem = repo.getItem(id)
+      if (assessedItem) pushFocus(assessedItem.id, assessedItem.title, 'assessed')
       return { result: { assessment: { ...assessment, remaining: assessment.remaining.map((c) => c.title), startable: assessment.startable.map((c) => c.title), blocked: assessment.blocked.map((b) => ({ component: b.component.title, blockers: b.blockers.map((x) => x.title) })), waits: assessment.waits.map((w) => w.waiting_on), unscheduled: assessment.unscheduled.map((c) => c.title), bottleneck: assessment.bottleneck ? { component: assessment.bottleneck.component.title, why: assessment.bottleneck.why } : null }, text: assessmentText(assessment) } }
     }
     case 'ask_clarification': {
