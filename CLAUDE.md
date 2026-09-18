@@ -3,7 +3,9 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 8 — Proactivity is COMPLETE. 8a (morning briefing), 8b (approaching-deadline alerts), 8c
+## Current phase: Phase 9 — The living world. 9a (the room as a place) built, testable; 9b–9i (the creature as a
+character system, autonomous ambient behaviour, direct interaction, rare initiation, real-memory familiarity, room
+persistence, coherent product language, micro-interactions) not started. **Phase 8 — Proactivity is COMPLETE.** 8a (morning briefing), 8b (approaching-deadline alerts), 8c
 (missed-task and waiting-item follow-up), 8d (adaptive intensity, quiet hours) built and tested; SPEC.md's own Phase 8 line
 has no lettered slices at all (8a–8d were this session's own organisational split, not spec text) — "conversational
 replanning" is PARTIALLY covered by 7f (full preview, nothing moves without approval, a proactive nudge) but NOT by a
@@ -12,8 +14,60 @@ section below). **§11D application acceptance run 2026-09-18 on a fresh scratch
 passed outright; 3 genuine bugs found (a forward-looking reluctance statement mechanically logged an avoid constraint
 instead of empathy+alternative; "move it"/"cancel the reminder" reused the last-focused item's id as the wrong entity type
 and threw instead of rerouting/answering gracefully; a bare-day move on an exact-time item silently dropped the time) — all
-three FIXED and re-verified live + via direct DB read on a fresh scratch DB (see their own section below).** **Phase 7 —
-Intelligence is
+three FIXED and re-verified live + via direct DB read on a fresh scratch DB (see their own section below).**
+
+## Phase 9a — the room as a place (2026-09-18)
+- **The three Phase 9 invariants** (spec: never react to every action, never make the user responsible for maintaining
+  the creature, silence is a valid state) don't bear directly on 9a's own scope — the room's static composition — but
+  shaped what was deliberately NOT added here: no new autonomous behaviours (9c), no clickable objects, no feeding/
+  care mechanic anywhere near the desk/plant/mug, nothing that turns "a place to be" into "a thing to tend."
+- **`src/renderer/src/Room.tsx` rewritten, not patched.** The old room (Phase 4) had real furniture — desk, laptop,
+  shelf, books, plant, mug, notebook, pencil cup, lamp, rug — but between the window/shelf zone and the desk zone sat
+  roughly 40% of the panel's height as flat, undecorated wall (confirmed by screenshot before touching any code): a
+  genuinely empty gap, not a place. Two structural changes closed that gap into real composition rather than more
+  clutter poured into the same flat plane:
+  1. **A reading nook fills the dead zone** — a new `Armchair` (dusty "slate-soft" blue-grey, the app's own palette
+     token, not an invented colour) with a `SideTable` (two books + a tiny succulent) beside it, and a low `Bench`
+     tucked just under the window shelf. Both sit directly on the back wall, above where the floor begins — nothing
+     added between them.
+  2. **The floor gained real depth**: the old floor was a flat rectangle, furniture just sitting on a band of colour.
+     It is now a forced-perspective trapezoid — narrow where it meets the back wall (`M72 562 L188 562`), full width
+     at the front edge (`L258 900 L2 900`) — the cheapest possible depth cue that still genuinely reads as a room
+     receding away from the viewer, not a diagram. Every piece of furniture also got a soft flat-colour contact shadow
+     beneath it (matching the existing shadow convention already used for the creature's own floor shadow in
+     `Companion.tsx`, not a new rendering technique) so nothing floats.
+- **Five real positions, each tied to an existing pose from Phase 4's `poseFor` — no new creature states added,
+  9a only gave the existing ones somewhere real to be (spec's own words: "positions... that connect to its
+  behaviour").** desk chair (`working`/`writing`), reading armchair (`reading`), window bench (`waiting`), a new
+  woven `Nest` for `sleepy`/curled, and the open rug for everything else (idle/ambient). A `Chair` was also added at
+  the desk itself — the original room had a creature apparently floating beside a desk with no chair at all.
+- **A real, non-obvious bug caught by actually screenshotting, not just reading the code.** Converting the old
+  nested `translate(0,60)`/`translate(0,280)` SVG groups to direct world coordinates (needed so the new reading-nook
+  elements could be placed in between them without a third layer of transforms) shifted every desk-zone element up
+  by 60px — but the creature's own pose-to-position `spot` map still used the OLD y-values. First render: the
+  creature at the desk pose appeared almost entirely hidden behind the desk and chair, only its head peeking above
+  the front rail — sitting on the floor below the chair, not on it. Caught immediately by screenshotting every pose
+  (not just eyeballing the idle one) and recomputing each spot from the NEW furniture geometry (creature bottom edge
+  aligned to the seat/cushion surface, creature centre-x aligned to the furniture's own centre-x) rather than
+  reusing the old numbers. All five positions re-verified by screenshot after the fix.
+- **Verified by screenshot, every named position, both day and night, plus two of the six window environments**
+  (library's bookcase, fireplace's hearth — both still fit correctly inside the new floor trapezoid without further
+  changes, confirming the perspective floor doesn't break the existing environment-swap system): idle → standing on
+  the open rug; working/writing → seated at the desk beside the open laptop; reading → seated in the armchair with
+  its book prop; waiting → perched on the window bench, a starry night sky and moon visible through the glass;
+  sleepy → curled asleep in the nest, warm lamp glow lighting the desk beside it. The night/lamp/moon lighting system
+  and the `happening === 'cooking'` kitchen overlay (Phase 5) both still render correctly at their same trigger
+  conditions, unmodified.
+- **Not built here** (later Phase 9 slices, not 9a's scope): any new creature state, expression or animation (9b);
+  autonomous ambient object interaction — the creature does not yet actually pick up the book or work the laptop, it
+  is simply placed near them (9c); clicking the creature or the room's objects (9d); the creature ever speaking
+  unprompted (9e); anything remembered about the room across sessions beyond the existing `scene.environment`/
+  `scene.timeOfDay` settings (9g — object accumulation, favourite scenes, the naming moment); a second design pass
+  once 9b's fuller pose set exists (the reading/window/sleeping positions were built against the four poses that
+  already existed in Phase 4 — a distinct `sleeping` state, once 9b adds one, may want its own nest-specific pose
+  rather than reusing `curl`, but that is 9b's decision to make, not 9a's).
+
+**Phase 7 — Intelligence is
 COMPLETE** (7a brain dump typed+voice, 7b deadline intelligence, 7c what-should-I-do-now, 7d what-am-I-forgetting, 7e smart
 scheduling, 7f replanning, 7g conversational planning; unit tests cover 7b/7c/7e/7f/7g core logic). Governing rule for Phase 7
 carries forward into 8: compute in code, the model only phrases — every answer costs at most ONE model call (§11G 14; 8a costs

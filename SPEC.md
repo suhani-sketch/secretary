@@ -618,7 +618,7 @@ A happening never enters `items`, never appears in Open, and never becomes an ob
 
 **Done when:** the ambiguity test in §11F passes.
 
-### Phase 6 — Calendar and temporal planning
+### Phase 6 —  Calendar and temporal planning ✅ complete
 
 **The principle:** the calendar shows not merely what has been scheduled, but everything the secretary understands about the user's time. It is an aggregation layer over the existing data model — it never creates duplicate copies of anything.
 
@@ -678,7 +678,7 @@ Conflict detection gains **levels** rather than being binary: *hard conflict* (g
 
 **Done when:** the calendar acceptance test in §11C passes.
 
-### Phase 7 — Intelligence ✅ complete
+### Phase 7 —  Intelligence ✅ complete
 
 The reasoning layer over everything built in Phases 1–6. **Do not create a second planning or task system.** `items`, `links`, `events`, `reminders`, `constraints`, context, commitments, `plans` and the Day View Model are the source of truth.
 
@@ -703,19 +703,57 @@ The reasoning layer over everything built in Phases 1–6. **Do not create a sec
 **Voice.** Audio goes to Gemini directly through the same provider and tool schema — a record button and an audio branch, not a subsystem. A spoken dump runs the same 7a pipeline as a typed one. Audio stays local.
 
 **Done when:** the intelligence acceptance test in §11G passes.
-*13 of 14 steps verified 2026-09-18; step 2 (the same brain dump spoken) blocked by Gemini free-tier daily quota
-exhaustion on the stronger models voice requires — an external constraint, not a code defect. The underlying voice
-pipeline was verified separately when it was built (Phase 7 "Voice" section, real TTS audio through the real API).*
 
-### Phase 8 — Proactivity
-Daily briefing. Deadline preparation. Missed-task and waiting-item follow-up. Adaptive intensity, quiet hours. Conversational replanning.
+### Phase 8 —  Proactivity ✅ complete
+
+Most of Phase 8 is *when* and *how*, not *what* — Phase 7 already knows what to surface. The model is used only for phrasing; all decisions about what to show and when are deterministic.
+
+**8a — Morning briefing.** Each morning, one concise message: the day's hard deadlines, any overdue items, today's calendar highlights, unfinished high-priority work, waiting items needing follow-up, and one or two recommended actions. Not a dump of thirty items — filtered, ranked, and written by the app. The companion greets on first open of the day.
+
+**8b — Approaching deadline alerts.** Surface deadline risks before they become urgent — not on the morning of, but when preparation time is running short. Uses the 7b feasibility logic: if the trajectory is tight or infeasible, flag it. Only fires when the evidence is clear, never speculatively.
+
+**8c — Missed-task and waiting-item follow-up.** If something important stays incomplete after a reminder, or a waiting item has had no activity for longer than its expected-by date, surface it once. Intensity depends on importance, urgency and how many times it has already been raised. Never nags — escalation caps out.
+
+**8d — Adaptive intensity and quiet hours.** The user can say "be less pushy about reminders" or "don't disturb me after 10". Quiet hours, sound on/off, follow-up frequency and important-deadline overrides. Stored as preferences, applied by the scheduler. The assistant can update these conversationally.
 
 **Done when:** the application acceptance test in §11D passes end to end.
 
-### Phase 9 — Visual pass
-Typography, visual hierarchy, calendar and project aesthetics, notification personality. Deliberately after the calendar, so the pass covers the month/week/day/agenda surfaces rather than being redone once they land.
+### Phase 9 — The living world
 
-**Done when:** you want to leave it open on your desktop.
+Use Flash-Lite or Sonnet throughout — this is not reasoning work.
+
+**The goal is not a productivity app with a cute mascot. It is a remarkably capable Secretary who happens to live in a little world beside you.**
+
+**Three invariants that hold across every slice:**
+- The creature never reacts to every user action. Constant reaction is exhausting and artificial. Autonomous ambient behaviour creates the impression of independent life; reactive behaviour creates the impression of a button.
+- The user is never responsible for maintaining the creature. No feeding, no health, no streaks, no guilt, no abandonment. The creature accompanies the user; the user does not manage it.
+- Silence is an explicit valid state. Sometimes the creature sits quietly and does nothing. That is correct behaviour, not a missing animation.
+
+**9a — The room as a place.** Replace the current left panel concept with a composed environment the creature actually inhabits: desk, chair, window, lamp, books, plant, mug, notebook, work object. Depth and spatial composition rather than a flat illustration. Positions the creature can actually occupy — desk, chair, reading area, window, sleeping area — that connect to its behaviour. Objects that can become part of what it does. Visual language consistent with the rest of the product: warm cream, cocoa, muted pastels, soft shadows, generous whitespace. The room should feel lived-in rather than designed.
+
+**9b — The creature as a character system.** States with pose, expression, optional subtle animation, optional environment interaction, and appropriate transitions: idle, awake, thinking, listening, working, reading, looking outside, waiting, happy, quietly excited, concerned, sleepy, sleeping, greeting, celebrating, recovering. The creature animates on state change and otherwise mostly breathes. Idle life is important — it should sometimes simply sit there. Eye contact is rare and meaningful: on greeting, genuine happiness, when directly addressed, and occasionally when emotionally appropriate. Not the default idle state.
+
+**9c — Autonomous ambient behaviour.** Independent of user actions, the creature occasionally picks up a book, works at the desk, looks outside, stretches, makes tea, moves around, falls asleep, wakes up, interacts with an object, or looks toward the user and returns to what it was doing. These are probabilistic, contextual and sparse. They create the impression of independent life. They are not attention-seeking.
+
+**9d — Direct interaction.** The user can click the creature, ask what it is doing, greet it, initiate a planning conversation, ask what it remembers, ask for help, ask it to sit with them during focus work, comment on its activity. Interaction connects to the existing Secretary intelligence — not a separate pet chatbot. The creature's reply uses the existing assistant personality system, not hardcoded strings. The user can also interact simply because they like it. That is intentional.
+
+**9e — Creature initiates, rarely.** On meaningful deadline approaching, long focused session, important task finished, late-night work, an important waiting item changed, or the user finishing something repeatedly postponed — the creature may say something. Tone: "You've been at this for two hours." "I think that's enough for tonight." "You finally got that one out of the way." Sparse, context-sensitive, never to increase engagement, never interrupting focused work.
+
+**9f — Familiarity through real memory.** Recurring projects, important deadlines, long-running work, things the user repeatedly struggles with, completed achievements, preferences, routines. All references use the existing memory and context system. The creature never pretends to remember something it does not actually have. "Back to the application?" only if the application has genuinely been in context. These moments are sparse and must ring true.
+
+**9g — Room persistence and deferred Phase 4 features.** Room state survives application close, restart and computer restart. Favourite scenes, scene rotation (the six window views from Phase 4), weather-driven atmosphere, time-of-day transitions without abrupt swaps. The naming moment: the creature eventually says "I think I should have a name", and the user names it — never forced during onboarding. Objects accumulate naturally and meaningfully where appropriate; no unlock mechanics, no progress bars, no "you earned a mug".
+
+**9h — Coherent product language.** Conversation, Calendar, Things and Settings feel like one world. Same typography scale, spacing philosophy, material language, icon language, muted palette, interaction language, visual restraint. Calendar can be dense; Things can be structured; but both retain the warmth. Notifications sound and look like the same Secretary: concise, calm, useful, occasionally personable, never guilt, never fake urgency.
+
+**9i — Micro-interactions and motion.** A coherent interaction language for sending a message, creating an item, completing something, undoing, receiving a reminder, interacting with the creature. Subtle transitions communicating state, causality, continuity and feedback — not because animation is possible. Reduced-motion preference respected throughout. No excessive bouncing. No confetti. A major accomplishment may receive a slightly stronger reaction, still emotionally restrained.
+
+**Done when:** §9T and §9U pass — the creature feels alive, the room feels inhabited, and removing either would change the emotional character of the product.
+
+### §9T — The acceptance test
+Leave the application open for several hours. The creature behaves naturally, the environment changes subtly, the creature occasionally does something different, nothing becomes annoying, no interaction is demanded, productivity surfaces remain usable. Close and reopen — the room feels continuous, not reset. Interact with the creature — it feels intentional and characterful. Use it over multiple days — the creature begins to feel familiar because of real memory. Eventually look at the left side and think: *"Oh, there you are."*
+
+### §9U — The emotional test
+"If I removed the creature and room and replaced them with a standard sidebar, would the product lose something meaningful?" — the answer must be yes. "If I remove the creature, does the underlying Secretary still function correctly?" — the answer must also be yes.
 
 ### Phase 10 — Living with it
 Use it daily for two weeks. Fix what actually annoys you. Add nothing.

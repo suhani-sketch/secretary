@@ -3,9 +3,14 @@ import { Companion, poseFor } from './Companion'
 import type { CompanionState, Gaze } from './companionState'
 
 /**
- * The room (spec §8 Phase 4): a place, not a background. Layered SVG in a tall panel. Environments change the window and a
- * few objects; time of day changes the light over any environment. The creature moves between spots by pose.
- * Nothing here is gamified and nothing accumulates.
+ * The room (spec §8 Phase 4, redone as a place in Phase 9a): a composed, layered environment the creature actually
+ * inhabits, not a flat illustration behind it. Five real positions connect directly to what the creature is doing —
+ * the desk and chair (working/writing), the armchair reading nook (reading), the window bench (waiting/looking out),
+ * the sleeping nest (sleepy/curled up), and the open rug (everything else, idle). Depth comes from three honest,
+ * cheap tricks rather than true 3D: a receding floor (the back edge is narrower than the front — forced perspective),
+ * soft contact shadows under every piece of furniture so nothing floats, and near-things-are-bigger sizing on the
+ * creature's own spot scale. Environments change the window and a few objects; time of day changes the light over
+ * any environment. Nothing here is gamified and nothing accumulates (that is 9g).
  */
 
 export type EnvironmentId = 'trees' | 'rain' | 'coast' | 'winter' | 'library' | 'fireplace'
@@ -36,11 +41,11 @@ export function bandForHour(h: number): Band {
 }
 
 /** Light for each band: wall, floor, window sky gradient, sun/moon, lamp, and how much to dim the creature. */
-const LIGHT: Record<Band, { wall: string; wall2: string; floor: string; sky: [string, string]; sun: string | null; moon: boolean; lamp: boolean; dim: number; desk: string }> = {
-  morning: { wall: '#F6E9D8', wall2: '#EFDCC5', floor: '#D9C3A8', sky: ['#BFD9EE', '#F7E3C9'], sun: '#F6D28A', moon: false, lamp: false, dim: 0, desk: '#B98F6A' },
-  day: { wall: '#F1E9DF', wall2: '#E8DCCB', floor: '#D3BEA3', sky: ['#A9CDEB', '#DCEBF7'], sun: '#FBE7A1', moon: false, lamp: false, dim: 0, desk: '#B48A66' },
-  evening: { wall: '#EDD6BE', wall2: '#DFBE9E', floor: '#C7A98A', sky: ['#E9A46B', '#F6D2A6'], sun: '#F3B25E', moon: false, lamp: true, dim: 0.05, desk: '#A87F5C' },
-  night: { wall: '#4A4652', wall2: '#3B3843', floor: '#37343E', sky: ['#1E2340', '#2F3457'], sun: null, moon: true, lamp: true, dim: 0.35, desk: '#6E5745' }
+const LIGHT: Record<Band, { wall: string; wall2: string; floor: string; floor2: string; sky: [string, string]; sun: string | null; moon: boolean; lamp: boolean; dim: number; desk: string }> = {
+  morning: { wall: '#F6E9D8', wall2: '#EFDCC5', floor: '#D9C3A8', floor2: '#C7AC8C', sky: ['#BFD9EE', '#F7E3C9'], sun: '#F6D28A', moon: false, lamp: false, dim: 0, desk: '#B98F6A' },
+  day: { wall: '#F1E9DF', wall2: '#E8DCCB', floor: '#D3BEA3', floor2: '#C0A583', sky: ['#A9CDEB', '#DCEBF7'], sun: '#FBE7A1', moon: false, lamp: false, dim: 0, desk: '#B48A66' },
+  evening: { wall: '#EDD6BE', wall2: '#DFBE9E', floor: '#C7A98A', floor2: '#B4926F', sky: ['#E9A46B', '#F6D2A6'], sun: '#F3B25E', moon: false, lamp: true, dim: 0.05, desk: '#A87F5C' },
+  night: { wall: '#4A4652', wall2: '#3B3843', floor: '#37343E', floor2: '#2C2A33', sky: ['#1E2340', '#2F3457'], sun: null, moon: true, lamp: true, dim: 0.35, desk: '#6E5745' }
 }
 
 interface Props {
@@ -67,9 +72,16 @@ export function Room({ state, gaze, environment, time, happening, onChangeEnviro
   const pose = happening === 'cooking' && (basePose === 'sit' || basePose === 'window') ? 'kitchen' : basePose
   const [menu, setMenu] = useState(false)
 
-  // Where the creature sits for each pose (SVG coordinates of the 120-box's top-left).
+  // Five real positions, each tied to a piece of furniture the creature actually occupies (spec 9a) — never a bare
+  // spot on the floor. Scale rises slightly for anything nearer the viewer (further down the receding floor), the
+  // same forced-perspective cue the floor itself uses, so the creature's own size stays honest to where it is sitting.
   const spot =
-    pose === 'desk' ? { x: 64, y: 672, s: 0.9 } : pose === 'read' ? { x: 140, y: 750, s: 1 } : pose === 'window' ? { x: 22, y: 316, s: 0.85 } : pose === 'curl' ? { x: 150, y: 760, s: 1 } : pose === 'kitchen' ? { x: 82, y: 752, s: 0.95 } : { x: 132, y: 748, s: 1 }
+    pose === 'desk' ? { x: 60, y: 610, s: 0.88 } // at the desk chair, facing the laptop
+    : pose === 'read' ? { x: 138, y: 420, s: 0.82 } // sitting in the reading armchair
+    : pose === 'window' ? { x: 22, y: 249, s: 0.74 } // perched on the window bench
+    : pose === 'curl' ? { x: 10, y: 765, s: 0.78 } // asleep in the nest
+    : pose === 'kitchen' ? { x: 82, y: 692, s: 0.95 }
+    : { x: 132, y: 685, s: 1 } // the open rug — nothing in particular, just here
 
   return (
     <div className="relative h-full w-full rounded-3xl overflow-hidden shadow-inner" style={{ background: L.wall, transition: 'background 2s ease' }}>
@@ -87,87 +99,101 @@ export function Room({ state, gaze, environment, time, happening, onChangeEnviro
             <stop offset="0" stopColor="#FFB067" stopOpacity="0.6" />
             <stop offset="1" stopColor="#FFB067" stopOpacity="0" />
           </radialGradient>
+          <linearGradient id="floorShade" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor={L.floor} style={{ transition: 'stop-color 2s ease' }} />
+            <stop offset="1" stopColor={L.floor2} style={{ transition: 'stop-color 2s ease' }} />
+          </linearGradient>
           <pattern id="grain" width="4" height="4" patternUnits="userSpaceOnUse">
             <circle cx="1" cy="1" r="0.4" fill="#000" opacity="0.035" />
             <circle cx="3" cy="3" r="0.4" fill="#000" opacity="0.025" />
           </pattern>
         </defs>
 
-        {/* wall + floor */}
+        {/* back wall, full height — everything else sits in front of this one plane */}
         <rect x="0" y="0" width="260" height="900" fill={L.wall} style={{ transition: 'fill 2s ease' }} />
         <rect x="0" y="0" width="260" height="900" fill={L.wall2} opacity="0.35" />
-        <g transform="translate(0 280)">
-        <path d="M0 520 L260 520 L260 620 L0 620 Z" fill={L.floor} style={{ transition: 'fill 2s ease' }} />
-        <path d="M0 520 L260 520 L260 526 L0 526 Z" fill="#000" opacity="0.08" />
-        </g>
 
+        {/* the window zone — unchanged from Phase 4: view, shelf, books, plant */}
         <g transform="translate(0 60)">
-        {/* window or bookcase */}
-        {environment === 'library' ? <Bookcase night={band === 'night'} /> : <Window env={environment} band={band} L={L} />}
-
-        {/* shelf */}
-        <rect x="24" y="238" width="212" height="6" rx="2" fill={L.desk} style={{ transition: 'fill 2s ease' }} />
-        <Books x={30} y={212} />
-        <rect x="118" y="220" width="30" height="18" rx="3" fill="#C9B29A" />
-        <rect x="118" y="218" width="30" height="5" rx="2" fill="#B39B82" />
-        <Plant x={196} y={200} winter={environment === 'winter'} />
+          {environment === 'library' ? <Bookcase night={band === 'night'} /> : <Window env={environment} band={band} L={L} />}
+          <rect x="24" y="238" width="212" height="6" rx="2" fill={L.desk} style={{ transition: 'fill 2s ease' }} />
+          <rect x="24" y="244" width="212" height="3" fill="#000" opacity="0.06" />
+          <Books x={30} y={212} />
+          <rect x="118" y="220" width="30" height="18" rx="3" fill="#C9B29A" />
+          <rect x="118" y="218" width="30" height="5" rx="2" fill="#B39B82" />
+          <Plant x={196} y={200} winter={environment === 'winter'} />
         </g>
 
-        <g transform="translate(0 280)">
-        {/* rug */}
-        <ellipse cx="150" cy="575" rx="86" ry="18" fill="#B5836D" opacity={band === 'night' ? 0.35 : 0.28} />
-        <ellipse cx="150" cy="575" rx="70" ry="13" fill="none" stroke="#FAF6F0" strokeWidth="1.5" opacity="0.5" />
+        {/* the reading nook — new (9a): fills what used to be a flat, empty stretch of wall with an actual place to
+            sit and read, plus a low bench tucked under the window so "by the window" is somewhere to perch, not just
+            standing in open floor. Both sit against the back wall, above where the floor begins. */}
+        <ellipse cx="66" cy="366" rx="30" ry="6" fill="#000" opacity="0.08" />
+        <Bench x={36} y={330} desk={L.desk} />
+        <ellipse cx="118" cy="536" rx="24" ry="5" fill="#000" opacity="0.1" />
+        <ellipse cx="187" cy="538" rx="52" ry="9" fill="#000" opacity="0.1" />
+        <SideTable x={98} y={478} desk={L.desk} />
+        <Armchair x={140} y={368} night={band === 'night'} />
 
-        {/* desk */}
-        <rect x="18" y="446" width="180" height="10" rx="3" fill={L.desk} style={{ transition: 'fill 2s ease' }} />
-        <rect x="26" y="456" width="8" height="64" fill={L.desk} opacity="0.9" />
-        <rect x="176" y="456" width="8" height="64" fill={L.desk} opacity="0.9" />
+        {/* the floor — a forced-perspective trapezoid (narrower where it meets the wall, full width at the front)
+            so the room visibly recedes instead of the furniture just floating on a flat band of colour. */}
+        <path d="M72 562 L188 562 L258 900 L2 900 Z" fill="url(#floorShade)" style={{ transition: 'fill 2s ease' }} />
+        <path d="M72 562 L188 562" stroke="#000" strokeWidth="3" opacity="0.1" />
+        <ellipse cx="150" cy="792" rx="98" ry="20" fill="#B5836D" opacity={band === 'night' ? 0.32 : 0.26} />
+        <ellipse cx="150" cy="792" rx="80" ry="15" fill="none" stroke="#FAF6F0" strokeWidth="1.5" opacity="0.45" />
+
+        {/* the sleeping nest — new (9a): a small woven basket with a soft cushion, tucked to one side, away from
+            the desk. Its own place, not a repurposed rug corner. */}
+        <ellipse cx="54" cy="856" rx="42" ry="10" fill="#000" opacity="0.12" />
+        <Nest x={16} y={806} night={band === 'night'} />
+
+        {/* the desk, its chair, and everything on the desktop */}
+        <ellipse cx="108" cy="828" rx="98" ry="14" fill="#000" opacity="0.12" />
+        <Chair x={44} y={706} desk={L.desk} />
+        <rect x="18" y="666" width="180" height="10" rx="3" fill={L.desk} style={{ transition: 'fill 2s ease' }} />
+        <rect x="26" y="676" width="8" height="64" fill={L.desk} opacity="0.9" />
+        <rect x="176" y="676" width="8" height="64" fill={L.desk} opacity="0.9" />
         {/* laptop: lid open only while working */}
-        <g style={{ transition: 'transform .6s ease', transformOrigin: '96px 446px', transform: pose === 'desk' ? 'none' : 'scaleY(0.12)' }}>
-          <rect x="72" y="412" width="50" height="34" rx="3" fill="#6E6259" />
-          <rect x="75" y="415" width="44" height="26" rx="2" fill={pose === 'desk' ? '#E8EEF3' : '#8A8078'} />
+        <g style={{ transition: 'transform .6s ease', transformOrigin: '96px 666px', transform: pose === 'desk' ? 'none' : 'scaleY(0.12)' }}>
+          <rect x="72" y="632" width="50" height="34" rx="3" fill="#6E6259" />
+          <rect x="75" y="635" width="44" height="26" rx="2" fill={pose === 'desk' ? '#E8EEF3' : '#8A8078'} />
         </g>
-        <rect x="70" y="444" width="54" height="4" rx="1.5" fill="#8A7B6E" />
+        <rect x="70" y="664" width="54" height="4" rx="1.5" fill="#8A7B6E" />
         {/* notebook + pencil */}
-        <rect x="132" y="434" width="34" height="14" rx="2" fill="#FAF6F0" transform="rotate(-8 149 441)" />
-        <line x1="136" y1="438" x2="160" y2="435" stroke="#D8CDBF" strokeWidth="1" transform="rotate(-8 149 441)" />
-        <line x1="136" y1="442" x2="158" y2="439" stroke="#D8CDBF" strokeWidth="1" transform="rotate(-8 149 441)" />
+        <rect x="132" y="654" width="34" height="14" rx="2" fill="#FAF6F0" transform="rotate(-8 149 661)" />
+        <line x1="136" y1="658" x2="160" y2="655" stroke="#D8CDBF" strokeWidth="1" transform="rotate(-8 149 661)" />
+        <line x1="136" y1="662" x2="158" y2="659" stroke="#D8CDBF" strokeWidth="1" transform="rotate(-8 149 661)" />
         {/* mug (steam in the morning) */}
-        <rect x="42" y="430" width="14" height="16" rx="3" fill="#E7D9C9" />
-        <path d="M56 434 q6 0 6 5 q0 5 -6 5" stroke="#E7D9C9" strokeWidth="2.5" fill="none" />
+        <rect x="42" y="650" width="14" height="16" rx="3" fill="#E7D9C9" />
+        <path d="M56 654 q6 0 6 5 q0 5 -6 5" stroke="#E7D9C9" strokeWidth="2.5" fill="none" />
         {band === 'morning' && (
           <g stroke="#FFFFFF" strokeWidth="1.2" fill="none" opacity="0.6" className="steam">
-            <path d="M46 426 q2 -4 0 -8" />
-            <path d="M51 426 q-2 -4 0 -8" />
+            <path d="M46 646 q2 -4 0 -8" />
+            <path d="M51 646 q-2 -4 0 -8" />
           </g>
         )}
         {/* pencil cup */}
-        <rect x="160" y="436" width="10" height="12" rx="2" fill="#B5836D" />
-        <line x1="163" y1="436" x2="163" y2="426" stroke="#C99C5A" strokeWidth="2" />
-        <line x1="167" y1="436" x2="168" y2="427" stroke="#6E6259" strokeWidth="2" />
+        <rect x="160" y="656" width="10" height="12" rx="2" fill="#B5836D" />
+        <line x1="163" y1="656" x2="163" y2="646" stroke="#C99C5A" strokeWidth="2" />
+        <line x1="167" y1="656" x2="168" y2="647" stroke="#6E6259" strokeWidth="2" />
         {/* lamp */}
         <g>
-          <rect x="188" y="430" width="3" height="18" fill="#5E4636" />
-          <path d="M176 432 L204 432 L198 420 L182 420 Z" fill="#B5836D" />
-          <ellipse cx="190" cy="448" rx="8" ry="2.5" fill="#5E4636" />
-          {L.lamp && <ellipse cx="190" cy="470" rx="70" ry="50" fill="url(#lampglow)" style={{ transition: 'opacity 2s ease' }} />}
+          <rect x="188" y="650" width="3" height="18" fill="#5E4636" />
+          <path d="M176 652 L204 652 L198 640 L182 640 Z" fill="#B5836D" />
+          <ellipse cx="190" cy="668" rx="8" ry="2.5" fill="#5E4636" />
+          {L.lamp && <ellipse cx="190" cy="690" rx="70" ry="50" fill="url(#lampglow)" style={{ transition: 'opacity 2s ease' }} />}
         </g>
 
         {/* fireplace environment: a small hearth on the left */}
-        {environment === 'fireplace' && <Hearth x={14} y={462} />}
+        {environment === 'fireplace' && <Hearth x={14} y={682} />}
 
         {/* living activities: a small kitchen object appears only while something cooks (spec Phase 5) */}
-        {happening === 'cooking' && <Kitchen x={190} y={474} night={band === 'night'} />}
+        {happening === 'cooking' && <Kitchen x={190} y={694} night={band === 'night'} />}
 
-        {/* cushion */}
-        <ellipse cx="188" cy="592" rx="40" ry="10" fill="#C9A88F" opacity={band === 'night' ? 0.5 : 0.9} />
-        </g>
-
-        {/* paper grain */}
+        {/* paper grain, over everything */}
         <rect x="0" y="0" width="260" height="900" fill="url(#grain)" />
       </svg>
 
-      {/* the creature, placed by pose */}
+      {/* the creature, placed by pose at one of the five real positions above */}
       <div
         className="absolute"
         style={{
@@ -385,6 +411,95 @@ function Hearth({ x, y }: { x: number; y: number }): React.JSX.Element {
       <path d={`M${x + 14} ${y + 46} q4 -14 8 -6 q2 -10 6 -2 q3 -6 6 4 q2 8 -10 10 q-12 -2 -10 -6z`} fill="#F2A65A" opacity="0.95" />
       <path d={`M${x + 18} ${y + 46} q3 -8 5 -3 q2 -6 4 0 q2 6 -5 7 q-6 -1 -4 -4z`} fill="#FFD27A" />
       <rect x={x + 8} y={y + 48} width="28" height="4" rx="1" fill="#5E4636" />
+    </g>
+  )
+}
+
+/** The desk chair (9a) — a real place to sit at the desk, not just a spot on the floor beside it. A plain ladder
+ *  back reads clearly even where the creature covers most of it, unlike the earlier wedge-shaped silhouette. */
+function Chair({ x, y, desk }: { x: number; y: number; desk: string }): React.JSX.Element {
+  return (
+    <g>
+      <rect x={x + 8} y={y - 54} width="26" height="42" rx="4" fill={desk} opacity="0.88" />
+      <rect x={x + 12} y={y - 44} width="18" height="4" rx="1.5" fill="#000" opacity="0.08" />
+      <rect x={x + 12} y={y - 34} width="18" height="4" rx="1.5" fill="#000" opacity="0.08" />
+      <rect x={x} y={y - 6} width="40" height="9" rx="2" fill={desk} />
+      <rect x={x + 4} y={y + 3} width="5" height="34" fill={desk} opacity="0.85" />
+      <rect x={x + 31} y={y + 3} width="5" height="34" fill={desk} opacity="0.85" />
+    </g>
+  )
+}
+
+/** The reading armchair (9a) — deep seat, rolled arms, a soft blanket over one side; the room's second real place
+ *  to be, distinct in feel from the desk's upright working posture. Dusty blue-grey, the app's own "slate-soft"
+ *  tone — muted pastel, not an invented colour outside the established palette. */
+function Armchair({ x, y, night }: { x: number; y: number; night: boolean }): React.JSX.Element {
+  const body = night ? '#5F7588' : '#8FA3B5'
+  const bodyDark = night ? '#4C5F70' : '#758DA0'
+  return (
+    <g>
+      {/* legs */}
+      <rect x={x + 6} y={y + 154} width="6" height="16" fill="#5E4636" />
+      <rect x={x + 82} y={y + 154} width="6" height="16" fill="#5E4636" />
+      {/* back */}
+      <path d={`M${x} ${y + 40} Q${x - 4} ${y - 6} ${x + 47} ${y - 10} Q${x + 98} ${y - 6} ${x + 94} ${y + 40} L${x + 94} ${y + 108} L${x} ${y + 108} Z`} fill={body} />
+      {/* seat cushion */}
+      <path d={`M${x - 6} ${y + 96} Q${x - 6} ${y + 132} ${x + 8} ${y + 138} L${x + 86} ${y + 138} Q${x + 100} ${y + 132} ${x + 100} ${y + 96} Z`} fill={bodyDark} />
+      {/* arms */}
+      <path d={`M${x - 14} ${y + 46} Q${x - 20} ${y + 46} ${x - 20} ${y + 66} L${x - 20} ${y + 118} Q${x - 20} ${y + 132} ${x - 4} ${y + 132} L${x - 4} ${y + 60} Z`} fill={body} />
+      <path d={`M${x + 108} ${y + 46} Q${x + 114} ${y + 46} ${x + 114} ${y + 66} L${x + 114} ${y + 118} Q${x + 114} ${y + 132} ${x + 98} ${y + 132} L${x + 98} ${y + 60} Z`} fill={body} />
+      {/* a folded blanket over the near arm — lived-in, not staged */}
+      <path d={`M${x - 18} ${y + 72} Q${x - 4} ${y + 66} ${x + 6} ${y + 76} L${x + 2} ${y + 100} Q${x - 12} ${y + 96} ${x - 20} ${y + 100} Z`} fill="#D9B79F" opacity="0.9" />
+      <path d={`M${x - 14} ${y + 78} q10 -4 16 2`} stroke="#C9A688" strokeWidth="1.2" fill="none" opacity="0.7" />
+    </g>
+  )
+}
+
+/** A small side table beside the armchair — two stacked books and a tiny succulent, the only "extras" this slice
+ *  allows itself, since they make the reading spot legible without turning into clutter. */
+function SideTable({ x, y, desk }: { x: number; y: number; desk: string }): React.JSX.Element {
+  return (
+    <g>
+      <rect x={x + 6} y={y + 40} width="4" height="20" fill={desk} opacity="0.85" />
+      <rect x={x + 30} y={y + 40} width="4" height="20" fill={desk} opacity="0.85" />
+      <ellipse cx={x + 20} cy={y + 40} rx="22" ry="6" fill={desk} />
+      <rect x={x + 6} y={y + 26} width="24" height="7" rx="1.5" fill="#9A8DA8" transform={`rotate(-3 ${x + 18} ${y + 30})`} />
+      <rect x={x + 8} y={y + 20} width="20" height="7" rx="1.5" fill="#B5836D" transform={`rotate(2 ${x + 18} ${y + 24})`} />
+      <path d={`M${x + 30} ${y + 32} l6 0 l-1 6 l-4 0z`} fill="#C97C5A" />
+      <g fill="#6E9560">
+        <path d={`M${x + 33} ${y + 32} q-4 -8 0 -14 q3 6 0 14`} />
+        <path d={`M${x + 33} ${y + 32} q4 -6 1 -12 q-2 5 -1 12`} />
+      </g>
+    </g>
+  )
+}
+
+/** The low bench under the window (9a) — somewhere to actually perch while looking out, not just standing on bare
+ *  floor beneath the glass. */
+function Bench({ x, y, desk }: { x: number; y: number; desk: string }): React.JSX.Element {
+  return (
+    <g>
+      <rect x={x} y={y + 18} width="60" height="8" rx="3" fill={desk} />
+      <rect x={x + 4} y={y + 26} width="5" height="12" fill={desk} opacity="0.85" />
+      <rect x={x + 51} y={y + 26} width="5" height="12" fill={desk} opacity="0.85" />
+      <ellipse cx={x + 30} cy={y + 12} rx="26" ry="9" fill="#C9A88F" />
+      <ellipse cx={x + 30} cy={y + 9} rx="26" ry="8" fill="#D9B79F" />
+    </g>
+  )
+}
+
+/** The sleeping nest (9a) — a woven basket with a soft cushion, the room's own answer to "where does it sleep". */
+function Nest({ x, y, night }: { x: number; y: number; night: boolean }): React.JSX.Element {
+  const weave = night ? '#6E5745' : '#A87F5C'
+  return (
+    <g>
+      <ellipse cx={x + 40} cy={y + 40} rx="42" ry="18" fill={weave} />
+      <ellipse cx={x + 40} cy={y + 34} rx="38" ry="15" fill={night ? '#5E4636' : '#96694A'} />
+      {Array.from({ length: 6 }).map((_, i) => (
+        <path key={i} d={`M${x + 6 + i * 13} ${y + 24} q4 10 0 20`} stroke={weave} strokeWidth="1.2" fill="none" opacity="0.55" />
+      ))}
+      <ellipse cx={x + 40} cy={y + 30} rx="30" ry="10" fill="#D9B79F" opacity={night ? 0.75 : 0.95} />
+      <ellipse cx={x + 40} cy={y + 27} rx="30" ry="8" fill="#E7D9C9" opacity={night ? 0.7 : 0.9} />
     </g>
   )
 }
