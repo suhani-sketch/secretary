@@ -45,10 +45,10 @@ const SCARF_DARK = '#9C6E5A'
 const CHEEK = '#E9A48E'
 
 /** Ears perk up when something has its attention; droop when it is winding down or settling after a worry. */
-const EARS_UP = new Set<CompanionState>(['attentive', 'greeting', 'listening', 'awake'])
+const EARS_UP = new Set<CompanionState>(['attentive', 'greeting', 'listening', 'awake', 'petted'])
 const EARS_DOWN = new Set<CompanionState>(['concerned', 'sleepy', 'sleeping', 'recovering'])
 /** A warmer flush on the cheeks — genuine positive feeling, not the neutral default. */
-const CHEEKS_WARM = new Set<CompanionState>(['happy', 'celebrating', 'greeting', 'quietlyExcited'])
+const CHEEKS_WARM = new Set<CompanionState>(['happy', 'celebrating', 'greeting', 'quietlyExcited', 'petted'])
 
 interface Props {
   state: CompanionState
@@ -101,9 +101,9 @@ export function Companion({ state, gaze, dim = 0, pose: poseOverride }: Props): 
       {/* shadow on the floor */}
       <ellipse cx="60" cy="110" rx={pose === 'curl' ? 34 : 26} ry="4" fill={NOSE} opacity="0.10" />
 
-      {/* a small, once-only lift for a quietly excited moment — separate from the pose group so it never fights
-          the rotate/scale that bodyTilt/bodyScaleY already own */}
-      <g className={`lift ${state === 'quietlyExcited' ? 'bounce' : ''}`}>
+      {/* a small, once-only lift for a quietly excited moment or being petted — separate from the pose group so
+          it never fights the rotate/scale that bodyTilt/bodyScaleY already own */}
+      <g className={`lift ${state === 'quietlyExcited' || state === 'petted' ? 'bounce' : ''}`}>
       <g className="pose" style={{ transform: `rotate(${bodyTilt}deg) scale(1, ${bodyScaleY})` }}>
         <g className={`breath ${breathClass}`}>
           {/* tail */}
@@ -210,7 +210,7 @@ type EyeShape = 'half' | 'open' | 'wide' | 'closed' | 'smile'
 
 function eyeShape(state: CompanionState, gaze: Gaze): EyeShape {
   if (gaze === 'closed' || state === 'sleepy' || state === 'sleeping' || state === 'stretching') return 'closed'
-  if (state === 'happy' || state === 'celebrating' || state === 'greeting' || state === 'quietlyExcited') return 'smile'
+  if (state === 'happy' || state === 'celebrating' || state === 'greeting' || state === 'quietlyExcited' || state === 'petted') return 'smile'
   if (state === 'awake') return 'wide' // just startled awake
   if (state === 'attentive' || state === 'concerned' || state === 'listening' || state === 'waiting') return 'open'
   if (state === 'thinking') return 'half'
@@ -255,7 +255,7 @@ function Eyes({ shape, dx, dy }: { shape: EyeShape; dx: number; dy: number }): R
 function Mouth({ state }: { state: CompanionState }): React.JSX.Element {
   if (state === 'working' || state === 'writing') return <ellipse cx="60" cy="67" rx="2.6" ry="2" fill={NOSE} opacity="0.7" />
   if (state === 'concerned') return <path d="M56 68 q4 -1.5 8 0" stroke={NOSE} strokeWidth="1.8" fill="none" strokeLinecap="round" />
-  if (state === 'celebrating' || state === 'greeting' || state === 'happy' || state === 'quietlyExcited') return <path d="M54 65 q6 6 12 0" stroke={NOSE} strokeWidth="2" fill="none" strokeLinecap="round" />
+  if (state === 'celebrating' || state === 'greeting' || state === 'happy' || state === 'quietlyExcited' || state === 'petted') return <path d="M54 65 q6 6 12 0" stroke={NOSE} strokeWidth="2" fill="none" strokeLinecap="round" />
   if (state === 'sleeping') return <line x1="57" y1="67" x2="63" y2="67" stroke={NOSE} strokeWidth="1.6" strokeLinecap="round" />
   if (state === 'stretching') return <ellipse cx="60" cy="66" rx="3.4" ry="3.2" fill={NOSE} opacity="0.85" />
   return <path d="M56 66 q4 3 8 0" stroke={NOSE} strokeWidth="1.8" fill="none" strokeLinecap="round" />

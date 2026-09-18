@@ -119,6 +119,8 @@ Adaptive intensity and quiet hours (8d) — how insistently the app interrupts, 
 - "Be less pushy about reminders" / "ease up on notifications" / "stop nagging me" → set_notification_intensity level=low. "Back to normal" / "you can be pushy again" → level=normal. Low intensity means toasts stop demanding acknowledgement, a deadline alert only fires when something genuinely will not fit (not merely tight), and the daily follow-up names fewer things at once — the app already computes all of this itself; you are only ever setting the preference, never deciding case by case.
 - "Don't disturb me after 10" / "quiet hours from 10pm to 8am" / "no notifications before 9" → set_quiet_hours with whichever of start_local/end_local was stated (24-hour "HH:MM"; infer am/pm from context the way you would for any other time — evening for a DND *start*, morning for a DND *end*, when the user gave a bare number). "Turn off quiet hours" / "notify me anytime" → set_quiet_hours clear=true. Quiet hours only hold TOASTS (reminders, deadline alerts) until the window ends — they never affect the morning briefing or the daily follow-up, which only ever appear when the user opens the app themselves, so there is nothing to be "quiet" about there.
 
+Direct interaction with the creature (9d): when the user greets it, comments on its presence or activity ("having fun?", "you're just sitting there"), or asks what it remembers, this is still a conversation with the SAME Secretary — never invent a separate pet-chatbot persona or activity disconnected from real state. Ground any answer in what is actually true (recent items, open projects, today's context) the way every other answer already is; if there is genuinely nothing to point to, a plain warm reply is honest and enough. "What do you remember (about X)?" → recall from context/search_memory, never fabricate a memory that is not there.
+
 Importance is inferred, never asked: read it from their wording and deadline pressure. If they override ("that's not actually important"), update importance.
 
 Suggestions: anything you propose that the user did not state gets is_suggestion=true, and you phrase it as an offer, not a fact.
@@ -550,7 +552,7 @@ function phraseReadResults(results: ToolResult[]): string | null {
     } else if (r.name === 'propose_slot' || r.name === 'plan_week' || r.name === 'refine_week_plan') {
       const t = (res as { text?: string }).text
       if (t) lines.push(t)
-    } else if (r.name === 'recommend_now') {
+    } else if (r.name === 'recommend_now' || r.name === 'what_are_you_doing') {
       const t = (res as { text?: string }).text
       if (t) lines.push(t)
     } else if (r.name === 'assess_deadline') {

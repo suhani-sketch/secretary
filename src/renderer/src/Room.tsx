@@ -55,11 +55,13 @@ interface Props {
   time: TimeChoice
   /** Living activities (Phase 5): 'cooking' puts a small kitchen object in the room and the creature beside it. */
   happening: 'focus' | 'cooking' | 'waiting' | null
+  /** Direct interaction (9d) — clicking the creature itself, for no functional reason. */
+  onPet: () => void
   onChangeEnvironment: (e: EnvironmentId) => void
   onChangeTime: (t: TimeChoice) => void
 }
 
-export function Room({ state, gaze, environment, time, happening, onChangeEnvironment, onChangeTime }: Props): React.JSX.Element {
+export function Room({ state, gaze, environment, time, happening, onPet, onChangeEnvironment, onChangeTime }: Props): React.JSX.Element {
   const [hour, setHour] = useState(new Date().getHours())
   useEffect(() => {
     const t = setInterval(() => setHour(new Date().getHours()), 60_000)
@@ -205,7 +207,8 @@ export function Room({ state, gaze, environment, time, happening, onChangeEnviro
           transition: 'left .7s cubic-bezier(.4,0,.2,1), top .7s cubic-bezier(.4,0,.2,1), width .7s ease'
         }}
       >
-        <div style={{ width: '100%', aspectRatio: '1 / 1' }}>
+        {/* clicking is its own interaction (9d) — no functional purpose, just because the user likes to */}
+        <div style={{ width: '100%', aspectRatio: '1 / 1', cursor: 'pointer' }} onClick={onPet} role="button" aria-label="Pet the creature" title="Say hello">
           <Companion state={state} gaze={gaze} dim={L.dim} pose={pose} />
         </div>
       </div>

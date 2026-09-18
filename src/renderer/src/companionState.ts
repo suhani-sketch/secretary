@@ -36,6 +36,7 @@ export type CompanionState =
   | 'recovering'
   | 'stretching'
   | 'tea'
+  | 'petted'
 
 /** Where the creature looks. Eye contact ("viewer") is rare and meaningful. */
 export type Gaze = 'viewer' | 'away' | 'desk' | 'window' | 'closed'
@@ -51,6 +52,8 @@ export interface Signals {
   celebrateAt: number
   /** A small, ordinary completion — a task ticked off, a wait resolved — never as much as a full celebration. */
   quietlyExcitedAt: number
+  /** The user clicked/petted the creature directly (9d) — interaction for its own sake, no functional purpose. */
+  pettedAt: number
   greetAt: number
   /** The user spoke to the creature directly ("hey", "thank you", "you"). */
   addressedAt: number
@@ -67,7 +70,7 @@ export interface Signals {
   happening: 'focus' | 'cooking' | 'waiting' | null
 }
 
-const DUR = { celebrating: 2600, greeting: 2400, happy: 1400, quietlyExcited: 1800, concerned: 6000, recovering: 1400, awake: 1200 }
+const DUR = { celebrating: 2600, greeting: 2400, happy: 1400, quietlyExcited: 1800, petted: 1700, concerned: 6000, recovering: 1400, awake: 1200 }
 const MIN_DWELL = 700
 /** Ambient pose rotation: one change every 3–6 minutes, deterministic per slot so a re-render never jumps. */
 const AMBIENT_SLOT_MS = 4 * 60 * 1000
@@ -123,6 +126,9 @@ export function resolveState(s: Signals, now: number): { state: CompanionState; 
   // 2. Momentary states with fixed durations — biggest news wins when more than one is still live.
   if (now - s.celebrateAt < DUR.celebrating) return { state: 'celebrating', gaze: 'viewer' }
   if (now - s.greetAt < DUR.greeting) return { state: 'greeting', gaze: 'viewer' }
+  // Direct interaction (9d) — clicking it is deliberate, so it outranks the ordinary "something happened" blips
+  // below, but never a real process or genuine news (celebrating/greeting already returned above this).
+  if (now - s.pettedAt < DUR.petted) return { state: 'petted', gaze: 'viewer' }
   if (now - s.quietlyExcitedAt < DUR.quietlyExcited) return { state: 'quietlyExcited', gaze: now - s.addressedAt < 15000 ? 'viewer' : 'away' }
   if (now - s.lastAppliedAt < DUR.happy) return { state: 'happy', gaze: now - s.addressedAt < 15000 ? 'viewer' : 'away' }
   if (now - s.concernedAt < DUR.concerned) return { state: 'concerned', gaze: 'desk' }
@@ -145,7 +151,7 @@ export function resolveState(s: Signals, now: number): { state: CompanionState; 
   return { state: pose, gaze }
 }
 
-const EYE_CONTACT = new Set<CompanionState>(['greeting', 'celebrating', 'happy', 'quietlyExcited', 'listening'])
+const EYE_CONTACT = new Set<CompanionState>(['greeting', 'celebrating', 'happy', 'quietlyExcited', 'listening', 'petted'])
 
 export function useCompanion(signals: Signals, force?: CompanionState | null): { state: CompanionState; gaze: Gaze } {
   const [out, setOut] = useState<{ state: CompanionState; gaze: Gaze }>({ state: 'idle', gaze: 'away' })
@@ -196,7 +202,7 @@ export function useCompanion(signals: Signals, force?: CompanionState | null): {
       if (timer) clearTimeout(timer)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signals.chat.kind, signals.typing, signals.recording, signals.lastAppliedAt, signals.celebrateAt, signals.quietlyExcitedAt, signals.greetAt, signals.addressedAt, signals.concernedAt, signals.waitingOpen, signals.hour, signals.happening, signals.lastToolNames.join(','), force])
+  }, [signals.chat.kind, signals.typing, signals.recording, signals.lastAppliedAt, signals.celebrateAt, signals.quietlyExcitedAt, signals.pettedAt, signals.greetAt, signals.addressedAt, signals.concernedAt, signals.waitingOpen, signals.hour, signals.happening, signals.lastToolNames.join(','), force])
 
   return out
 }

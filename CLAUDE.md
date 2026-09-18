@@ -3,8 +3,8 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 9 — The living world. 9a (the room as a place), 9b (the creature as a character system) and
-9c (autonomous ambient behaviour) built, testable; 9d–9i (direct interaction, rare initiation, real-memory
+## Current phase: Phase 9 — The living world. 9a (the room as a place), 9b (the creature as a character system),
+9c (autonomous ambient behaviour) and 9d (direct interaction) built, testable; 9e–9i (rare initiation, real-memory
 familiarity, room persistence, coherent product language, micro-interactions) not started. **Phase 8 — Proactivity is COMPLETE.** 8a (morning briefing), 8b (approaching-deadline alerts), 8c
 (missed-task and waiting-item follow-up), 8d (adaptive intensity, quiet hours) built and tested; SPEC.md's own Phase 8 line
 has no lettered slices at all (8a–8d were this session's own organisational split, not spec text) — "conversational
@@ -15,6 +15,51 @@ passed outright; 3 genuine bugs found (a forward-looking reluctance statement me
 instead of empathy+alternative; "move it"/"cancel the reminder" reused the last-focused item's id as the wrong entity type
 and threw instead of rerouting/answering gracefully; a bare-day move on an exact-time item silently dropped the time) — all
 three FIXED and re-verified live + via direct DB read on a fresh scratch DB (see their own section below).**
+
+## Phase 9d — direct interaction (2026-09-18)
+- **Two genuinely different kinds of interaction, kept genuinely separate.** Spec 9d lists "click the creature"
+  as its own item, distinct from the seven things the user can ASK (what is it doing, greet it, plan, what it
+  remembers, help, sit with them, comment on its activity) — clicking is the "because I like it" interaction with
+  no functional purpose, so it stays client-only, free, and instant (a new `petted` state, no chat message, no DB
+  write); the seven asks are real requests, so they go through the SAME chat pipeline as everything else, most of
+  them now as new zero-model-call tier-0 rules rather than a bespoke reply system, per this app's own "not a
+  separate pet chatbot" line.
+- **Click → `petted`, a genuinely new state, not a recolour of `happy`.** `Room.tsx` gained an `onPet` callback,
+  wired in `App.tsx` to a new `pettedAt` signal exactly like the other momentary signals (`celebrateAt`,
+  `quietlyExcitedAt`) already work, so it inherits the SAME dwell/priority machinery for free — ranked just below
+  `celebrating`/`greeting` (real news still wins) but above `quietlyExcited`/`happy` (a deliberate interaction
+  outranks an incidental one). Visually: warm smile, ears up, flushed cheeks, direct eye contact, and the same
+  one-shot bounce `quietlyExcited` already uses. Clicking while the creature is asleep naturally triggers the
+  EXISTING 9b `awake` bridge with no new code — `petted` simply is not in `AMBIENT_STATES`, exactly like any other
+  real interruption.
+- **"What are you doing?" is answered from the truth, not invented — and that truth only exists in the main
+  process, not the renderer's ambient animation.** A new read tool, `what_are_you_doing`, deliberately does NOT try
+  to describe the live SVG pose (stretching, gazing out a window) — the backend has no visibility into that at all,
+  and inventing an answer from a *different* source of truth than what is actually shown would be exactly the
+  "separate pet chatbot" the spec warns against. Instead it answers from real Secretary state, in priority order: a
+  running happening ("Sitting with you while you focus — a 25 minute focus session."), then overdue items ("Keeping
+  an eye on things — 1 thing overdue..."), then the last thing actually discussed (the focus stack), then a calm
+  "Just here. Nothing pressing right now." Tier-0 router rule, zero model calls; clicking is NOT wired to also ask
+  this (they stay the two separate interactions spec lists them as).
+- **Three more tier-0 rules, all zero model calls, all reusing the existing REPLY mechanism:** a bare greeting
+  ("hi"/"hey"/"hello" alone) → a warm one-liner instead of spending a model call on two words; "help"/"what can you
+  do?" → an honest, short capability summary (not a tool dump); "sit with me while I work"/"keep me company" → a
+  warm acknowledgement that writes NOTHING (invariant 9 — a companionship request is not a task or a happening,
+  confirmed empty against a fresh scratch database after triggering it, not assumed).
+- **Everything looser is left to the model, with one new prompt section**, not a new deterministic rule: greeting
+  with more than a bare word, commenting on the creature's activity or presence, "what do you remember" — the
+  orchestrator prompt now says explicitly that this is still the SAME Secretary, never a separate pet persona, and
+  to ground any answer in real context/search_memory rather than invent one. "Initiate a planning conversation" was
+  already fully supported (plan_week, 7g) — nothing new needed there.
+- **Verified by screenshot** (`petted`, forced via the dev hook) and by a scripted chat run covering all four new
+  tier-0 rules in one pass, all logged at 0 model calls: bare "hey" → the greeting line; "help" → the capability
+  summary; "what are you doing?" with nothing going on → the calm default; the same question again after manually
+  creating an overdue task → correctly switched to naming it; the same question again after starting a real focus
+  happening → correctly switched to naming that instead. "Will you sit with me while I work" verified via direct
+  query to write zero new rows to `happenings` or `items`.
+- **Not built here** (later Phase 9 slices, not 9d's scope): the creature still never speaks first (9e); nothing
+  about this interaction is remembered as "familiar" across sessions in a special way (9f) beyond what search_memory
+  already does; no visual click affordance beyond `cursor: pointer` and a title tooltip.
 
 ## Phase 9c — autonomous ambient behaviour (2026-09-18)
 - **The slot-level ambient rotation already existed (Phase 4/9b)** — this slice is specifically about closing the

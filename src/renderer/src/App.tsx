@@ -170,6 +170,7 @@ export default function App(): React.JSX.Element {
   const [lastAppliedAt, setLastAppliedAt] = useState(0)
   const [celebrateAt, setCelebrateAt] = useState(0)
   const [quietlyExcitedAt, setQuietlyExcitedAt] = useState(0)
+  const [pettedAt, setPettedAt] = useState(0)
   const [greetAt, setGreetAt] = useState(0)
   const [addressedAt, setAddressedAt] = useState(0)
   const [concernedAt, setConcernedAt] = useState(0)
@@ -559,6 +560,7 @@ export default function App(): React.JSX.Element {
       lastAppliedAt,
       celebrateAt,
       quietlyExcitedAt,
+      pettedAt,
       greetAt,
       addressedAt,
       concernedAt,
@@ -641,6 +643,7 @@ export default function App(): React.JSX.Element {
           happening={happeningKind}
           environment={environment}
           time={timeChoice}
+          onPet={() => setPettedAt(Date.now())}
           onChangeEnvironment={(e) => {
             setEnvironment(e)
             void window.api.setSetting('scene.environment', e)

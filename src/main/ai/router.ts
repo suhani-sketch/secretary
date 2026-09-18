@@ -533,6 +533,33 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     return [{ name: 'get_forgetting', args: {} }]
   }
 
+  // ---- "what are you doing?" (9d direct interaction) — the honest, grounded answer, never invented flavour ----
+  if (/^(?:so,? |hey,? |ok,? )?what(?:'?re| are) you (?:doing|up to)(?: right now)?\??$/.test(text) || /^what'?s up\??$/.test(text)) {
+    return [{ name: 'what_are_you_doing', args: {} }]
+  }
+
+  // ---- a bare greeting, nothing else — warm and instant, no need to spend a model call on "hi" (9d) ----
+  if (/^(?:hi|hey|hello|hiya|yo|good morning|good evening|good afternoon|morning|evening)[.!]?$/.test(text)) {
+    return [{ name: REPLY, args: { text: 'Hey — good to see you.' } }]
+  }
+
+  // ---- "help" / "what can you do?" (9d) — a genuine, honest capability summary, not a tool list ----
+  if (/^(?:help|what can you do|what do you do|how (?:do|can) you help|what can i ask you)\??$/.test(text)) {
+    return [
+      {
+        name: REPLY,
+        args: {
+          text: "I keep track of your tasks, deadlines and promises, remind you, plan your week, and can tell you what's overdue or what to do next. Just talk to me normally — \"remind me to...\", \"what should I do now?\", \"plan my week\" all work."
+        }
+      }
+    ]
+  }
+
+  // ---- "sit with me while I work" / "keep me company" (9d) — a warm acknowledgement, no happening, no task ----
+  if (/^(?:(?:will you |can you |could you )?(?:sit|stay) with me(?: while i work| during focus)?|keep me company(?: while i work)?|stay here (?:a )?(?:while|bit))\.?$/.test(text)) {
+    return [{ name: REPLY, args: { text: "Sitting right here with you." } }]
+  }
+
   // ---- "note for thursday: bring the signed copy" → a note on that DATE (information, never a task) ----
   if ((m = /^(?:add (?:a )?)?note (?:for|on|about) (today|tomorrow|(?:this |next )?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|the \d{1,2}(?:st|nd|rd|th)?(?: of \w+)?|\w+ \d{1,2}(?:st|nd|rd|th)?)\s*[:\-–—,]\s*(.+)$/.exec(text))) {
     const when = parseWhen(m[1])

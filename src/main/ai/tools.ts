@@ -393,7 +393,8 @@ export const toolSchemas = {
   search_memory: z.object({ query: z.string().min(1).max(200).describe('Words to look for in titles and details.') }),
   search_activity: z.object({ item_id: idRef.optional(), query: z.string().max(200).optional() }).describe('History: what happened to an item, or recent activity matching words.'),
   get_today: z.object({}),
-  get_upcoming: z.object({ days: z.number().int().min(1).max(60).optional().describe('Default 7.') })
+  get_upcoming: z.object({ days: z.number().int().min(1).max(60).optional().describe('Default 7.') }),
+  what_are_you_doing: z.object({}).describe('"What are you doing?" / "what are you up to?" — an honest answer grounded in real state (a running happening, the focus stack, overdue count), never invented pet-chatbot flavour. Phrased by the app.')
 } as const
 
 export type ToolName = keyof typeof toolSchemas
@@ -464,7 +465,8 @@ const descriptions: Record<ToolName, string> = {
   search_memory: 'Search saved items by keyword when the context above does not already include what you need.',
   search_activity: 'What has happened: history for an item, or recent activity matching words.',
   get_today: 'List what is due or overdue today.',
-  get_upcoming: 'List open items due in the next N days.'
+  get_upcoming: 'List open items due in the next N days.',
+  what_are_you_doing: '9d direct interaction — "what are you doing?", "what are you up to?", clicking the creature. Answer with the truth: a running happening, what is still overdue, or what was last discussed — never a made-up pet-chatbot activity disconnected from real state.'
 }
 
 const WRITE_TOOLS: ReadonlySet<string> = new Set([
@@ -2253,6 +2255,27 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const now = DateTime.local()
       const items = repo.itemsDueBetween(now.toUTC().toISO()!, now.plus({ days: x.days ?? 7 }).toUTC().toISO()!)
       return { result: { items: items.map(publicItem) } }
+    }
+    case 'what_are_you_doing': {
+      // 9d "direct interaction": the honest answer, grounded in the same state the rest of the app already
+      // computes — never a separate pet-chatbot activity invented for the occasion. Priority: a real happening
+      // running right now > overdue items needing attention > the last thing actually discussed > a calm default.
+      const running = repo.runningHappenings()
+      const nowIso = new Date().toISOString()
+      const overdue = repo.openItemsOverdue(nowIso, 5)
+      const focused = getFocus()[0]
+      let text: string
+      if (running.length) {
+        const h = running[0]
+        text = h.metaphor === 'focus' ? `Sitting with you while you focus — ${h.label}.` : `${h.label[0].toUpperCase()}${h.label.slice(1)}, actually.`
+      } else if (overdue.length) {
+        text = `Keeping an eye on things — ${plural(overdue.length, 'thing')} overdue, "${overdue[0].title}" among them.`
+      } else if (focused) {
+        text = `Still thinking about "${focused.title}" from a moment ago. Otherwise, just here.`
+      } else {
+        text = 'Just here. Nothing pressing right now.'
+      }
+      return { result: { running: running.map((h) => h.label), overdue: overdue.length, text } }
     }
   }
 }
