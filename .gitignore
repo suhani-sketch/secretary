@@ -25,3 +25,7 @@ Thumbs.db
 
 # TypeScript incremental cache
 *.tsbuildinfo
+
+# Provisional scene assets — the properly segmented foreground has not landed yet.
+# Keep on disk (renderer needs it) but never commit an imperfect extraction.
+resources/scenes/library/library.foreground.png
