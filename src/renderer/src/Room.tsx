@@ -120,16 +120,23 @@ export function Room({ state, gaze, environment, time, happening, onPet, onChang
   // Five real positions, each tied to a piece of furniture the creature actually occupies (spec 9a) — never a bare
   // spot on the floor. Scale rises slightly for anything nearer the viewer (further down the receding floor), the
   // same forced-perspective cue the floor itself uses, so the creature's own size stays honest to where it is sitting.
+  /* Product-thesis reshape (2026-09-19): the default idle position moved upstage on the floor, and scaled down
+     slightly, so the creature reads as inhabiting the room rather than posing at the very front of the frame.
+     Furniture positions unchanged — those already sit naturally on the floor plane. */
   const spot =
     pose === 'desk' ? { x: 60, y: 610, s: 0.88 } // at the desk chair, facing the laptop
     : pose === 'read' ? { x: 138, y: 420, s: 0.82 } // sitting in the reading armchair
     : pose === 'window' ? { x: 22, y: 249, s: 0.74 } // perched on the window bench
     : pose === 'curl' ? { x: 10, y: 765, s: 0.78 } // asleep in the nest
     : pose === 'kitchen' ? { x: 82, y: 692, s: 0.95 }
-    : { x: 132, y: 685, s: 1 } // the open rug — nothing in particular, just here
+    : { x: 128, y: 620, s: 0.92 } // the open rug — upstage on the floor, part of the room's depth
 
   return (
-    <div className="relative h-full w-full rounded-3xl overflow-hidden shadow-inner" style={{ background: L.wall, transition: 'background 2s ease' }}>
+    /* Product-thesis reshape (2026-09-19): no rounded outline, no inner shadow, no distinct wall colour — the
+       room bleeds into the world. Cream page background shows through wherever no furniture, floor, window or
+       creature is drawn. The window frame is now the only rectangular element in the room, exactly as intended:
+       the window is the frame IN the world, not the frame OF the world. */
+    <div className="relative h-full w-full">
       <svg viewBox="0 0 260 900" preserveAspectRatio="xMidYMax meet" className="absolute inset-0 w-full h-full" aria-hidden>
         <defs>
           <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
@@ -154,9 +161,10 @@ export function Room({ state, gaze, environment, time, happening, onPet, onChang
           </pattern>
         </defs>
 
-        {/* back wall, full height — everything else sits in front of this one plane */}
-        <rect x="0" y="0" width="260" height="900" fill={L.wall} style={{ transition: 'fill 2s ease' }} />
-        <rect x="0" y="0" width="260" height="900" fill={L.wall2} opacity="0.35" />
+        {/* No wall rectangle — the page cream shows through, so the room bleeds into the world instead of
+            reading as a framed illustration. A single very-soft warm wash covers where the wall used to be, so
+            the room still has *some* atmospheric warmth against the outside cream. */}
+        <rect x="0" y="0" width="260" height="900" fill={L.wall2} opacity="0.18" />
 
         {/* the window zone — unchanged from Phase 4: view, shelf, books, plant */}
         <g transform="translate(0 60)">

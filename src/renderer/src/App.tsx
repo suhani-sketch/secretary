@@ -774,7 +774,7 @@ export default function App(): React.JSX.Element {
   }, [companion.state, companion.gaze, creatureSeed, hour])
 
   return (
-    <div className="h-full flex flex-col gap-3 p-5 overflow-hidden">
+    <div className="h-full flex flex-col gap-2 px-5 pt-3 pb-4 overflow-hidden">
       {/* SURFACES (spec §7): Conversation is home; Calendar, Things and Settings are their own full-width screens. */}
       <nav className="flex items-center gap-1 text-sm" aria-label="Surfaces">
         {(
@@ -849,7 +849,7 @@ export default function App(): React.JSX.Element {
       )}
 
       {surface === 'conversation' && (
-      <div className="flex-1 min-h-0 grid grid-cols-[minmax(380px,1.2fr)_minmax(0,1.6fr)_minmax(300px,0.85fr)] gap-6 overflow-hidden">
+      <div className="flex-1 min-h-0 grid grid-cols-[minmax(380px,1.2fr)_minmax(0,1.6fr)_minmax(280px,0.85fr)] gap-8 overflow-hidden">
       {/* THE WORLD — room + creature, no rounded outline; the creature's environment is the ground the page sits on */}
       <aside className="relative overflow-hidden">
         <Room
@@ -912,19 +912,19 @@ export default function App(): React.JSX.Element {
           </div>
         )}
 
-        <div ref={scrollRef} className="flex-1 overflow-y-auto py-4 pr-2 flex flex-col gap-3">
+        <div ref={scrollRef} className="flex-1 overflow-y-auto py-3 pr-1 flex flex-col gap-4">
           {messages.length === 0 && (
-            <p className="text-sm text-stone-400 m-auto text-center max-w-sm">
+            <p className="text-sm text-ash italic m-auto text-center max-w-sm">
               Tell me what's on your mind. "Remind me to call the bank Thursday at 3", "the CV is done", "actually make it 4", "undo that".
             </p>
           )}
           {messages.map((m) => (
             <Bubble key={m.id} m={m} creatureName={creatureName} />
           ))}
-          {status.kind !== 'idle' && <div className="self-start rounded-2xl bg-paper px-4 py-2 text-sm text-stone-500 animate-pulse">…</div>}
+          {status.kind !== 'idle' && <span className="self-start text-sm text-ash italic animate-pulse">…</span>}
         </div>
 
-        <div className="mt-3 rounded-2xl bg-white shadow-sm flex items-end gap-2 p-2">
+        <div className="mt-3 border-t border-paper-2 flex items-end gap-2 py-2">
           <textarea
             ref={inputRef}
             value={draft}
@@ -948,7 +948,7 @@ export default function App(): React.JSX.Element {
             disabled={!recording && status.kind !== 'idle'}
             title={recording ? 'Stop and send' : 'Record a voice message — speaks straight into the same extraction pipeline as typing'}
             aria-pressed={recording}
-            className={`rounded-xl px-3 py-2 text-sm disabled:opacity-30 ${recording ? 'bg-rose-600 text-white animate-pulse' : 'bg-white text-cocoa hover:bg-paper'}`}
+            className={`rounded-xl px-3 py-2 text-sm disabled:opacity-30 ${recording ? 'bg-accent text-cream animate-pulse' : 'text-cocoa hover:bg-paper'}`}
           >
             {recording ? `⏺ ${recordSeconds}s` : '🎤'}
           </button>
@@ -959,13 +959,15 @@ export default function App(): React.JSX.Element {
         {flash && <p key={flashSeq} className="mt-2 text-xs text-stone-500 flash-in">{flash}</p>}
       </main>
 
-      {/* THINGS THE SECRETARY IS KEEPING AN EYE ON — one column, four sections, calm visual language (spec §7). */}
-      <aside className="flex flex-col gap-5 min-h-0 overflow-y-auto pr-1">
+      {/* Right side — "what the Secretary is currently aware of." Not a rail with card-sections; a quiet column
+          of context text on the same warm world. Tight vertical rhythm; small tracked labels are the only
+          section markers. */}
+      <aside className="flex flex-col gap-3 min-h-0 overflow-y-auto pr-1 text-[13px]">
         {!showDebug ? (
           <>
             {(overdueItems.length > 0 || happenings.some((h) => h.state === 'running')) && (
-              <section className="flex flex-col gap-2 min-h-0">
-                <h2 className="text-[11px] font-medium uppercase tracking-[0.14em] text-amber-900/70">Now</h2>
+              <section className="flex flex-col gap-1.5 min-h-0">
+                <h2 className="text-[10px] font-medium uppercase tracking-[0.18em] text-amber-800/70">Right now</h2>
                 <ul className="flex flex-col gap-1">
                   {overdueItems.slice(0, 8).map((it) => (
                     <li key={it.id} className={`item-in group text-sm flex items-start gap-2 rounded-lg px-1 py-1 hover:bg-white/40 cursor-pointer ${completingIds.has(it.id) ? 'completing' : ''}`} onClick={() => setEditing({ kind: 'item', item: it })}>
@@ -989,8 +991,8 @@ export default function App(): React.JSX.Element {
                 </ul>
               </section>
             )}
-            <section className="flex flex-col gap-2 min-h-0">
-              <h2 className="text-[11px] font-medium uppercase tracking-[0.14em] text-stone-500">Up next</h2>
+            <section className="flex flex-col gap-1.5 min-h-0">
+              <h2 className="text-[10px] font-medium uppercase tracking-[0.18em] text-ash">Coming up</h2>
               {upcoming.length === 0 && <p className="text-sm text-stone-400">Nothing dated, no alarms set.</p>}
               <ul className="flex flex-col gap-1 overflow-y-auto">
                 {upcoming.slice(0, 10).map((u) => (
@@ -1027,8 +1029,8 @@ export default function App(): React.JSX.Element {
             </section>
             <RightNow happenings={happenings} onFinish={(id, outcome) => void quick('finish_happening', { id, outcome })} />
             {deadlineItems.length > 0 && (
-              <section className="flex flex-col gap-2 min-h-0">
-                <h2 className="text-[11px] font-medium uppercase tracking-[0.14em] text-stone-500">Deadlines</h2>
+              <section className="flex flex-col gap-1.5 min-h-0">
+                <h2 className="text-[10px] font-medium uppercase tracking-[0.18em] text-ash">Deadlines</h2>
                 <ul className="flex flex-col gap-1">
                   {deadlineItems.slice(0, 6).map((it) => (
                     <li key={it.id} className={`item-in group text-sm flex items-start gap-2 rounded-lg px-1 py-1 hover:bg-white/40 cursor-pointer ${completingIds.has(it.id) ? 'completing' : ''}`} onClick={() => setEditing({ kind: 'item', item: it })}>
@@ -1044,7 +1046,7 @@ export default function App(): React.JSX.Element {
             )}
             {constraints.length > 0 && (
               <section className="flex flex-col gap-1 min-h-0">
-                <h2 className="text-[11px] font-medium uppercase tracking-[0.14em] text-stone-500">Unavailable · preferences</h2>
+                <h2 className="text-[10px] font-medium uppercase tracking-[0.18em] text-ash">Unavailable · preferences</h2>
                 <ul className="flex flex-col gap-0.5 overflow-y-auto">
                   {constraints.slice(0, 8).map((c) => (
                     <li key={c.id} className="group text-xs flex items-center gap-2 rounded-lg px-1 py-0.5 hover:bg-white/80">
@@ -1074,8 +1076,8 @@ export default function App(): React.JSX.Element {
               </section>
             )}
             {waitingItems.length > 0 && (
-              <section className="flex flex-col gap-2 min-h-0">
-                <h2 className="text-[11px] font-medium uppercase tracking-[0.14em] text-sky-900/70">Waiting</h2>
+              <section className="flex flex-col gap-1.5 min-h-0">
+                <h2 className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-soft">Waiting for</h2>
                 <ul className="flex flex-col gap-1 overflow-y-auto">
                   {waitingItems.map((w) => {
                     const late = isOverdue(w.due_at_utc, w.due_precision, now)
@@ -1110,9 +1112,9 @@ export default function App(): React.JSX.Element {
                 </ul>
               </section>
             )}
-            <section className="flex flex-col gap-2 min-h-0 flex-1">
-              <h2 className="text-[11px] font-medium uppercase tracking-[0.14em] text-stone-500">Open · {standalone.filter((i) => !i.is_suggestion).length}</h2>
-              {standalone.length === 0 && <p className="text-sm text-stone-400">Nothing open.</p>}
+            <section className="flex flex-col gap-1.5 min-h-0 flex-1 mt-1 pt-3 border-t border-paper-2/60">
+              <h2 className="text-[10px] font-medium uppercase tracking-[0.18em] text-ash">Also on the list · {standalone.filter((i) => !i.is_suggestion).length}</h2>
+              {standalone.length === 0 && <p className="text-sm text-ash italic">Nothing else on the list.</p>}
               <ul className="flex flex-col gap-1 overflow-y-auto">
                 {standalone.slice(0, 30).map((it) => (
                   <li
@@ -1220,29 +1222,53 @@ export default function App(): React.JSX.Element {
   )
 }
 
+/*
+ * Bubble rendering — visual reset (product-thesis reshape, 2026-09-19):
+ *   - System lines stay small centered pills (they're rare and their pill shape is fine).
+ *   - User voice keeps a pill (need role distinction, one user), but it's a compact deep-cocoa signature aligned
+ *     to the right — the user's voice is grounded and visible, not a scrollable log entry.
+ *   - Ordinary assistant text loses the pill entirely — it's just warm cocoa text on the world, reading as
+ *     spoken words on the shared surface. No hard border, no container, no chat-app grammar.
+ *   - Proactive lines (from the creature) get a distinct treatment: a soft-rose left rule, indented, with a small
+ *     dusty-rose creature glyph in the left margin. The message spatially originates from the creature's side
+ *     of the world; it's visibly not a chat bubble.
+ */
 function Bubble({ m, creatureName }: { m: UiMessage; creatureName?: string | null }): React.JSX.Element {
   if (m.role === 'system') {
-    return <div className="bubble-in self-center text-xs text-stone-500 bg-white/60 rounded-full px-3 py-1 max-w-[85%] truncate">{m.content}</div>
+    return <div className="bubble-in self-center text-xs text-ash bg-paper/70 rounded-full px-3 py-1 max-w-[85%] truncate">{m.content}</div>
   }
   const user = m.role === 'user'
-  return (
-    <div className={`flex flex-col gap-1 max-w-[85%] ${user ? 'self-end items-end' : 'self-start items-start'}`}>
-      {/* Attribution (creature-voice reshape): proactive lines come FROM the creature - a small warm glyph beside
-          the bubble makes that visible, without adding a name in the message itself. Ordinary tool replies stay
-          unattributed; only unsolicited ones (briefing/follow-up/deadline alert/initiation/naming) get the mark. */}
-      {!user && m.proactive && (
-        <div className="text-[10px] text-stone-500 flex items-center gap-1.5 mb-0.5">
-          <span aria-hidden className="inline-block w-4 h-4 rounded-full bg-mocha/25 text-cocoa flex items-center justify-center text-[9px]">◕</span>
-          <span className="italic">{creatureName ? `${creatureName}` : 'from the room'}</span>
+  if (user) {
+    return (
+      <div className="flex flex-col gap-1 max-w-[80%] self-end items-end">
+        <div className={`bubble-in rounded-2xl px-3.5 py-2 text-[15px] leading-relaxed whitespace-pre-wrap bg-cocoa-soft text-cream ${m.pending ? 'opacity-60' : ''}`}>
+          {m.content}
         </div>
-      )}
-      <div
-        className={`bubble-in rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap ${user ? 'bg-cocoa text-cream' : m.proactive ? 'bg-accent/15 text-cocoa' : 'bg-paper text-cocoa'} ${m.pending ? 'opacity-60' : ''}`}
-      >
+      </div>
+    )
+  }
+  if (m.proactive) {
+    return (
+      <div className="bubble-in self-start max-w-[90%] flex items-start gap-3 pl-1">
+        {/* Creature glyph — small, in the margin, dusty rose. This is the "proactive originates from the creature's side" cue. */}
+        <span aria-hidden className="mt-1 inline-flex items-center justify-center w-6 h-6 rounded-full bg-tan/60 text-cocoa text-[13px] shrink-0" title={creatureName ? `From ${creatureName}` : 'From the room'}>
+          ◕
+        </span>
+        <div className="flex-1 min-w-0 border-l-2 border-tan pl-3 py-0.5">
+          <div className="text-[15px] leading-relaxed text-cocoa whitespace-pre-wrap italic">{m.content}</div>
+          {creatureName && <div className="text-[10px] text-ash mt-0.5">— {creatureName}</div>}
+        </div>
+      </div>
+    )
+  }
+  // Ordinary assistant reply — plain warm text on the world, no pill.
+  return (
+    <div className="flex flex-col gap-1 max-w-[88%] self-start items-start">
+      <div className={`bubble-in text-[15px] leading-relaxed whitespace-pre-wrap text-cocoa ${m.pending ? 'opacity-60' : ''}`}>
         {m.content}
       </div>
       {m.applied && m.applied.length > 0 && (
-        <ul className="flex flex-col gap-0.5">
+        <ul className="flex flex-col gap-0.5 mt-0.5">
           {m.applied.map((a, i) => (
             <li key={i} className="text-xs text-emerald-800 flex items-center gap-1">
               <span>✓</span>
@@ -1251,8 +1277,8 @@ function Bubble({ m, creatureName }: { m: UiMessage; creatureName?: string | nul
           ))}
         </ul>
       )}
-      {!user && m.tier === 0 && !m.pending && !m.proactive && <span className="text-[10px] text-stone-400">instant · no model call</span>}
-      {m.error && <div className="text-xs text-red-700">{m.error}</div>}
+      {m.tier === 0 && !m.pending && <span className="text-[10px] text-ash-2/60">instant · no model call</span>}
+      {m.error && <div className="text-xs text-rose-900">{m.error}</div>}
     </div>
   )
 }

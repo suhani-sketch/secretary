@@ -3,54 +3,86 @@
 /* Named palette → Tailwind utilities (bg-cocoa, text-cream, bg-paper/70 …). Every colour the UI uses is a variable, so
    dark mode is one block of overrides on [data-theme="dark"], not a second set of class names. The room's art keeps its
    own colours: it is a picture, lit by its own time of day. */
+/*
+ * Colour system (product-thesis reshape, 2026-09-19): dusty blush world. The whole application sits on one warm
+ * blush plane (--color-cream), with soft-paper and secondary-warm-surface tokens for raised or muted areas. Text
+ * is muted cocoa; user voice is deep cocoa; the creature's voice signature is dusty rose. Accent hue is a dusty
+ * rose; secondary accents are warm wood/terracotta and muted mauve — no bubblegum, no pastel-candy, no
+ * high-saturation pink. The creature stays cocoa/taupe (its own SVG palette) so it reads as a visual anchor
+ * against the blush world.
+ */
 @theme {
-  --color-cream: #FAF6F0;
-  --color-cocoa: #3A2E28;
-  --color-accent: #B5836D;
-  --color-cocoa-soft: #5E4636;
-  --color-mocha: #8B6A55;
-  --color-paper: #F1E9DF;
-  --color-paper-2: #F3EADF;
-  --color-paper-3: #F3E9DD;
-  --color-paper-4: #F2EBDD;
-  --color-sand: #D8CDBF;
-  --color-ash: #8A8078;
-  --color-ash-2: #6E6259;
+  --color-cream: #F3E6E3;         /* page + world background */
+  --color-cocoa: #493B38;         /* primary text */
+  --color-accent: #B98288;        /* dusty rose accent — active tabs, creature glyph */
+  --color-cocoa-soft: #493733;    /* user bubble (deep cocoa) */
+  --color-mocha: #A97865;         /* warm wood / secondary accent */
+  --color-paper: #F7EEEC;         /* soft paper — inputs, hover surfaces */
+  --color-paper-2: #EAD8D5;       /* deeper warm surface — chips */
+  --color-paper-3: #EAD8D5;
+  --color-paper-4: #EAD8D5;
+  --color-sand: #E5D3D0;          /* dusty rose sand */
+  --color-ash: #766865;           /* secondary text */
+  --color-ash-2: #5E5251;         /* deeper secondary text */
   --color-pure: #FFFFFF;
-  --color-tan: #D9B79F;
-  --color-slate-soft: #8FA3B5;
-  --color-rust: #9C6E5A;
-  --color-ink-muted: #7a6a60;
-  --color-ink-muted-2: #8a7b6e;
+  --color-tan: #D5A8AA;           /* soft rose — proactive tint */
+  --color-slate-soft: #9C7F86;    /* muted mauve — waiting/constraints */
+  --color-rust: #A97865;          /* warm terracotta — furniture */
+  --color-ink-muted: #766865;
+  --color-ink-muted-2: #A4938F;
+  --color-warn-amber: #B88958;    /* quiet amber for urgency — used on the ⚠ glyph */
 }
 :root {
   --cream: var(--color-cream);
   --cocoa: var(--color-cocoa);
   --accent: var(--color-accent);
   color-scheme: light;
+  /* Tuned amber/rose scales for the dusty-blush world: default Tailwind amber-50 is #FEF3C7, which reads bright
+     yellow against a blush background — swap in warmer, softer tones. Calendar day-load surfaces and grammar
+     chips read the same way in light mode as they did before, just in the softer emotional palette. */
+  --color-amber-50: #F4E5CE;
+  --color-amber-100: #EBD6B4;
+  --color-amber-400: #C99358;
+  --color-amber-500: #B88958;
+  --color-amber-800: #8A6236;
+  --color-amber-900: #5E4224;
+  --color-rose-50: #F0DCDA;
+  --color-rose-100: #E8CBC9;
+  --color-rose-500: #C88E92;
+  --color-rose-900: #6E3E44;
+  /* Emerald stays gently used (calendar 'light' day status). Keep it soft and muted to fit the palette. */
+  --color-emerald-50: #E0EBDC;
+  --color-emerald-800: #556E4E;
+  --color-emerald-900: #3D5138;
+  /* Sky stays for the waiting-on section (a "cool secondary" balance to the warm world). Tuned muted. */
+  --color-sky-50: #DDE4EA;
+  --color-sky-900: #4A5A66;
 }
 /* Dark mode: the same warm room after the lamps come on. Stone/amber/rose/emerald scales are inverted so existing
    utilities (text-stone-500, bg-amber-50 …) keep their meaning — muted stays muted, a badge stays a badge. */
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --color-cream: #1B1715;
-  --color-cocoa: #EFE6DB;
-  --color-accent: #C99A82;
-  --color-cocoa-soft: #D9CCC0;
-  --color-mocha: #B08C74;
+  /* Dusty-rose after the lamps come on: deep warm charcoal world, warm cocoa surfaces, light dusty-rose text.
+     Same emotional palette as light mode, deeper values — not an inversion. */
+  --color-cream: #1E1A19;
+  --color-cocoa: #E9DBD7;
+  --color-accent: #B98288;
+  --color-cocoa-soft: #4B3B37;
+  --color-mocha: #A97865;
   --color-paper: #2A2320;
-  --color-paper-2: #2E2622;
-  --color-paper-3: #2E2622;
-  --color-paper-4: #2C2521;
-  --color-sand: #4A403A;
-  --color-ash: #9A8E85;
-  --color-ash-2: #B3A69C;
+  --color-paper-2: #322824;
+  --color-paper-3: #322824;
+  --color-paper-4: #322824;
+  --color-sand: #3A302E;
+  --color-ash: #A4938F;
+  --color-ash-2: #C5B4B0;
   --color-pure: #221D1A;
-  --color-tan: #7A5F49;
-  --color-slate-soft: #5F7588;
-  --color-rust: #9C6E5A;
-  --color-ink-muted: #A69A90;
-  --color-ink-muted-2: #A69A90;
+  --color-tan: #8A5B60;
+  --color-slate-soft: #9C7F86;
+  --color-rust: #A97865;
+  --color-ink-muted: #A4938F;
+  --color-ink-muted-2: #C5B4B0;
+  --color-warn-amber: #D8A15E;
   --color-white: #262120;
   --color-black: #F3ECE4;
   --color-stone-50: #1F1B19;
@@ -63,17 +95,19 @@
   --color-stone-700: #D6CBC1;
   --color-stone-800: #E8DFD6;
   --color-stone-900: #F3ECE4;
-  --color-amber-50: #33270F;
-  --color-amber-100: #3F3013;
-  --color-amber-300: #C89A3E;
-  --color-amber-400: #D8A94A;
-  --color-amber-700: #F0C46A;
-  --color-amber-800: #F5D289;
-  --color-amber-900: #F8DFA6;
-  --color-rose-50: #3A1F22;
-  --color-rose-100: #47262A;
-  --color-rose-500: #E28A96;
-  --color-rose-900: #F6C9D0;
+  /* Quiet amber → warm dusty amber that still reads as "attention" against the deep-warm world. */
+  --color-amber-50: #382C1D;
+  --color-amber-100: #443421;
+  --color-amber-300: #C89663;
+  --color-amber-400: #D6A570;
+  --color-amber-700: #E5B77E;
+  --color-amber-800: #EDC48F;
+  --color-amber-900: #F0CFA1;
+  /* Rose → dusty rose that mirrors the accent, never bubblegum. */
+  --color-rose-50: #3A2426;
+  --color-rose-100: #482A2E;
+  --color-rose-500: #C88E92;
+  --color-rose-900: #E9C0C4;
   --color-emerald-50: #16302A;
   --color-emerald-100: #1D3B33;
   --color-emerald-200: #2B5548;
@@ -195,4 +229,21 @@ button, [role="tab"], .rounded-full, .rounded-lg, .rounded-xl, .rounded-2xl, .ro
   animation-iteration-count: 1 !important;
   transition-duration: 0.01ms !important;
   scroll-behavior: auto !important;
+}
+
+/*
+ * The world's floor (product-thesis reshape, 2026-09-19): a very soft warm ochre gradient at the page's bottom
+ * third, so the room's floor visually continues under the conversation and rail. The creature stands on the
+ * same ground the chat sits on — this is the visible "one environment" cue. The gradient is applied to the body
+ * (not to any surface container) so every surface — Conversation, Calendar, Things, Settings — sits on the
+ * same shared ground. Kept extremely subtle so it never competes with content.
+ */
+body {
+  background:
+    linear-gradient(to bottom,
+      var(--color-cream) 0%,
+      var(--color-cream) 55%,
+      color-mix(in srgb, var(--color-rust) 8%, var(--color-cream)) 82%,
+      color-mix(in srgb, var(--color-rust) 12%, var(--color-cream)) 100%);
+  min-height: 100vh;
 }
