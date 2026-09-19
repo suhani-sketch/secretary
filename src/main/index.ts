@@ -1,4 +1,6 @@
-import { BrowserWindow, Notification, app, ipcMain, powerMonitor, session, shell } from 'electron'
+import { BrowserWindow, Notification, app, ipcMain, powerMonitor, protocol, session, shell } from 'electron'
+import { existsSync, statSync } from 'fs'
+import { promises as fsp } from 'fs'
 import { join } from 'path'
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { randomUUID } from 'crypto'
@@ -27,6 +29,21 @@ import { listAiCalls } from './log'
 // ---- Identity: required for Windows toasts, otherwise they vanish silently (spec §5) ----
 const APP_USER_MODEL_ID = 'com.suhani.secretary'
 app.setAppUserModelId(APP_USER_MODEL_ID)
+
+/**
+ * The `scene://` protocol serves illustrated scene assets (background/foreground PNGs, ambient SVGs) from the
+ * project's `resources/scenes/<sceneId>/` folder. Renderer references e.g. `scene://library/library.background.png`.
+ *
+ * Registration must run before `app.whenReady()` (privileged schemes) — the actual file resolution happens on
+ * ready. Files that don't exist return 404 quietly; the SceneRenderer treats a failed load as "no occlusion for
+ * this frame" and the world still renders. This means the Library scene runs today with only its background on
+ * disk; foreground can arrive any time later without a rebuild.
+ *
+ * Deliberately restricted to a single directory (`resources/scenes/`) — cannot be used to read anything else.
+ */
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'scene', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true, corsEnabled: true } }
+])
 
 // "--hidden" is passed by the Windows login entry so the app starts in the tray without a window.
 const startedHidden = process.argv.includes('--hidden')
@@ -392,6 +409,37 @@ function onReady(): void {
   // Voice (7a): Electron blocks getUserMedia by default; the mic button needs this to work at all. Scoped to this
   // app's own window only, and only the "media" (camera/mic) permission — nothing else is auto-granted.
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => callback(permission === 'media'))
+  // scene:// protocol handler — maps `scene://<sceneId>/<filename>` to `resources/scenes/<sceneId>/<filename>`.
+  // In dev app.getAppPath() is the project root; in production it's the app bundle. The resources/ folder
+  // lives at both locations. A file that doesn't exist returns a net error which the renderer treats as
+  // "no asset for this frame" — the world still renders (just without the missing layer).
+  const handled = protocol.handle('scene', async (req) => {
+    log('info', 'scene.request', req.url)
+    try {
+      const url = new URL(req.url)
+      const sceneId = url.host
+      const filename = url.pathname.replace(/^\/+/, '')
+      // Restrict to the resources/scenes tree; refuse anything with .. or absolute paths.
+      if (!/^[a-z0-9_-]+$/i.test(sceneId) || /[/\\]|\.\./.test(filename) || !/^[a-z0-9._-]+$/i.test(filename)) {
+        log('warn', 'scene.bad_path', `${sceneId}/${filename}`)
+        return new Response('Not found', { status: 404 })
+      }
+      const fullPath = join(app.getAppPath(), 'resources', 'scenes', sceneId, filename)
+      if (!existsSync(fullPath) || !statSync(fullPath).isFile()) {
+        log('warn', 'scene.not_found', fullPath)
+        return new Response('Not found', { status: 404 })
+      }
+      const buf = await fsp.readFile(fullPath)
+      const ext = filename.slice(filename.lastIndexOf('.') + 1).toLowerCase()
+      const contentType = ext === 'png' ? 'image/png' : ext === 'svg' ? 'image/svg+xml' : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : 'application/octet-stream'
+      log('info', 'scene.served', `${sceneId}/${filename} (${buf.length} bytes)`)
+      return new Response(buf, { status: 200, headers: { 'Content-Type': contentType, 'Cache-Control': 'no-cache' } })
+    } catch (e) {
+      log('warn', 'scene.fetch_failed', (e as Error).message)
+      return new Response('Not found', { status: 404 })
+    }
+  })
+  log('info', 'scene.protocol_registered', String(handled))
   openDatabase()
   backfillImportance()
   log('info', 'app.start', `v${app.getVersion()} electron ${process.versions.electron} hidden=${startedHidden} db=${dbPath()}`)

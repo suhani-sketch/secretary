@@ -1,6 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Companion, poseFor } from './Companion'
 import type { CompanionState, Gaze } from './companionState'
+import { sceneWithAssets } from './scenes'
+import { SceneRenderer } from './scenes/SceneRenderer'
+import type { WorldContext, SceneSpot, SceneActivityKind } from './scenes/SceneDefinition'
 
 /**
  * The room (spec §8 Phase 4, redone as a place in Phase 9a): a composed, layered environment the creature actually
@@ -116,10 +119,50 @@ export function Room({ state, gaze, environment, time, happening, onPet, onChang
   // Rotation (9g) picks the environment on its own, once a day, from favourites; a manual pick (below) turns it off.
   const activeEnvironment = rotation ? rotatedEnvironment(today, favorites) : environment
   const weather = weatherOverride ?? weatherForDate(today)
+  // World redesign (2026-09-19) — scene-with-assets short-circuit. All hooks below run every render regardless of
+  // which branch we take, so the hook-order rule is preserved when the scene switches.
+  const scene = sceneWithAssets(activeEnvironment)
+  const worldContext: WorldContext | null = useMemo(() => (scene ? { scene, lightBand: band, transition: null } : null), [scene, band])
   // While something cooks, an idle or window-gazing creature waits beside the kitchen object instead (spec Phase 5).
   const basePose = poseFor(state)
   const pose = happening === 'cooking' && (basePose === 'sit' || basePose === 'window') ? 'kitchen' : basePose
   const [menu, setMenu] = useState(false)
+
+  // World redesign — if the current scene has assets, render via SceneRenderer. Every existing hook above has
+  // already run; the branch happens after the hook block so the hook-order rule stays satisfied.
+  if (scene && worldContext) {
+    const preferredSpot = pickSceneSpot(scene.spots, mapStateToSceneActivity(state), restingSpot, scene.restingSpotMap)
+    const sceneGaze: Gaze =
+      preferredSpot.gaze === 'book' ? 'desk'
+      : preferredSpot.gaze === 'closed' ? 'closed'
+      : preferredSpot.gaze === 'window' ? 'window'
+      : preferredSpot.gaze === 'desk' ? 'desk'
+      : preferredSpot.gaze === 'viewer' ? 'viewer'
+      : preferredSpot.gaze === 'away-up' ? 'away'
+      : 'away'
+    return (
+      <div className="relative h-full w-full">
+        <SceneRenderer world={worldContext} state={state} gaze={sceneGaze} spot={{ x: preferredSpot.x, y: preferredSpot.y, scale: preferredSpot.scale }} onPet={onPet} />
+        {/* Preserve the scene menu so the user can still switch worlds (back to a legacy SVG environment or to
+            the same illustrated scene). Same visual pill as the legacy path. */}
+        <button className="absolute top-3 right-3 z-10 rounded-full bg-white/70 text-cocoa text-xs px-2 py-1 shadow-sm hover:bg-white" onClick={() => setMenu((v) => !v)}>
+          scene
+        </button>
+        {menu && (
+          <div className="absolute top-11 right-3 z-10 rounded-2xl bg-cream/95 shadow-lg p-3 text-xs flex flex-col gap-2 min-w-52" onMouseLeave={() => setMenu(false)}>
+            <div className="uppercase tracking-wide text-stone-500 text-[10px]">Scene</div>
+            <div className="grid grid-cols-2 gap-1">
+              {ENVIRONMENTS.map((e) => (
+                <button key={e.id} onClick={() => { setMenu(false); onChangeEnvironment(e.id) }} className={`px-2 py-1 rounded hover:bg-white/80 text-left ${activeEnvironment === e.id ? 'bg-white' : ''}`}>
+                  {e.emoji} {e.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
 
   // Five real positions, each tied to a piece of furniture the creature actually occupies (spec 9a) — never a bare
   // spot on the floor. Scale rises slightly for anything nearer the viewer (further down the receding floor), the
@@ -623,4 +666,66 @@ function Nest({ x, y, night }: { x: number; y: number; night: boolean }): React.
       <ellipse cx={x + 40} cy={y + 27} rx="30" ry="8" fill="#E7D9C9" opacity={night ? 0.7 : 0.9} />
     </g>
   )
+}
+
+/**
+ * Maps a CompanionState to the scene-scoped activity kind. Every ambient state resolves to something the scene's
+ * spot list understands. Kept small: the scene's behavior weights are the real driver of which activity a
+ * creature ends up doing; this function only bridges the SIGNALS-driven state machine to the scene's activity
+ * vocabulary. Unknown states fall through to 'idle'.
+ */
+function mapStateToSceneActivity(state: CompanionState): SceneActivityKind {
+  switch (state) {
+    case 'reading': return 'reading'
+    case 'writing': return 'writing'
+    case 'working': return 'working'
+    case 'looking': return 'looking'
+    case 'sleepy': return 'sleepy'
+    case 'sleeping': return 'sleeping'
+    case 'tea': return 'tea'
+    case 'stretching': return 'stretching'
+    case 'attentive':
+    case 'petted':
+    case 'greeting':
+    case 'listening':
+    case 'happy':
+    case 'celebrating':
+    case 'quietlyExcited':
+      return 'attentive'
+    case 'concerned':
+    case 'recovering':
+    case 'thinking':
+    case 'waiting':
+    case 'awake':
+    default:
+      return 'idle'
+  }
+}
+
+/**
+ * Picks the best scene spot for the current activity + personality preferences. Strategy:
+ *   1. Prefer any spot whose activity exactly matches the requested activity.
+ *   2. If multiple match, prefer the one whose furniture matches the personality's restingSpot mapping.
+ *   3. If no exact match, fall back to the personality's restingSpot mapping directly.
+ *   4. If that spot doesn't exist in this scene, fall back to 'rug-center' or the first spot in the list.
+ */
+function pickSceneSpot(
+  spots: SceneSpot[],
+  activity: SceneActivityKind,
+  restingSpot: 'nest' | 'armchair' | 'bench' | 'rug',
+  restingSpotMap: Record<string, string | undefined>
+): SceneSpot {
+  const exactMatches = spots.filter((s) => s.activity === activity)
+  if (exactMatches.length) {
+    // Bias toward the resting-spot-derived preference when multiple options exist.
+    const preferredId = restingSpotMap[restingSpot]
+    const preferred = preferredId ? exactMatches.find((s) => s.id === preferredId) : undefined
+    return preferred ?? exactMatches[0]
+  }
+  const restingSpotId = restingSpotMap[restingSpot]
+  if (restingSpotId) {
+    const spot = spots.find((s) => s.id === restingSpotId)
+    if (spot) return spot
+  }
+  return spots.find((s) => s.id === 'rug-center') ?? spots[0]
 }
