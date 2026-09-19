@@ -40,7 +40,7 @@ const levelColor: Record<string, string> = {
 }
 
 type Surface = 'conversation' | 'calendar' | 'things' | 'settings'
-type UiMessage = ChatMessage & { applied?: AppliedChange[]; error?: string | null; pending?: boolean }
+type UiMessage = ChatMessage & { applied?: AppliedChange[]; error?: string | null; pending?: boolean; proactive?: boolean }
 
 /**
  * Voice (spec §8 Phase 7 "Voice"): the browser's recorder only produces webm/opus in this app (Electron/Chromium), but
@@ -366,7 +366,11 @@ export default function App(): React.JSX.Element {
     // pushed directly rather than via a chatHistory refetch — appending by id can never race with or duplicate an
     // in-flight send the way overwriting the whole list from a refetch could.
     const offMessageAdded = window.api.onMessageAdded((message) => {
-      setMessages((m) => (m.some((x) => x.id === message.id) ? m : [...m, message]))
+      // Tag as proactive (from the creature) — anything arriving via this channel is a proactive assistant line
+      // (briefing 8a, follow-up 8c, deadline alert 8b, initiation 9e, naming 9g). Ordinary tool replies never
+      // come through here; they arrive as part of the sendChat response.
+      const tagged = { ...message, proactive: true } as UiMessage
+      setMessages((m) => (m.some((x) => x.id === message.id) ? m : [...m, tagged]))
     })
     const t = setInterval(() => void refresh(), 10000)
     return () => {
@@ -915,7 +919,7 @@ export default function App(): React.JSX.Element {
             </p>
           )}
           {messages.map((m) => (
-            <Bubble key={m.id} m={m} />
+            <Bubble key={m.id} m={m} creatureName={creatureName} />
           ))}
           {status.kind !== 'idle' && <div className="self-start rounded-2xl bg-paper px-4 py-2 text-sm text-stone-500 animate-pulse">…</div>}
         </div>
@@ -1216,15 +1220,24 @@ export default function App(): React.JSX.Element {
   )
 }
 
-function Bubble({ m }: { m: UiMessage }): React.JSX.Element {
+function Bubble({ m, creatureName }: { m: UiMessage; creatureName?: string | null }): React.JSX.Element {
   if (m.role === 'system') {
     return <div className="bubble-in self-center text-xs text-stone-500 bg-white/60 rounded-full px-3 py-1 max-w-[85%] truncate">{m.content}</div>
   }
   const user = m.role === 'user'
   return (
     <div className={`flex flex-col gap-1 max-w-[85%] ${user ? 'self-end items-end' : 'self-start items-start'}`}>
+      {/* Attribution (creature-voice reshape): proactive lines come FROM the creature - a small warm glyph beside
+          the bubble makes that visible, without adding a name in the message itself. Ordinary tool replies stay
+          unattributed; only unsolicited ones (briefing/follow-up/deadline alert/initiation/naming) get the mark. */}
+      {!user && m.proactive && (
+        <div className="text-[10px] text-stone-500 flex items-center gap-1.5 mb-0.5">
+          <span aria-hidden className="inline-block w-4 h-4 rounded-full bg-mocha/25 text-cocoa flex items-center justify-center text-[9px]">◕</span>
+          <span className="italic">{creatureName ? `${creatureName}` : 'from the room'}</span>
+        </div>
+      )}
       <div
-        className={`bubble-in rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap ${user ? 'bg-cocoa text-cream' : 'bg-paper text-cocoa'} ${m.pending ? 'opacity-60' : ''}`}
+        className={`bubble-in rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap ${user ? 'bg-cocoa text-cream' : m.proactive ? 'bg-accent/15 text-cocoa' : 'bg-paper text-cocoa'} ${m.pending ? 'opacity-60' : ''}`}
       >
         {m.content}
       </div>
@@ -1238,7 +1251,7 @@ function Bubble({ m }: { m: UiMessage }): React.JSX.Element {
           ))}
         </ul>
       )}
-      {!user && m.tier === 0 && !m.pending && <span className="text-[10px] text-stone-400">instant · no model call</span>}
+      {!user && m.tier === 0 && !m.pending && !m.proactive && <span className="text-[10px] text-stone-400">instant · no model call</span>}
       {m.error && <div className="text-xs text-red-700">{m.error}</div>}
     </div>
   )
