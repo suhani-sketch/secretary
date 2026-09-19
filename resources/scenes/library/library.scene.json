@@ -1,0 +1,86 @@
+{
+  "$schema": "../../scene.schema.json",
+  "id": "library",
+  "displayName": "Library",
+  "emoji": "📚",
+  "master": {
+    "width": 1200,
+    "height": 2000,
+    "aspectRatio": "3:5"
+  },
+  "assets": {
+    "background": "library.background.png",
+    "foreground": "library.foreground.png",
+    "reference": "library.reference.png",
+    "ambient": {
+      "dust": "ambient/library.dust.svg",
+      "pageTurn": "ambient/library.page-turn.svg"
+    }
+  },
+  "palette": {
+    "world": "#E9DBC1",
+    "walnut": "#4A3226",
+    "olive": "#6B7053",
+    "brass": "#B08B4C",
+    "cocoa": "#2D1F1A",
+    "warmLamp": "#D6A768",
+    "note": "Scene-scoped palette; applied via CSS variables inside the room container. The global app palette (dusty blush world, chat, rail) is unchanged."
+  },
+  "lighting": {
+    "lamps": [
+      { "id": "chair-lamp", "position": { "x": 0.78, "y": 0.60 }, "radius": 0.28, "color": "#D6A768", "intensity": 0.55 },
+      { "id": "desk-lamp", "position": { "x": 0.20, "y": 0.66 }, "radius": 0.22, "color": "#D6A768", "intensity": 0.50 }
+    ],
+    "lightBands": {
+      "morning": { "ambientTint": "rgba(215,207,180,0.10)", "lampIntensity": 0.35 },
+      "day":     { "ambientTint": "rgba(233,219,193,0.00)", "lampIntensity": 0.45 },
+      "evening": { "ambientTint": "rgba(214,167,104,0.14)", "lampIntensity": 0.75 },
+      "night":   { "ambientTint": "rgba(45,31,26,0.22)",    "lampIntensity": 0.90 }
+    }
+  },
+  "ambient": [
+    { "id": "dust", "layer": "in-front-of-creature", "asset": "ambient/library.dust.svg", "showIn": ["day", "evening", "night"], "alwaysOn": true, "opacity": 0.4 },
+    { "id": "lamp-flicker", "layer": "in-front-of-creature", "kind": "css-flicker", "showIn": ["evening", "night"], "alwaysOn": true, "target": "lamp-halos", "amplitude": 0.03, "periodMs": 2000 },
+    { "id": "page-turn", "layer": "in-front-of-creature", "asset": "ambient/library.page-turn.svg", "trigger": "creature-reading-in-chair", "everyMsMin": 30000, "everyMsMax": 60000 }
+  ],
+  "spots": [
+    { "id": "chair-seat",   "x": 0.62, "y": 0.66, "scale": 0.85, "activity": "reading",   "furniture": "wingback-chair", "gaze": "book" },
+    { "id": "chair-seat-sleep","x": 0.62, "y": 0.66, "scale": 0.82, "activity": "sleepy", "furniture": "wingback-chair", "gaze": "closed" },
+    { "id": "desk-seat",    "x": 0.20, "y": 0.72, "scale": 0.82, "activity": "writing",   "furniture": "reading-desk",   "gaze": "desk" },
+    { "id": "ladder-base",  "x": 0.42, "y": 0.60, "scale": 0.90, "activity": "browsing",  "furniture": "library-ladder", "gaze": "away-up" },
+    { "id": "shelf-mid",    "x": 0.75, "y": 0.40, "scale": 0.75, "activity": "browsing",  "furniture": "bookshelves",    "gaze": "away" },
+    { "id": "window-perch", "x": 0.08, "y": 0.42, "scale": 0.72, "activity": "looking",   "furniture": "window",         "gaze": "window" },
+    { "id": "side-table",   "x": 0.50, "y": 0.72, "scale": 0.85, "activity": "idle",      "furniture": "side-table",     "gaze": "desk" },
+    { "id": "rug-center",   "x": 0.45, "y": 0.80, "scale": 0.95, "activity": "idle",      "furniture": null,             "gaze": "away" }
+  ],
+  "creatureBehavior": {
+    "weights": {
+      "reading":   0.55,
+      "writing":   0.10,
+      "browsing":  0.10,
+      "looking":   0.05,
+      "sleepy":    0.05,
+      "idle":      0.10,
+      "attentive": 0.05
+    },
+    "dwellMultiplier": 1.35,
+    "speechToneHints": "quiet, considered, slightly muttered, unhurried",
+    "personalityBias": {
+      "highReadingLove": "chair-seat",
+      "highWindowLove": "window-perch",
+      "highCuriosity": "ladder-base"
+    }
+  },
+  "defaultRestingSpotBySeed": {
+    "note": "When personality.restingSpot is 'rug', map to rug-center; 'armchair' → chair-seat; 'bench' → window-perch; 'nest' → chair-seat-sleep. Library has no bench or nest; nearest analogues used.",
+    "map": {
+      "rug": "rug-center",
+      "armchair": "chair-seat",
+      "bench": "window-perch",
+      "nest": "chair-seat-sleep"
+    }
+  },
+  "coordinateSystem": {
+    "note": "All spot x/y are fractional coordinates (0..1) of the master illustration. Scale is a multiplier applied to the creature's own base size. Coordinates finalize AFTER we see where the illustrator/generator actually paints the chair seat, desk chair, ladder base, and window perch — the values here are the design intent, tuned to the master once produced."
+  }
+}
