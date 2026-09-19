@@ -9,6 +9,7 @@ import { getDb } from '../db'
 import { log } from '../log'
 import * as repo from '../repo'
 import { clearOffer, getFocus, pushFocus, setOffer, shortId } from './context'
+import { explainLastProactive } from '../creatureVoice'
 import { resolveEntity, tokens } from '../entity'
 import { assessTarget, assessmentText, atRiskLines, noteDateConflicts } from '../deadlines'
 import { DEFAULT_ASSUMED_EFFORT_MIN } from '../../core/deadline'
@@ -401,7 +402,8 @@ export const toolSchemas = {
   search_activity: z.object({ item_id: idRef.optional(), query: z.string().max(200).optional() }).describe('History: what happened to an item, or recent activity matching words.'),
   get_today: z.object({}),
   get_upcoming: z.object({ days: z.number().int().min(1).max(60).optional().describe('Default 7.') }),
-  what_are_you_doing: z.object({}).describe('"What are you doing?" / "what are you up to?" — an honest answer grounded in real state (a running happening, the focus stack, overdue count), never invented pet-chatbot flavour. Phrased by the app.')
+  what_are_you_doing: z.object({}).describe('"What are you doing?" / "what are you up to?" — an honest answer grounded in real state (a running happening, the focus stack, overdue count), never invented pet-chatbot flavour. Phrased by the app.'),
+  explain_proactive: z.object({}).describe('"Why are you telling me this?" — explains the LAST proactive message the Secretary sent (a briefing, follow-up, deadline alert, initiation), from the recorded source context. Never a fresh guess. Nothing recent → says so honestly.')
 } as const
 
 export type ToolName = keyof typeof toolSchemas
@@ -474,7 +476,8 @@ const descriptions: Record<ToolName, string> = {
   search_activity: 'What has happened: history for an item, or recent activity matching words.',
   get_today: 'List what is due or overdue today.',
   get_upcoming: 'List open items due in the next N days.',
-  what_are_you_doing: '9d direct interaction — "what are you doing?", "what are you up to?", clicking the creature. Answer with the truth: a running happening, what is still overdue, or what was last discussed — never a made-up pet-chatbot activity disconnected from real state.'
+  what_are_you_doing: '9d direct interaction — "what are you doing?", "what are you up to?", clicking the creature. Answer with the truth: a running happening, what is still overdue, or what was last discussed — never a made-up pet-chatbot activity disconnected from real state.',
+  explain_proactive: 'Creature voice — "why are you telling me this?", "why did you say that?", "why did you bring that up?" Explains the LAST proactive line (briefing / follow-up / deadline alert / initiation) from the recorded source context. Never a fresh guess. Nothing recent → says so honestly.'
 }
 
 const WRITE_TOOLS: ReadonlySet<string> = new Set([
@@ -2284,6 +2287,12 @@ export function executeTool(name: string, rawArgs: unknown, ctx: ExecContext): T
       const now = DateTime.local()
       const items = repo.itemsDueBetween(now.toUTC().toISO()!, now.plus({ days: x.days ?? 7 }).toUTC().toISO()!)
       return { result: { items: items.map(publicItem) } }
+    }
+    case 'explain_proactive': {
+      // Creature-voice reshape: honest explanation from the recorded source context of the last proactive line.
+      // Never a fresh guess. If nothing recent, say so plainly rather than confabulating a reason.
+      const text = explainLastProactive()
+      return { result: { text } }
     }
     case 'what_are_you_doing': {
       // 9d "direct interaction": the honest answer, grounded in the same state the rest of the app already

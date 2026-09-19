@@ -22,6 +22,9 @@ import { upcomingDeadlineTargets, assessTarget, assessmentText } from './deadlin
 import { showToast } from './notifier'
 import { log } from './log'
 import { intensityEffects } from './notifyPrefs'
+import { appIsForeground, pushToRenderer, recordProactive } from './creatureVoice'
+import { computeCompanionContext } from './companionContext'
+import type { ChatMessage } from '../shared/types'
 
 const SETTING_KEY = 'deadline_alerts.alerted_ids'
 /** Same horizon as 7b's own "surface it before it is urgent" default (atRiskLines/get_forgetting). */
@@ -62,7 +65,27 @@ export function sweepDeadlineRisk(nowUtc = new Date().toISOString()): void {
     if (alerted.has(t.id)) continue // already told the user about this episode — never repeat-pester
     const verdict = a.feasibility === 'infeasible' ? 'is not feasible as it stands' : 'is tight'
     const projectId = t.kind === 'project' ? t.id : (repo.parentProjectOf(t.id)?.id ?? null)
-    showToast({ title: `Deadline at risk: "${t.title}"`, body: assessmentText(a, 'short'), persistent: effects.toastPersistent })
+    // Creature voice (reshape): when the user is actually looking at the app, this is a chat message from the
+    // creature — not a system toast. When the app is minimized/hidden/not focused, it's still a toast. Same event,
+    // same underlying reasoning, one delivery — never both, so the same deadline never shows up twice.
+    const short = assessmentText(a, 'short')
+    const line = a.feasibility === 'infeasible'
+      ? `"${t.title}" isn't going to fit as it stands. ${short}`
+      : `"${t.title}" is tight. ${short}`
+    if (appIsForeground()) {
+      const ctx = computeCompanionContext(nowUtc)
+      let msg: ChatMessage
+      try {
+        msg = repo.insertMessage('assistant', line, 0)
+      } catch (e) {
+        log('warn', 'deadline.alert_insert_failed', (e as Error).message)
+        continue
+      }
+      pushToRenderer(msg)
+      recordProactive('deadline_alert', line, [{ itemId: t.id }], ctx)
+    } else {
+      showToast({ title: `Deadline at risk: "${t.title}"`, body: short, persistent: effects.toastPersistent })
+    }
     repo.insertActivity({
       targetType: 'item',
       targetId: t.id,

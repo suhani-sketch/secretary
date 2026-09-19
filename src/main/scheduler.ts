@@ -9,6 +9,8 @@ import { sessionsToMarkMissed } from '../core/plans'
 import { sweepDeadlineRisk } from './deadlineAlerts'
 import { isQuietNow, intensityEffects } from './notifyPrefs'
 import { maybeInitiate } from './initiate'
+import { recordProactive } from './creatureVoice'
+import { computeCompanionContext } from './companionContext'
 
 export const TICK_MS = 30_000
 
@@ -25,6 +27,14 @@ function checkInitiate(now: DateTime): void {
     if (msg) {
       log('info', 'initiate.sent', msg.content)
       onMessageCb?.(msg)
+      // Record the proactive line so "why are you telling me this?" (creatureVoice.explainLastProactive) can
+      // answer from real source context, not from the model. We don't know which of the three initiate rules
+      // fired without re-inspecting the log; the explain path handles that ambiguity fine.
+      try {
+        recordProactive('other', msg.content, [], computeCompanionContext(now.toISO() ?? undefined))
+      } catch (e) {
+        log('warn', 'initiate.record_failed', (e as Error).message)
+      }
     }
   } catch (e) {
     log('error', 'initiate.failed', (e as Error).message)

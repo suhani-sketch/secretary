@@ -583,7 +583,7 @@ function phraseReadResults(results: ToolResult[]): string | null {
     } else if (r.name === 'propose_slot' || r.name === 'plan_week' || r.name === 'refine_week_plan') {
       const t = (res as { text?: string }).text
       if (t) lines.push(t)
-    } else if (r.name === 'recommend_now' || r.name === 'what_are_you_doing') {
+    } else if (r.name === 'recommend_now' || r.name === 'what_are_you_doing' || r.name === 'explain_proactive') {
       const t = (res as { text?: string }).text
       if (t) lines.push(t)
     } else if (r.name === 'assess_deadline') {

@@ -544,6 +544,14 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     return [{ name: 'what_are_you_doing', args: {} }]
   }
 
+  // ---- "why are you telling me this?" (creature-voice reshape) — honest answer from the recorded source context
+  //      of the last proactive line, not a fresh model call. If nothing recent, the tool says so plainly.
+  if (/^(?:so,? |but,? )?why (?:are|did) you (?:telling|tell) me (?:this|that)\??$/.test(text)
+      || /^why did you (?:say|bring) that (?:up)?\??$/.test(text)
+      || /^why did you mention that\??$/.test(text)) {
+    return [{ name: 'explain_proactive', args: {} }]
+  }
+
   // ---- a bare greeting, nothing else — warm and instant, no need to spend a model call on "hi" (9d) ----
   if (/^(?:hi|hey|hello|hiya|yo|good morning|good evening|good afternoon|morning|evening)[.!]?$/.test(text)) {
     return [{ name: REPLY, args: { text: 'Hey — good to see you.' } }]

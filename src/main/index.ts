@@ -12,6 +12,8 @@ import { buildDay, buildDays, occurrencesBetween } from './calendar'
 import { maybeSendMorningBriefing } from './briefing'
 import { maybeSendFollowUp } from './followUp'
 import { maybeOfferName } from './naming'
+import { recordProactive } from './creatureVoice'
+import { computeCompanionContext } from './companionContext'
 import { inferImportance } from '../core/importance'
 import { describeProgress, planProgress } from '../core/plans'
 import { createTray, refreshTrayMenu } from './tray'
@@ -271,30 +273,39 @@ function createWindow(): BrowserWindow {
       if (msg) {
         log('info', 'briefing.sent', msg.content)
         setTimeout(() => win.webContents.send(IPC.messageAdded, msg), 400)
+        try {
+          recordProactive('briefing', msg.content, [], computeCompanionContext())
+        } catch (e) {
+          log('warn', 'briefing.record_failed', (e as Error).message)
+        }
       }
     } catch (e) {
-      // A briefing failure must never block the window from showing or take the companion's own greeting down with it.
       log('error', 'briefing.failed', (e as Error).message)
     }
-    // Missed-task / waiting-item follow-up (Phase 8c): its own independent try/catch and its own delayed push, on
-    // purpose — one feature failing must never take the other down with it, and both messages should be able to
-    // land in the same window-show without either one silently swallowing the other.
     try {
       const msg = maybeSendFollowUp()
       if (msg) {
         log('info', 'followup.sent', msg.content)
         setTimeout(() => win.webContents.send(IPC.messageAdded, msg), 400)
+        try {
+          recordProactive('follow_up', msg.content, [], computeCompanionContext())
+        } catch (e) {
+          log('warn', 'followup.record_failed', (e as Error).message)
+        }
       }
     } catch (e) {
       log('error', 'followup.failed', (e as Error).message)
     }
-    // The naming moment (9g): own independent try/catch, same reasoning as the two above — asked at most once,
-    // ever, regardless of what else this window-show does or fails to do.
     try {
       const msg = maybeOfferName()
       if (msg) {
         log('info', 'naming.offered', msg.content)
         setTimeout(() => win.webContents.send(IPC.messageAdded, msg), 400)
+        try {
+          recordProactive('naming', msg.content, [], computeCompanionContext())
+        } catch (e) {
+          log('warn', 'naming.record_failed', (e as Error).message)
+        }
       }
     } catch (e) {
       log('error', 'naming.failed', (e as Error).message)
