@@ -33,8 +33,8 @@ export const LIBRARY_SCENE: SceneDefinition = {
   },
   lighting: {
     lamps: [
-      { id: 'chair-lamp', x: 0.78, y: 0.60, radius: 0.28, color: '#D6A768', intensity: 0.55 },
-      { id: 'desk-lamp', x: 0.20, y: 0.66, radius: 0.22, color: '#D6A768', intensity: 0.5 }
+      { id: 'chair-lamp', x: 0.88, y: 0.70, radius: 0.18, color: '#D6A768', intensity: 0.55 },
+      { id: 'desk-lamp', x: 0.08, y: 0.72, radius: 0.14, color: '#D6A768', intensity: 0.55 }
     ],
     lightBands: {
       morning: { ambientTint: 'rgba(215,207,180,0.10)', lampIntensity: 0.35 },
@@ -57,14 +57,15 @@ export const LIBRARY_SCENE: SceneDefinition = {
     // Dust motes + page-turn ambient effects deferred until dust.svg/page-turn.svg are produced.
   ],
   spots: [
-    { id: 'chair-seat', x: 0.68, y: 0.58, scale: 0.55, activity: 'reading', furniture: 'wingback-chair', gaze: 'book', occlusionState: 'verified' },
-    { id: 'chair-seat-sleep', x: 0.68, y: 0.60, scale: 0.52, activity: 'sleepy', furniture: 'wingback-chair', gaze: 'closed', occlusionState: 'verified' },
-    { id: 'desk-seat', x: 0.30, y: 0.60, scale: 0.55, activity: 'writing', furniture: 'reading-desk', gaze: 'desk', occlusionState: 'incomplete-until-foreground-final' },
-    { id: 'ladder-base', x: 0.37, y: 0.72, scale: 0.65, activity: 'browsing', furniture: 'library-ladder', gaze: 'away-up', occlusionState: 'pending' },
-    { id: 'window-perch', x: 0.09, y: 0.55, scale: 0.5, activity: 'looking', furniture: 'window', gaze: 'window', occlusionState: 'pending' },
-    { id: 'side-table', x: 0.85, y: 0.74, scale: 0.65, activity: 'idle', furniture: 'side-table', gaze: 'desk', occlusionState: 'verified' },
-    { id: 'rug-center', x: 0.52, y: 0.82, scale: 0.75, activity: 'idle', furniture: null, gaze: 'away', occlusionState: 'verified' },
-    { id: 'shelf-mid', x: 0.55, y: 0.72, scale: 0.75, activity: 'browsing', furniture: 'bookshelves', gaze: 'away', occlusionState: 'pending' }
+    // scale values apply to the SceneRenderer's 28% base width. 0.85 = ~24% width = ~120px on a 500px panel.
+    { id: 'chair-seat', x: 0.60, y: 0.78, scale: 0.85, activity: 'reading', furniture: 'wingback-chair', gaze: 'book', occlusionState: 'verified' },
+    { id: 'chair-seat-sleep', x: 0.60, y: 0.79, scale: 0.82, activity: 'sleepy', furniture: 'wingback-chair', gaze: 'closed', occlusionState: 'verified' },
+    { id: 'desk-seat', x: 0.20, y: 0.76, scale: 0.75, activity: 'writing', furniture: 'reading-desk', gaze: 'desk', occlusionState: 'incomplete-until-foreground-final' },
+    { id: 'ladder-base', x: 0.36, y: 0.85, scale: 0.90, activity: 'browsing', furniture: 'library-ladder', gaze: 'away-up', occlusionState: 'verified' },
+    { id: 'window-perch', x: 0.13, y: 0.62, scale: 0.65, activity: 'looking', furniture: 'window', gaze: 'window', occlusionState: 'verified' },
+    { id: 'side-table', x: 0.90, y: 0.85, scale: 0.85, activity: 'idle', furniture: 'side-table', gaze: 'desk', occlusionState: 'verified' },
+    { id: 'rug-center', x: 0.55, y: 0.92, scale: 1.0, activity: 'idle', furniture: null, gaze: 'away', occlusionState: 'verified' },
+    { id: 'shelf-mid', x: 0.50, y: 0.87, scale: 0.95, activity: 'browsing', furniture: 'bookshelves', gaze: 'away', occlusionState: 'verified' }
   ],
   behavior: {
     // Scene-scoped ambient rotation weights. In a library the creature reads a lot, occasionally browses,

@@ -12,25 +12,32 @@
  * against the blush world.
  */
 @theme {
-  --color-cream: #F3E6E3;         /* page + world background */
-  --color-cocoa: #493B38;         /* primary text */
-  --color-accent: #B98288;        /* dusty rose accent — active tabs, creature glyph */
-  --color-cocoa-soft: #493733;    /* user bubble (deep cocoa) */
-  --color-mocha: #A97865;         /* warm wood / secondary accent */
-  --color-paper: #F7EEEC;         /* soft paper — inputs, hover surfaces */
-  --color-paper-2: #EAD8D5;       /* deeper warm surface — chips */
-  --color-paper-3: #EAD8D5;
-  --color-paper-4: #EAD8D5;
-  --color-sand: #E5D3D0;          /* dusty rose sand */
-  --color-ash: #766865;           /* secondary text */
-  --color-ash-2: #5E5251;         /* deeper secondary text */
+  /* Editorial paper palette — warm cream, cocoa typography, muted rose as accent only. The world panel has its
+     own scene palette; the app shell is neutral and quiet. */
+  --color-cream: #F0E9DE;         /* page background — warm paper, not blush */
+  --color-cocoa: #3E332E;         /* primary text — deeper for legibility */
+  --color-accent: #A57076;        /* muted rose accent — creature glyph, active tabs (NEVER a fill) */
+  --color-cocoa-soft: #3A2D28;    /* user bubble */
+  --color-mocha: #8B6A55;         /* warm wood */
+  --color-paper: #F7F1E5;         /* soft paper — assistant bubble, subtle raised surfaces */
+  --color-paper-2: #E6DDCA;       /* deeper warm surface — dividers, chips */
+  --color-paper-3: #E6DDCA;
+  --color-paper-4: #E6DDCA;
+  --color-sand: #D8CBB2;          /* editorial sand */
+  --color-ash: #7A6F63;           /* secondary text */
+  --color-ash-2: #5A5049;         /* deeper secondary text */
   --color-pure: #FFFFFF;
-  --color-tan: #D5A8AA;           /* soft rose — proactive tint */
-  --color-slate-soft: #9C7F86;    /* muted mauve — waiting/constraints */
-  --color-rust: #A97865;          /* warm terracotta — furniture */
-  --color-ink-muted: #766865;
-  --color-ink-muted-2: #A4938F;
-  --color-warn-amber: #B88958;    /* quiet amber for urgency — used on the ⚠ glyph */
+  --color-tan: #D3B590;           /* warm sand */
+  --color-slate-soft: #7E8592;    /* muted slate — waiting */
+  --color-rust: #A66E55;          /* warm terracotta — subtle warmth accent */
+  --color-ink-muted: #7A6F63;
+  --color-ink-muted-2: #98897C;
+  --color-warn-amber: #B08048;    /* quiet amber for urgency */
+  /* Zone surface tokens — for the app shell's three panels */
+  --color-zone-world: #E4D9C3;    /* WORLD panel base — warm walnut-cream, distinct from page */
+  --color-zone-chat: #F7F1E5;     /* CONVERSATION panel base — quiet paper */
+  --color-zone-rail: #ECE3D2;     /* AWARENESS panel base — subtly warmer than page */
+  --color-zone-border: #C9B994;   /* zone boundary — subtle warm hairline */
 }
 :root {
   --cream: var(--color-cream);
@@ -40,16 +47,16 @@
   /* Tuned amber/rose scales for the dusty-blush world: default Tailwind amber-50 is #FEF3C7, which reads bright
      yellow against a blush background — swap in warmer, softer tones. Calendar day-load surfaces and grammar
      chips read the same way in light mode as they did before, just in the softer emotional palette. */
-  --color-amber-50: #F4E5CE;
-  --color-amber-100: #EBD6B4;
-  --color-amber-400: #C99358;
-  --color-amber-500: #B88958;
-  --color-amber-800: #8A6236;
-  --color-amber-900: #5E4224;
-  --color-rose-50: #F0DCDA;
-  --color-rose-100: #E8CBC9;
-  --color-rose-500: #C88E92;
-  --color-rose-900: #6E3E44;
+  --color-amber-50: #F3E5C7;
+  --color-amber-100: #E8D3A6;
+  --color-amber-400: #C08D4A;
+  --color-amber-500: #B08048;
+  --color-amber-800: #7A5528;
+  --color-amber-900: #4E361A;
+  --color-rose-50: #EEDDCF;
+  --color-rose-100: #E5CCBC;
+  --color-rose-500: #A57076;
+  --color-rose-900: #4E2E30;
   /* Emerald stays gently used (calendar 'light' day status). Keep it soft and muted to fit the palette. */
   --color-emerald-50: #E0EBDC;
   --color-emerald-800: #556E4E;

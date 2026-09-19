@@ -794,7 +794,7 @@ export default function App(): React.JSX.Element {
             ['settings', 'Settings']
           ] as [Surface, string][]
         ).map(([id, label]) => (
-          <button key={id} onClick={() => setSurface(id)} className={`rounded-full px-3 py-1 ${surface === id ? 'bg-cocoa text-cream' : 'text-stone-500 hover:bg-white/60 hover:text-stone-800'}`} aria-current={surface === id ? 'page' : undefined}>
+          <button key={id} onClick={() => setSurface(id)} className={`rounded-full px-3.5 py-1 font-medium tracking-tight text-[13px] transition-colors ${surface === id ? 'bg-cocoa text-cream' : 'text-ash hover:bg-[color:var(--color-paper)] hover:text-cocoa'}`} aria-current={surface === id ? 'page' : undefined}>
             {label}
           </button>
         ))}
@@ -858,9 +858,9 @@ export default function App(): React.JSX.Element {
       )}
 
       {surface === 'conversation' && (
-      <div className="flex-1 min-h-0 grid grid-cols-[minmax(380px,1.2fr)_minmax(0,1.6fr)_minmax(280px,0.85fr)] gap-8 overflow-hidden">
-      {/* THE WORLD — room + creature, no rounded outline; the creature's environment is the ground the page sits on */}
-      <aside className="relative overflow-hidden">
+      <div className="flex-1 min-h-0 grid grid-cols-[minmax(360px,0.95fr)_minmax(0,1.55fr)_minmax(280px,0.7fr)] gap-4 overflow-hidden">
+      {/* THE WORLD — contained surface with editorial border, so it reads as a "window into" the Secretary's world */}
+      <aside className="relative overflow-hidden rounded-2xl border border-[color:var(--color-zone-border)] shadow-[0_1px_2px_rgba(62,51,46,0.06)]" style={{ background: 'var(--color-zone-world)' }}>
         <Room
           state={moment.state}
           gaze={moment.gaze}
@@ -903,8 +903,8 @@ export default function App(): React.JSX.Element {
         </p>
       </aside>
 
-      {/* CONVERSATION — no bold heading competing with the world beside it; controls remain, subtly */}
-      <main className="flex flex-col min-h-0">
+      {/* CONVERSATION — quiet paper surface, editorial border to match the world panel */}
+      <main className="flex flex-col min-h-0 rounded-2xl border border-[color:var(--color-zone-border)] shadow-[0_1px_2px_rgba(62,51,46,0.04)] px-5 py-3" style={{ background: 'var(--color-zone-chat)' }}>
         <header className="flex items-center justify-end mb-2 h-6">
           <div className="flex gap-3 text-xs text-stone-500">
             <button onClick={() => void quick('undo_last', {})} className="hover:text-stone-800" title="Undo the last change">
@@ -972,7 +972,7 @@ export default function App(): React.JSX.Element {
       {/* Right side — "what the Secretary is currently aware of." Not a rail with card-sections; a quiet column
           of context text on the same warm world. Tight vertical rhythm; small tracked labels are the only
           section markers. */}
-      <aside className="flex flex-col gap-3 min-h-0 overflow-y-auto pr-1 text-[13px]">
+      <aside className="flex flex-col gap-3 min-h-0 overflow-y-auto rounded-2xl border border-[color:var(--color-zone-border)] shadow-[0_1px_2px_rgba(62,51,46,0.04)] px-4 py-4 text-[13px]" style={{ background: 'var(--color-zone-rail)' }}>
         {!showDebug ? (
           <>
             {(overdueItems.length > 0 || happenings.some((h) => h.state === 'running')) && (
@@ -1259,22 +1259,21 @@ function Bubble({ m, creatureName }: { m: UiMessage; creatureName?: string | nul
   }
   if (m.proactive) {
     return (
-      <div className="bubble-in self-start max-w-[90%] flex items-start gap-3 pl-1">
-        {/* Creature glyph — small, in the margin, dusty rose. This is the "proactive originates from the creature's side" cue. */}
-        <span aria-hidden className="mt-1 inline-flex items-center justify-center w-6 h-6 rounded-full bg-tan/60 text-cocoa text-[13px] shrink-0" title={creatureName ? `From ${creatureName}` : 'From the room'}>
+      <div className="bubble-in self-start max-w-[88%] flex items-start gap-2.5">
+        <span aria-hidden className="mt-1 inline-flex items-center justify-center w-6 h-6 rounded-full text-cocoa text-[13px] shrink-0 border border-[color:var(--color-accent)]" style={{ background: 'var(--color-rose-50)' }} title={creatureName ? `From ${creatureName}` : 'From the room'}>
           ◕
         </span>
-        <div className="flex-1 min-w-0 border-l-2 border-tan pl-3 py-0.5">
+        <div className="flex-1 min-w-0 rounded-2xl rounded-tl-md px-3.5 py-2 border border-[color:var(--color-accent)]/40" style={{ background: 'var(--color-rose-50)' }}>
           <div className="text-[15px] leading-relaxed text-cocoa whitespace-pre-wrap italic">{m.content}</div>
-          {creatureName && <div className="text-[10px] text-ash mt-0.5">— {creatureName}</div>}
+          {creatureName && <div className="text-[10px] text-accent mt-0.5">— {creatureName}</div>}
         </div>
       </div>
     )
   }
-  // Ordinary assistant reply — plain warm text on the world, no pill.
+  // Ordinary assistant reply — a soft paper bubble, warm and grounded, no dashboard grammar.
   return (
-    <div className="flex flex-col gap-1 max-w-[88%] self-start items-start">
-      <div className={`bubble-in text-[15px] leading-relaxed whitespace-pre-wrap text-cocoa ${m.pending ? 'opacity-60' : ''}`}>
+    <div className="flex flex-col gap-1 max-w-[85%] self-start items-start">
+      <div className={`bubble-in rounded-2xl rounded-tl-md px-3.5 py-2 text-[15px] leading-relaxed whitespace-pre-wrap text-cocoa border border-[color:var(--color-paper-2)] ${m.pending ? 'opacity-60' : ''}`} style={{ background: 'var(--color-paper)' }}>
         {m.content}
       </div>
       {m.applied && m.applied.length > 0 && (
