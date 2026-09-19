@@ -12,7 +12,7 @@ import { buildDay, buildDays, occurrencesBetween } from './calendar'
 import { maybeSendMorningBriefing } from './briefing'
 import { maybeSendFollowUp } from './followUp'
 import { maybeOfferName } from './naming'
-import { recordProactive } from './creatureVoice'
+import { recordProactive, sendNoticingPulse } from './creatureVoice'
 import { computeCompanionContext } from './companionContext'
 import { effectiveVector, getOrCreateSeed } from './creaturePersonality'
 import { inferImportance } from '../core/importance'
@@ -269,11 +269,23 @@ function createWindow(): BrowserWindow {
   // renderer is delayed, on the same "let it finish loading first" precedent as the reschedule prefill above — on a
   // cold launch this fires close to 'ready-to-show', before the renderer's own listeners are necessarily attached.
   win.on('show', () => {
+    /*
+     * Creature-presence pass (2026-09-19): every proactive delivery is now a two-beat sequence — a "noticing"
+     * pulse at t=0 that puts the creature into an attentive state (looking toward the user), then the actual
+     * message at t≈1000ms. The user visibly sees the creature notice before the message arrives, so the
+     * sequence reads as "the creature noticed and told me" rather than "a message spawned."
+     *
+     * 1000ms is a deliberate choice: long enough that the state change is visibly separate from the message
+     * arrival, short enough that it doesn't feel laggy. Combined with the state machine's 700ms position
+     * transition, the creature is visibly turning by the time the message lands.
+     */
+    const NOTICE_LEAD_MS = 1000
     try {
       const msg = maybeSendMorningBriefing()
       if (msg) {
         log('info', 'briefing.sent', msg.content)
-        setTimeout(() => win.webContents.send(IPC.messageAdded, msg), 400)
+        sendNoticingPulse()
+        setTimeout(() => win.webContents.send(IPC.messageAdded, msg), NOTICE_LEAD_MS)
         try {
           recordProactive('briefing', msg.content, [], computeCompanionContext())
         } catch (e) {
@@ -287,7 +299,8 @@ function createWindow(): BrowserWindow {
       const msg = maybeSendFollowUp()
       if (msg) {
         log('info', 'followup.sent', msg.content)
-        setTimeout(() => win.webContents.send(IPC.messageAdded, msg), 400)
+        sendNoticingPulse()
+        setTimeout(() => win.webContents.send(IPC.messageAdded, msg), NOTICE_LEAD_MS)
         try {
           recordProactive('follow_up', msg.content, [], computeCompanionContext())
         } catch (e) {
@@ -301,7 +314,8 @@ function createWindow(): BrowserWindow {
       const msg = maybeOfferName()
       if (msg) {
         log('info', 'naming.offered', msg.content)
-        setTimeout(() => win.webContents.send(IPC.messageAdded, msg), 400)
+        sendNoticingPulse()
+        setTimeout(() => win.webContents.send(IPC.messageAdded, msg), NOTICE_LEAD_MS)
         try {
           recordProactive('naming', msg.content, [], computeCompanionContext())
         } catch (e) {

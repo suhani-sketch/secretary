@@ -193,6 +193,9 @@ export default function App(): React.JSX.Element {
   // Return-from-away (reshape): a persistent 'closed at' marker in localStorage. If the gap is > 12h, the creature
   // greets on next open. Written on every unload; missing on first launch means no greeting.
   const [returnFromAway, setReturnFromAway] = useState(false)
+  // Creature-presence pass: main fires a "noticing" pulse ~1s before a proactive message push, so the creature
+  // visibly turns attentive first and the sequence "notice → speak → linger → return" reads as causality.
+  const [proactiveNoticeAt, setProactiveNoticeAt] = useState(0)
   const [typingAt, setTypingAt] = useState(0)
   const [hour, setHour] = useState(new Date().getHours())
   const [environment, setEnvironment] = useState<EnvironmentId>('trees')
@@ -366,11 +369,15 @@ export default function App(): React.JSX.Element {
     // pushed directly rather than via a chatHistory refetch — appending by id can never race with or duplicate an
     // in-flight send the way overwriting the whole list from a refetch could.
     const offMessageAdded = window.api.onMessageAdded((message) => {
-      // Tag as proactive (from the creature) — anything arriving via this channel is a proactive assistant line
-      // (briefing 8a, follow-up 8c, deadline alert 8b, initiation 9e, naming 9g). Ordinary tool replies never
-      // come through here; they arrive as part of the sendChat response.
       const tagged = { ...message, proactive: true } as UiMessage
       setMessages((m) => (m.some((x) => x.id === message.id) ? m : [...m, tagged]))
+    })
+    // Creature-presence pass: the noticing pulse arrives ~1s before the message push. When it lands, the
+    // creature's state machine reads proactiveNoticeAt as "look at the user attentively" for ~4.5s — visibly
+    // before, during, and briefly after the message renders. If a pulse fires without a following message
+    // (main-side failure), the creature harmlessly returns to normal within the same window.
+    const offNoticing = window.api.onCreatureNoticing(() => {
+      setProactiveNoticeAt(Date.now())
     })
     const t = setInterval(() => void refresh(), 10000)
     return () => {
@@ -378,6 +385,7 @@ export default function App(): React.JSX.Element {
       offStatus()
       offPrefill()
       offMessageAdded()
+      offNoticing()
       clearInterval(t)
     }
   }, [refresh])
@@ -747,7 +755,8 @@ export default function App(): React.JSX.Element {
       careSitAt,
       careSleepAt,
       careTeaAt,
-      careLookAt
+      careLookAt,
+      proactiveNoticeAt
     },
     forcedState,
     creatureSeed,
@@ -762,7 +771,7 @@ export default function App(): React.JSX.Element {
     const lastUserActivityAt = Math.max(lastAppliedAt, typingAt, addressedAt)
     return maybeMoment({
       base: { state: companion.state, gaze: companion.gaze },
-      signals: { chat: status, typing: false, recording, lastToolNames, lastAppliedAt, celebrateAt, quietlyExcitedAt, pettedAt, greetAt, addressedAt, concernedAt, waitingOpen: waitingItems.length, hour, happening: happeningKind, overwhelmed, deadlineHoursLeft, planning, returnFromAway, careSitAt, careSleepAt, careTeaAt, careLookAt },
+      signals: { chat: status, typing: false, recording, lastToolNames, lastAppliedAt, celebrateAt, quietlyExcitedAt, pettedAt, greetAt, addressedAt, concernedAt, waitingOpen: waitingItems.length, hour, happening: happeningKind, overwhelmed, deadlineHoursLeft, planning, returnFromAway, careSitAt, careSleepAt, careTeaAt, careLookAt, proactiveNoticeAt },
       now: nowMs,
       seed: creatureSeed,
       personality,
@@ -883,6 +892,7 @@ export default function App(): React.JSX.Element {
           }}
           completedCount={completedProjectsCount}
           weatherOverride={weatherOverride}
+          restingSpot={personality.restingSpot}
         />
         <div className="absolute top-3 left-4 text-[11px] text-stone-600/80 pointer-events-none">
           {creatureName ? `${creatureName} · ` : ''}

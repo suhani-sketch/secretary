@@ -39,6 +39,11 @@ const api: SecretaryApi = {
     ipcRenderer.on(IPC.messageAdded, handler)
     return () => ipcRenderer.removeListener(IPC.messageAdded, handler)
   },
+  onCreatureNoticing: (cb) => {
+    const handler = (): void => cb()
+    ipcRenderer.on(IPC.creatureNoticing, handler)
+    return () => ipcRenderer.removeListener(IPC.creatureNoticing, handler)
+  },
 
   runTool: (name, args) => ipcRenderer.invoke(IPC.runTool, name, args),
   listActivities: (limit) => ipcRenderer.invoke(IPC.listActivities, limit),

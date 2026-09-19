@@ -22,7 +22,7 @@ import { upcomingDeadlineTargets, assessTarget, assessmentText } from './deadlin
 import { showToast } from './notifier'
 import { log } from './log'
 import { intensityEffects } from './notifyPrefs'
-import { appIsForeground, pushToRenderer, recordProactive } from './creatureVoice'
+import { appIsForeground, pushToRenderer, recordProactive, sendNoticingPulse } from './creatureVoice'
 import { computeCompanionContext } from './companionContext'
 import type { ChatMessage } from '../shared/types'
 
@@ -81,7 +81,12 @@ export function sweepDeadlineRisk(nowUtc = new Date().toISOString()): void {
         log('warn', 'deadline.alert_insert_failed', (e as Error).message)
         continue
       }
-      pushToRenderer(msg)
+      // Creature-presence pass (creature notices FIRST, then speaks): 1s notice pulse, then the message push.
+      // For a deadline alert this is especially load-bearing — the alert is unarguable, and the creature
+      // visibly reacting before the message lands is what makes it read as "it noticed something" rather
+      // than "another notification appeared." Falls back to immediate push if the pulse can't reach a window.
+      sendNoticingPulse()
+      setTimeout(() => pushToRenderer(msg), 1000)
       recordProactive('deadline_alert', line, [{ itemId: t.id }], ctx)
     } else {
       showToast({ title: `Deadline at risk: "${t.title}"`, body: short, persistent: effects.toastPersistent })

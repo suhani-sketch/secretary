@@ -289,6 +289,9 @@ export interface SecretaryApi {
   /** A message inserted by main outside a normal chat exchange (Phase 8a morning briefing) — pushed directly rather
    *  than via a chatHistory refetch, so it can never race with or duplicate an in-flight send. */
   onMessageAdded(cb: (message: ChatMessage) => void): () => void
+  /** Fired shortly BEFORE a proactive message is delivered, so the renderer can put the creature into an
+   *  attentive state before the message appears — the visible order is "creature notices, then speaks." */
+  onCreatureNoticing(cb: () => void): () => void
 
   // Manual editing — same tool layer as the AI (spec hard rule 3)
   runTool(name: string, args: Record<string, unknown>): Promise<ToolRunResult>
@@ -447,5 +450,8 @@ export const IPC = {
   listUnscheduled: 'calendar:unscheduled',
   listPlans: 'plans:list',
   getPlanProgress: 'plans:progress',
-  listPreferences: 'preferences:list'
+  listPreferences: 'preferences:list',
+  /** Creature-presence pulse: fired ~600ms before a proactive message push, so the creature turns attentive
+   *  toward the user before the message renders — visible causality ("it noticed, then it spoke"). */
+  creatureNoticing: 'creature:noticing'
 } as const

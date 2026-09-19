@@ -95,9 +95,13 @@ interface Props {
   completedCount: number
   /** Dev/test hook only (matches the existing #state:/#light: forcing): overrides the computed weather. */
   weatherOverride?: Weather
+  /** Personality's preferred idle resting spot (creature-presence pass, 2026-09-19). Small, single wiring
+   *  change: when the creature is idle (pose === 'sit'), the default position picks based on this instead of
+   *  always the rug — two creatures with different `restingSpot` values visibly idle in different places. */
+  restingSpot?: 'nest' | 'armchair' | 'bench' | 'rug'
 }
 
-export function Room({ state, gaze, environment, time, happening, onPet, onChangeEnvironment, onChangeTime, favorites, rotation, onToggleFavorite, onToggleRotation, completedCount, weatherOverride }: Props): React.JSX.Element {
+export function Room({ state, gaze, environment, time, happening, onPet, onChangeEnvironment, onChangeTime, favorites, rotation, onToggleFavorite, onToggleRotation, completedCount, weatherOverride, restingSpot = 'rug' }: Props): React.JSX.Element {
   const [hour, setHour] = useState(new Date().getHours())
   const [today, setToday] = useState(() => new Date().toISOString().slice(0, 10))
   useEffect(() => {
@@ -122,14 +126,21 @@ export function Room({ state, gaze, environment, time, happening, onPet, onChang
   // same forced-perspective cue the floor itself uses, so the creature's own size stays honest to where it is sitting.
   /* Product-thesis reshape (2026-09-19): the default idle position moved upstage on the floor, and scaled down
      slightly, so the creature reads as inhabiting the room rather than posing at the very front of the frame.
-     Furniture positions unchanged — those already sit naturally on the floor plane. */
+     Furniture positions unchanged — those already sit naturally on the floor plane.
+     Creature-presence pass: personality.restingSpot varies the DEFAULT (sit) position between four real spots
+     that already exist in the room — so two creatures with different seeds visibly idle in different places
+     without any new furniture or new state. All active poses (desk/read/window/curl/kitchen) stay untouched. */
+  const defaultSpot = restingSpot === 'armchair' ? { x: 138, y: 440, s: 0.82 } // perched on the armchair, awake
+    : restingSpot === 'bench' ? { x: 30, y: 288, s: 0.74 } // near the window bench, standing
+    : restingSpot === 'nest' ? { x: 30, y: 730, s: 0.86 } // near the nest but not curled up
+    : { x: 128, y: 620, s: 0.92 } // the open rug (rug preference or default)
   const spot =
     pose === 'desk' ? { x: 60, y: 610, s: 0.88 } // at the desk chair, facing the laptop
     : pose === 'read' ? { x: 138, y: 420, s: 0.82 } // sitting in the reading armchair
     : pose === 'window' ? { x: 22, y: 249, s: 0.74 } // perched on the window bench
     : pose === 'curl' ? { x: 10, y: 765, s: 0.78 } // asleep in the nest
     : pose === 'kitchen' ? { x: 82, y: 692, s: 0.95 }
-    : { x: 128, y: 620, s: 0.92 } // the open rug — upstage on the floor, part of the room's depth
+    : defaultSpot // sit / attentive / thinking / concerned / etc — biased by personality
 
   return (
     /* Product-thesis reshape (2026-09-19): no rounded outline, no inner shadow, no distinct wall colour — the

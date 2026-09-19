@@ -9,7 +9,7 @@ import { sessionsToMarkMissed } from '../core/plans'
 import { sweepDeadlineRisk } from './deadlineAlerts'
 import { isQuietNow, intensityEffects } from './notifyPrefs'
 import { maybeInitiate } from './initiate'
-import { recordProactive } from './creatureVoice'
+import { recordProactive, sendNoticingPulse } from './creatureVoice'
 import { computeCompanionContext } from './companionContext'
 
 export const TICK_MS = 30_000
@@ -26,10 +26,10 @@ function checkInitiate(now: DateTime): void {
     const msg = maybeInitiate(now.toLocal())
     if (msg) {
       log('info', 'initiate.sent', msg.content)
-      onMessageCb?.(msg)
-      // Record the proactive line so "why are you telling me this?" (creatureVoice.explainLastProactive) can
-      // answer from real source context, not from the model. We don't know which of the three initiate rules
-      // fired without re-inspecting the log; the explain path handles that ambiguity fine.
+      // Creature-presence pass: notice first, speak second. onMessageCb goes to a setTimeout so the state
+      // machine has 1s to visibly turn attentive before the line arrives.
+      sendNoticingPulse()
+      setTimeout(() => onMessageCb?.(msg), 1000)
       try {
         recordProactive('other', msg.content, [], computeCompanionContext(now.toISO() ?? undefined))
       } catch (e) {

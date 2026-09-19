@@ -161,6 +161,24 @@ export function pushToRenderer(msg: ChatMessage): boolean {
 }
 
 /**
+ * Creature-presence pulse (creature-presence pass, 2026-09-19): fired ~600ms before a proactive message push,
+ * so the renderer puts the creature into an attentive state BEFORE the message renders. This makes the sequence
+ * "creature notices → creature speaks" visible, rather than "message spawns simultaneously with a state change."
+ * The pulse is best-effort — if the send fails, the message still lands and the state machine handles it
+ * gracefully; nothing about the message's arrival depends on this pulse.
+ */
+export function sendNoticingPulse(): void {
+  const wins = BrowserWindow.getAllWindows()
+  const target = wins.find((w) => w.isVisible() && !w.isDestroyed()) ?? wins[0]
+  if (!target || target.isDestroyed()) return
+  try {
+    target.webContents.send(IPC.creatureNoticing)
+  } catch (e) {
+    log('warn', 'creatureVoice.notice_failed', (e as Error).message)
+  }
+}
+
+/**
  * Is the app currently in a state where a chat message is a better delivery than a Windows toast? True when the
  * user's main window is visible AND focused — the two conditions together mean the user is actually looking at
  * the app right now, not just holding it in the background. Anything else falls back to the toast path, so a

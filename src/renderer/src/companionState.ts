@@ -87,6 +87,9 @@ export interface Signals {
   careSleepAt: number
   careTeaAt: number
   careLookAt: number
+  /** Fired ~1s before a proactive message arrives — the creature turns attentive toward the user first so the
+   *  sequence "creature notices → creature speaks" is visible. Held for ~4s before returning to ambient. */
+  proactiveNoticeAt: number
 }
 
 const DUR = { celebrating: 2600, greeting: 2400, happy: 1400, quietlyExcited: 1800, petted: 1700, concerned: 6000, recovering: 1400, awake: 1200 }
@@ -151,9 +154,24 @@ function inFlourishWindow(now: number, seed: number, chancePct: number, windowMs
 
 const CARE_DUR = { sit: 6000, sleep: 10000, tea: 8000, look: 4000 }
 
+/**
+ * How long the creature stays attentive after a proactive-notice pulse. Long enough that the message arrival
+ * lands inside the window (message is delayed 1s from the pulse) plus a few extra seconds of lingering
+ * attention before the creature naturally returns to what it was doing. Tuned so the sequence "notice → speak
+ * → linger → return" is visible without feeling like a performance.
+ */
+const NOTICE_ATTENTION_MS = 4500
+
 export function resolveState(s: Signals, now: number, seed = 0, personality: PersonalityWeights = NEUTRAL_PERSONALITY): { state: CompanionState; gaze: Gaze } {
   // 0. Recording outranks everything — you are actively speaking to it.
   if (s.recording) return { state: 'listening', gaze: 'viewer' }
+  // 0b. Creature-presence pass (2026-09-19): a proactive message is about to arrive (or just did) — the creature
+  //     turns attentive toward the user first, then remains briefly attentive after the line lands, then returns
+  //     to whatever ambient activity it was doing. Outranks all ambient states and momentary blips, so the
+  //     sequence "notice → speak → linger → return" is always visible; still outranked by process states above.
+  if (s.proactiveNoticeAt > 0 && now - s.proactiveNoticeAt < NOTICE_ATTENTION_MS) {
+    return { state: 'attentive', gaze: 'viewer' }
+  }
   // 1. Process states — the app is doing something right now.
   if (s.chat.kind === 'thinking') return { state: 'thinking', gaze: 'away' }
   if (s.chat.kind === 'throttled') return { state: 'waiting', gaze: 'window' }
@@ -255,7 +273,7 @@ export function useCompanion(signals: Signals, force?: CompanionState | null, se
       if (timer) clearTimeout(timer)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signals.chat.kind, signals.typing, signals.recording, signals.lastAppliedAt, signals.celebrateAt, signals.quietlyExcitedAt, signals.pettedAt, signals.greetAt, signals.addressedAt, signals.concernedAt, signals.waitingOpen, signals.hour, signals.happening, signals.lastToolNames.join(','), force, seed, personality.readingLove, personality.windowLove, personality.sleepOffsetMinutes, signals.overwhelmed, signals.deadlineHoursLeft, signals.planning, signals.returnFromAway, signals.careSitAt, signals.careSleepAt, signals.careTeaAt, signals.careLookAt])
+  }, [signals.chat.kind, signals.typing, signals.recording, signals.lastAppliedAt, signals.celebrateAt, signals.quietlyExcitedAt, signals.pettedAt, signals.greetAt, signals.addressedAt, signals.concernedAt, signals.waitingOpen, signals.hour, signals.happening, signals.lastToolNames.join(','), force, seed, personality.readingLove, personality.windowLove, personality.sleepOffsetMinutes, signals.overwhelmed, signals.deadlineHoursLeft, signals.planning, signals.returnFromAway, signals.careSitAt, signals.careSleepAt, signals.careTeaAt, signals.careLookAt, signals.proactiveNoticeAt])
 
   return out
 }
