@@ -126,6 +126,22 @@ export function SceneRenderer({ world, state, gaze, spot, onPet }: Props): React
         </div>
       )}
 
+      {/* Restrained ambient dust motes in the lamp pools — SVG circles drifting slowly upward. Only visible
+          when the lamps are actually on (evening/night). Very low opacity, small radius; the user does not
+          consciously notice them unless they linger. */}
+      {(lightBand === 'evening' || lightBand === 'night') && scene.lighting.lamps.map((lamp) => (
+        <svg key={`dust-${lamp.id}`} className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden>
+          {[0, 1, 2, 3, 4].map((i) => {
+            const cx = lamp.x * 100 + (Math.cos((lamp.x + i) * 7) * lamp.radius * 100 * 0.4)
+            const cyBase = lamp.y * 100 + 6
+            const delay = (i * 1.7 + lamp.x * 3) % 8
+            return (
+              <circle key={i} cx={cx} cy={cyBase} r="0.28" fill={lamp.color} opacity="0.5" style={{ animation: `dust-drift 8s ease-in-out ${delay}s infinite` }} />
+            )
+          })}
+        </svg>
+      ))}
+
       {/* Light-band tint — only applied for evening / night (day and morning use the scene's baked lighting) */}
       {(lightBand === 'evening' || lightBand === 'night') && (
         <div

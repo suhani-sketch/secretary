@@ -238,19 +238,19 @@ button, [role="tab"], .rounded-full, .rounded-lg, .rounded-xl, .rounded-2xl, .ro
   scroll-behavior: auto !important;
 }
 
-/*
- * The world's floor (product-thesis reshape, 2026-09-19): a very soft warm ochre gradient at the page's bottom
- * third, so the room's floor visually continues under the conversation and rail. The creature stands on the
- * same ground the chat sits on — this is the visible "one environment" cue. The gradient is applied to the body
- * (not to any surface container) so every surface — Conversation, Calendar, Things, Settings — sits on the
- * same shared ground. Kept extremely subtle so it never competes with content.
- */
+/* Page background — quiet editorial paper. Zones (WORLD / CONVERSATION / AWARENESS) each carry their own contained
+   surface color on top, so the page tone shows only in the gutters and around the app shell. */
 body {
-  background:
-    linear-gradient(to bottom,
-      var(--color-cream) 0%,
-      var(--color-cream) 55%,
-      color-mix(in srgb, var(--color-rust) 8%, var(--color-cream)) 82%,
-      color-mix(in srgb, var(--color-rust) 12%, var(--color-cream)) 100%);
+  background: var(--color-cream);
   min-height: 100vh;
+}
+
+/* Restrained ambient dust in lamp pools — slow vertical drift with tiny horizontal wobble. Only ever shown on
+   evening/night in scene renderer, per the "restrained animation" constraint. */
+@keyframes dust-drift {
+  0%   { transform: translate(0, 0);      opacity: 0; }
+  15%  { opacity: 0.55; }
+  50%  { transform: translate(-0.3px, -1.2px); }
+  85%  { opacity: 0.35; }
+  100% { transform: translate(0.3px, -2.4px); opacity: 0; }
 }

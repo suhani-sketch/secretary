@@ -145,19 +145,17 @@ export function Room({ state, gaze, environment, time, happening, onPet, onChang
         <SceneRenderer world={worldContext} state={state} gaze={sceneGaze} spot={{ x: preferredSpot.x, y: preferredSpot.y, scale: preferredSpot.scale }} onPet={onPet} />
         {/* Preserve the scene menu so the user can still switch worlds (back to a legacy SVG environment or to
             the same illustrated scene). Same visual pill as the legacy path. */}
-        <button className="absolute top-3 right-3 z-10 rounded-full bg-white/70 text-cocoa text-xs px-2 py-1 shadow-sm hover:bg-white" onClick={() => setMenu((v) => !v)}>
-          scene
+        <button className="absolute top-3 right-3 z-10 rounded-full text-[10px] tracking-[0.14em] uppercase px-2.5 py-1 font-medium" style={{ background: 'rgba(233,219,193,0.75)', color: '#3A2D28', boxShadow: '0 1px 3px rgba(0,0,0,0.15)' }} onClick={() => setMenu((v) => !v)}>
+          {ENVIRONMENTS.find((e) => e.id === activeEnvironment)?.label ?? 'Scene'}
         </button>
         {menu && (
-          <div className="absolute top-11 right-3 z-10 rounded-2xl bg-cream/95 shadow-lg p-3 text-xs flex flex-col gap-2 min-w-52" onMouseLeave={() => setMenu(false)}>
-            <div className="uppercase tracking-wide text-stone-500 text-[10px]">Scene</div>
-            <div className="grid grid-cols-2 gap-1">
-              {ENVIRONMENTS.map((e) => (
-                <button key={e.id} onClick={() => { setMenu(false); onChangeEnvironment(e.id) }} className={`px-2 py-1 rounded hover:bg-white/80 text-left ${activeEnvironment === e.id ? 'bg-white' : ''}`}>
-                  {e.emoji} {e.label}
-                </button>
-              ))}
-            </div>
+          <div className="absolute top-11 right-3 z-10 rounded-xl shadow-lg p-2 text-xs flex flex-col gap-0.5 min-w-52 border border-[color:var(--color-zone-border)]" style={{ background: 'var(--color-paper)' }} onMouseLeave={() => setMenu(false)}>
+            <div className="uppercase tracking-[0.16em] text-ash text-[10px] px-2 py-1">Scene</div>
+            {ENVIRONMENTS.map((e) => (
+              <button key={e.id} onClick={() => { setMenu(false); onChangeEnvironment(e.id) }} className={`px-2 py-1.5 rounded text-left text-[12px] ${activeEnvironment === e.id ? 'bg-cocoa text-cream' : 'hover:bg-[color:var(--color-paper-2)] text-cocoa'}`}>
+                <span className="mr-1.5">{e.emoji}</span>{e.label}
+              </button>
+            ))}
           </div>
         )}
       </div>

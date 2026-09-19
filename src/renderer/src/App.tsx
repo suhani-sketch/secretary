@@ -894,9 +894,9 @@ export default function App(): React.JSX.Element {
           weatherOverride={weatherOverride}
           restingSpot={personality.restingSpot}
         />
-        <div className="absolute top-3 left-4 text-[11px] text-stone-600/80 pointer-events-none">
-          {creatureName ? `${creatureName} · ` : ''}
-          {new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}
+        <div className="absolute top-3 left-4 z-10 text-[11px] tracking-wide pointer-events-none flex flex-col gap-0.5" style={{ color: 'rgba(255,238,210,0.85)', textShadow: '0 1px 2px rgba(0,0,0,0.45)' }}>
+          {creatureName && <span className="font-medium">{creatureName}</span>}
+          <span className="opacity-90">{new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}</span>
         </div>
         <p className="absolute bottom-2 left-0 right-0 text-[11px] text-stone-500 text-center pointer-events-none">
           {status.kind === 'throttled' ? `one moment — retrying in ${status.retryInSeconds}s` : ''}
