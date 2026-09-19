@@ -563,10 +563,16 @@ export default function App(): React.JSX.Element {
     void quick('reorder_checklist', { project_id: project.id, ordered_ids: ids })
   }
 
-  // Overdue is its own list (spec §7 Today: "live obligations, blockers"), never mixed into Coming Up.
+  // NOW is its own list — anything genuinely overdue (spec §7 Today).
   const now = Date.now()
   const overdueItems = openItems.filter((i) => isOverdue(i.due_at_utc, i.due_precision, now)).sort((a, b) => a.due_at_utc!.localeCompare(b.due_at_utc!))
   const overdueIds = new Set(overdueItems.map((i) => i.id))
+  // DEADLINES: hard deadlines (or explicit kind='deadline') within 14 days, not already in NOW.
+  const deadlineHorizon = now + 14 * 24 * 3600 * 1000
+  const deadlineItems = openItems
+    .filter((i) => (i.hardness === 'hard' || i.kind === 'deadline') && !overdueIds.has(i.id) && i.due_at_utc && new Date(i.due_at_utc).getTime() <= deadlineHorizon)
+    .sort((a, b) => a.due_at_utc!.localeCompare(b.due_at_utc!))
+  const deadlineIds = new Set(deadlineItems.map((i) => i.id))
 
   // Coming Up reflects exactly what exists (spec §5): alarms AND dated items, told apart, next 7 days.
   const horizon = now + 7 * 24 * 3600 * 1000
@@ -591,8 +597,9 @@ export default function App(): React.JSX.Element {
         item: r.target_type === 'item' ? itemById.get(r.target_id) : undefined
       })),
     // A dated item with a live alarm is already represented by its 🔔 row; only alarm-less dates get a 📅 row.
+    // Hard deadlines live in their own section, so they never appear here twice.
     ...openItems
-      .filter((i) => i.due_at_utc && new Date(i.due_at_utc).getTime() <= horizon && !overdueIds.has(i.id))
+      .filter((i) => i.due_at_utc && new Date(i.due_at_utc).getTime() <= horizon && !overdueIds.has(i.id) && !deadlineIds.has(i.id))
       .filter((i) => !pending.some((r) => r.target_type === 'item' && r.target_id === i.id))
       .map((i) => ({
         key: 'i' + i.id,
@@ -729,9 +736,9 @@ export default function App(): React.JSX.Element {
       )}
 
       {surface === 'conversation' && (
-      <div className="flex-1 min-h-0 grid grid-cols-[260px_minmax(0,1fr)_300px] gap-5 overflow-hidden">
-      {/* ROOM + COMPANION */}
-      <aside className="relative overflow-hidden rounded-3xl">
+      <div className="flex-1 min-h-0 grid grid-cols-[minmax(380px,1.2fr)_minmax(0,1.6fr)_minmax(300px,0.85fr)] gap-6 overflow-hidden">
+      {/* THE WORLD — room + creature, no rounded outline; the creature's environment is the ground the page sits on */}
+      <aside className="relative overflow-hidden">
         <Room
           state={companion.state}
           gaze={companion.gaze}
@@ -773,10 +780,9 @@ export default function App(): React.JSX.Element {
         </p>
       </aside>
 
-      {/* CONVERSATION */}
+      {/* CONVERSATION — no bold heading competing with the world beside it; controls remain, subtly */}
       <main className="flex flex-col min-h-0">
-        <header className="flex items-baseline justify-between mb-3">
-          <h1 className="text-2xl font-semibold tracking-tight">Secretary</h1>
+        <header className="flex items-center justify-end mb-2 h-6">
           <div className="flex gap-3 text-xs text-stone-500">
             <button onClick={() => void quick('undo_last', {})} className="hover:text-stone-800" title="Undo the last change">
               undo
@@ -793,7 +799,7 @@ export default function App(): React.JSX.Element {
           </div>
         )}
 
-        <div ref={scrollRef} className="flex-1 overflow-y-auto rounded-3xl bg-white/50 p-5 flex flex-col gap-3">
+        <div ref={scrollRef} className="flex-1 overflow-y-auto py-4 pr-2 flex flex-col gap-3">
           {messages.length === 0 && (
             <p className="text-sm text-stone-400 m-auto text-center max-w-sm">
               Tell me what's on your mind. "Remind me to call the bank Thursday at 3", "the CV is done", "actually make it 4", "undo that".
@@ -840,20 +846,20 @@ export default function App(): React.JSX.Element {
         {flash && <p key={flashSeq} className="mt-2 text-xs text-stone-500 flash-in">{flash}</p>}
       </main>
 
-      {/* TODAY RAIL (or DEBUG) */}
-      <aside className="flex flex-col gap-4 min-h-0 overflow-hidden">
+      {/* THINGS THE SECRETARY IS KEEPING AN EYE ON — one column, four sections, calm visual language (spec §7). */}
+      <aside className="flex flex-col gap-5 min-h-0 overflow-y-auto pr-1">
         {!showDebug ? (
           <>
-            {overdueItems.length > 0 && (
-              <section className="rounded-2xl bg-amber-50/80 p-4 flex flex-col gap-2 min-h-0">
-                <h2 className="text-xs font-medium uppercase tracking-wide text-amber-800">Overdue ({overdueItems.length})</h2>
-                <ul className="flex flex-col gap-1 overflow-y-auto">
+            {(overdueItems.length > 0 || happenings.some((h) => h.state === 'running')) && (
+              <section className="flex flex-col gap-2 min-h-0">
+                <h2 className="text-[11px] font-medium uppercase tracking-[0.14em] text-amber-900/70">Now</h2>
+                <ul className="flex flex-col gap-1">
                   {overdueItems.slice(0, 8).map((it) => (
-                    <li key={it.id} className={`item-in group text-sm flex items-start gap-2 rounded-lg px-1 py-1 hover:bg-white/80 cursor-pointer ${completingIds.has(it.id) ? 'completing' : ''}`} onClick={() => setEditing({ kind: 'item', item: it })}>
-                      <span className="mt-0.5 text-xs">⚠</span>
+                    <li key={it.id} className={`item-in group text-sm flex items-start gap-2 rounded-lg px-1 py-1 hover:bg-white/40 cursor-pointer ${completingIds.has(it.id) ? 'completing' : ''}`} onClick={() => setEditing({ kind: 'item', item: it })}>
+                      <span className="mt-0.5 text-xs text-amber-800">⚠</span>
                       <div className="min-w-0 flex-1">
                         <div className="truncate">{it.title}</div>
-                        <div className="text-xs text-amber-800">was due {formatDue(it.due_at_utc, it.due_precision)}</div>
+                        <div className="text-xs text-amber-800/80">was due {formatDue(it.due_at_utc, it.due_precision)}</div>
                       </div>
                       <button
                         className="opacity-0 group-hover:opacity-100 text-xs text-stone-500 hover:text-emerald-700 px-1"
@@ -870,8 +876,8 @@ export default function App(): React.JSX.Element {
                 </ul>
               </section>
             )}
-            <section className="rounded-2xl bg-white/60 p-4 flex flex-col gap-2 min-h-0">
-              <h2 className="text-xs font-medium uppercase tracking-wide text-stone-500">Coming up · 7 days</h2>
+            <section className="flex flex-col gap-2 min-h-0">
+              <h2 className="text-[11px] font-medium uppercase tracking-[0.14em] text-stone-500">Up next</h2>
               {upcoming.length === 0 && <p className="text-sm text-stone-400">Nothing dated, no alarms set.</p>}
               <ul className="flex flex-col gap-1 overflow-y-auto">
                 {upcoming.slice(0, 10).map((u) => (
@@ -907,9 +913,25 @@ export default function App(): React.JSX.Element {
               </ul>
             </section>
             <RightNow happenings={happenings} onFinish={(id, outcome) => void quick('finish_happening', { id, outcome })} />
+            {deadlineItems.length > 0 && (
+              <section className="flex flex-col gap-2 min-h-0">
+                <h2 className="text-[11px] font-medium uppercase tracking-[0.14em] text-stone-500">Deadlines</h2>
+                <ul className="flex flex-col gap-1">
+                  {deadlineItems.slice(0, 6).map((it) => (
+                    <li key={it.id} className={`item-in group text-sm flex items-start gap-2 rounded-lg px-1 py-1 hover:bg-white/40 cursor-pointer ${completingIds.has(it.id) ? 'completing' : ''}`} onClick={() => setEditing({ kind: 'item', item: it })}>
+                      <span className="mt-0.5 text-xs text-cocoa">◆</span>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate">{it.title}</div>
+                        <div className="text-xs text-stone-500">due {formatDue(it.due_at_utc, it.due_precision)}</div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
             {constraints.length > 0 && (
-              <section className="rounded-2xl bg-stone-100/80 p-4 flex flex-col gap-1 min-h-0">
-                <h2 className="text-xs font-medium uppercase tracking-wide text-stone-500">Unavailable / preferences ({constraints.length})</h2>
+              <section className="flex flex-col gap-1 min-h-0">
+                <h2 className="text-[11px] font-medium uppercase tracking-[0.14em] text-stone-500">Unavailable · preferences</h2>
                 <ul className="flex flex-col gap-0.5 overflow-y-auto">
                   {constraints.slice(0, 8).map((c) => (
                     <li key={c.id} className="group text-xs flex items-center gap-2 rounded-lg px-1 py-0.5 hover:bg-white/80">
@@ -939,8 +961,8 @@ export default function App(): React.JSX.Element {
               </section>
             )}
             {waitingItems.length > 0 && (
-              <section className="rounded-2xl bg-sky-50/70 p-4 flex flex-col gap-2 min-h-0">
-                <h2 className="text-xs font-medium uppercase tracking-wide text-sky-900">Waiting on ({waitingItems.length})</h2>
+              <section className="flex flex-col gap-2 min-h-0">
+                <h2 className="text-[11px] font-medium uppercase tracking-[0.14em] text-sky-900/70">Waiting</h2>
                 <ul className="flex flex-col gap-1 overflow-y-auto">
                   {waitingItems.map((w) => {
                     const late = isOverdue(w.due_at_utc, w.due_precision, now)
@@ -975,8 +997,8 @@ export default function App(): React.JSX.Element {
                 </ul>
               </section>
             )}
-            <section className="rounded-2xl bg-white/60 p-4 flex flex-col gap-2 min-h-0 flex-1">
-              <h2 className="text-xs font-medium uppercase tracking-wide text-stone-500">Open ({standalone.filter((i) => !i.is_suggestion).length})</h2>
+            <section className="flex flex-col gap-2 min-h-0 flex-1">
+              <h2 className="text-[11px] font-medium uppercase tracking-[0.14em] text-stone-500">Open · {standalone.filter((i) => !i.is_suggestion).length}</h2>
               {standalone.length === 0 && <p className="text-sm text-stone-400">Nothing open.</p>}
               <ul className="flex flex-col gap-1 overflow-y-auto">
                 {standalone.slice(0, 30).map((it) => (
