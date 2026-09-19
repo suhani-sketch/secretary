@@ -15,7 +15,7 @@ import type {
   ToolRunResult
 } from '../../shared/types'
 import { Room, type EnvironmentId, type TimeChoice, type Weather } from './Room'
-import { useCompanion, type CompanionState } from './companionState'
+import { useCompanion, type CompanionState, type PersonalityWeights } from './companionState'
 import { ItemEditor, NoteEditor, ReminderEditor } from './Editors'
 import { ItemHistory, ProjectView } from './ProjectView'
 import { formatClock, formatDue, isOverdue } from '../../shared/format'
@@ -191,6 +191,10 @@ export default function App(): React.JSX.Element {
   const [favorites, setFavorites] = useState<EnvironmentId[]>([])
   const [rotation, setRotation] = useState(false)
   const [creatureName, setCreatureName] = useState<string | null>(null)
+  // Character seed + derived personality (attachment reshape). Neutral defaults keep the pre-personality
+  // behaviour intact until getSetting comes back; the real values arrive within the first tick after mount.
+  const [creatureSeed, setCreatureSeed] = useState<number>(0)
+  const [personality, setPersonality] = useState<PersonalityWeights>({ readingLove: 0.25, windowLove: 0.2, rainAffinity: 0.4, sleepOffsetMinutes: 0, restingSpot: 'nest', expressiveness: 0.55, curiosity: 0.4 })
   const prevOverdue = useRef<number | null>(null)
   useEffect(() => {
     const t = setInterval(() => setHour(new Date().getHours()), 30_000)
@@ -227,6 +231,22 @@ export default function App(): React.JSX.Element {
     })
     void window.api.getSetting('scene.rotation').then((v) => setRotation(v === '1'))
     void window.api.getSetting('creature.name').then((v) => setCreatureName(v))
+    // Character seed + derived personality (the "attachment" reshape): each creature has its own rotation cadence
+    // and its own tastes — seeded once and forever on first launch, exposed as read-only settings so the ambient
+    // rotation reads consistently from renderer and main.
+    void window.api.getSetting('creature.seed').then((v) => {
+      const n = v ? parseInt(v, 10) : 0
+      if (Number.isFinite(n)) setCreatureSeed(n >>> 0)
+    })
+    void window.api.getSetting('creature.personality').then((v) => {
+      if (!v) return
+      try {
+        const p = JSON.parse(v) as PersonalityWeights
+        setPersonality(p)
+      } catch {
+        /* corrupted — keep the neutral default */
+      }
+    })
   }, [])
   // Dev hook: "#state:working,light:night,env:rain" forces creature state / light band / environment for screenshots.
   const hashParts = Object.fromEntries(window.location.hash.replace('#', '').split(',').map((p) => p.split(':') as [string, string]))
@@ -657,7 +677,9 @@ export default function App(): React.JSX.Element {
       hour,
       happening: happeningKind
     },
-    forcedState
+    forcedState,
+    creatureSeed,
+    personality
   )
 
   return (

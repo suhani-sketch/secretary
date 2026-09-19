@@ -14,6 +14,7 @@ import { maybeSendFollowUp } from './followUp'
 import { maybeOfferName } from './naming'
 import { recordProactive } from './creatureVoice'
 import { computeCompanionContext } from './companionContext'
+import { effectiveVector, getOrCreateSeed } from './creaturePersonality'
 import { inferImportance } from '../core/importance'
 import { describeProgress, planProgress } from '../core/plans'
 import { createTray, refreshTrayMenu } from './tray'
@@ -584,9 +585,16 @@ function registerIpc(): void {
   // the app's current state — but it must still WRITE them only through set_notification_intensity/set_quiet_hours (the
   // tool layer), which log an activity and apply the one-sided quiet-hours default; a raw settings:set for these keys
   // would silently skip both. Hence a wider read-only allowance layered on top of the same write whitelist.
-  const UI_SETTING_READ_ONLY = /^notify\.(intensity|quiet_start|quiet_end)$/
+  // creature.seed / creature.personality are read-only exposures (the seed is written ONCE by getOrCreateSeed on
+  // first run, personality is derived from it). The renderer needs both to weight the ambient rotation and the
+  // creature's expression.
+  const UI_SETTING_READ_ONLY = /^notify\.(intensity|quiet_start|quiet_end)$|^creature\.(seed|personality)$/
   ipcMain.handle(IPC.getSetting, (_e, key: string) => {
     if (!UI_SETTING.test(key) && !UI_SETTING_READ_ONLY.test(key)) return null
+    // Two special read-only keys the renderer needs but that don't live plain in the settings row:
+    // creature.seed materializes on first ask (generated once), creature.personality is the derived vector.
+    if (key === 'creature.seed') return String(getOrCreateSeed())
+    if (key === 'creature.personality') return JSON.stringify(effectiveVector())
     const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined
     return row?.value ?? null
   })

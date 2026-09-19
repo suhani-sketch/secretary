@@ -85,21 +85,40 @@ const WRITE_TOOLS = /^(add_note|update_note|record_activity|create_waiting)$/
  *  what earns the brief `awake` bridge; the rotation moving itself from sleepy to idle at 6 a.m. does not. */
 const AMBIENT_STATES = new Set<CompanionState>(['idle', 'looking', 'reading', 'working', 'sleepy', 'sleeping', 'tea', 'stretching'])
 
-function ambientPose(now: number, waitingOpen: number, hour: number): CompanionState {
+/** Personality vector (the "attachment" reshape): each creature has its own tastes, seeded once and forever, and
+ *  they nudge the ambient rotation's weights so the same room reliably feels different across users. Defaults are
+ *  the neutral midpoint of every range so a null/missing personality behaves identically to the old rotation. */
+export interface PersonalityWeights {
+  readingLove: number // 0.15..0.40
+  windowLove: number // 0.10..0.30
+  rainAffinity: number
+  sleepOffsetMinutes: number // -90..+90
+  restingSpot: 'nest' | 'armchair' | 'bench' | 'rug'
+  expressiveness: number
+  curiosity: number
+}
+const NEUTRAL_PERSONALITY: PersonalityWeights = { readingLove: 0.25, windowLove: 0.2, rainAffinity: 0.4, sleepOffsetMinutes: 0, restingSpot: 'nest', expressiveness: 0.55, curiosity: 0.4 }
+
+function ambientPose(now: number, waitingOpen: number, hour: number, seed: number, p: PersonalityWeights): CompanionState {
   const slot = Math.floor(now / AMBIENT_SLOT_MS)
-  // A tiny hash so the sequence feels unplanned but is stable within a slot.
-  const r = ((slot * 2654435761) >>> 0) % 100
-  // Deep night (1–5 a.m.): properly asleep, almost always — not just drowsy. The hour either side is the
-  // falling-asleep / stirring-awake edge, which stays the lighter `sleepy`.
-  if (hour >= 1 && hour < 5) return r < 92 ? 'sleeping' : 'sleepy'
-  if (hour >= 22 || hour < 6) return r < 80 ? 'sleepy' : 'idle'
-  if (hour < 8) return r < 45 ? 'sleepy' : 'idle'
-  if (waitingOpen > 0 && r < 35) return 'reading'
-  if (r < 50) return 'idle'
-  if (r < 66) return 'reading'
-  if (r < 80) return 'looking' // gazing out the window, for no particular reason
-  if (r < 90) return 'working' // tidying at the desk
-  if (r < 95) return 'tea' // decided to make tea, entirely on its own — no task, no happening row, just the room
+  // Hash includes the personality seed — every creature has its own rotation sequence, deterministic per (slot, seed).
+  const r = ((slot * 2654435761 + seed * 2246822519) >>> 0) % 100
+  // Sleep-timing drift: a positive offset means "this one stays up later", a negative one "this one goes to bed
+  // earlier". The offset shifts the calendar hour we use for the night gate, without reshaping the overall shape.
+  const shiftedHour = ((hour * 60 + p.sleepOffsetMinutes + 24 * 60) % (24 * 60)) / 60
+  if (shiftedHour >= 1 && shiftedHour < 5) return r < 92 ? 'sleeping' : 'sleepy'
+  if (shiftedHour >= 22 || shiftedHour < 6) return r < 80 ? 'sleepy' : 'idle'
+  if (shiftedHour < 8) return r < 45 ? 'sleepy' : 'idle'
+  // Daytime rotation, weighted by personality. Reading and window-love are the two most character-defining traits,
+  // so they're what earns the largest range in the vector. Everything else compresses proportionally.
+  const readingThresh = 50 + p.readingLove * 100 // ~65..90
+  const windowThresh = readingThresh + p.windowLove * 100 // adds ~10..30 more window pull
+  if (waitingOpen > 0 && r < 35 * (1 + p.readingLove)) return 'reading'
+  if (r < 50 - p.readingLove * 20) return 'idle'
+  if (r < readingThresh) return 'reading'
+  if (r < windowThresh) return 'looking' // gazing out the window, for no particular reason
+  if (r < windowThresh + 8) return 'working' // tidying at the desk
+  if (r < windowThresh + 13) return 'tea' // decided to make tea, entirely on its own — no task, no happening row, just the room
   return 'idle'
 }
 
@@ -111,7 +130,7 @@ function inFlourishWindow(now: number, seed: number, chancePct: number, windowMs
   return r < chancePct && now % FLOURISH_SLOT_MS < windowMs
 }
 
-export function resolveState(s: Signals, now: number): { state: CompanionState; gaze: Gaze } {
+export function resolveState(s: Signals, now: number, seed = 0, personality: PersonalityWeights = NEUTRAL_PERSONALITY): { state: CompanionState; gaze: Gaze } {
   // 0. Recording outranks everything — you are actively speaking to it.
   if (s.recording) return { state: 'listening', gaze: 'viewer' }
   // 1. Process states — the app is doing something right now.
@@ -144,7 +163,7 @@ export function resolveState(s: Signals, now: number): { state: CompanionState; 
   //    "activity"; these two are brief, sparse asides layered on top of it, each reverting to that activity on its
   //    own once its short window passes. Neither is attention-seeking: a stretch does not pause for acknowledgement,
   //    and the glance below is a look, not a request.
-  const pose = ambientPose(now, s.waitingOpen, s.hour)
+  const pose = ambientPose(now, s.waitingOpen, s.hour, seed, personality)
   if ((pose === 'idle' || pose === 'working') && inFlourishWindow(now, 17, 6, 2500)) return { state: 'stretching', gaze: 'away' }
   if (pose === 'idle' && inFlourishWindow(now, 41, 8, 1600)) return { state: 'idle', gaze: 'viewer' } // looks toward the user, then back to what it was doing
   const gaze: Gaze = pose === 'sleepy' || pose === 'sleeping' ? 'closed' : pose === 'reading' || pose === 'working' ? 'desk' : pose === 'looking' ? 'window' : 'away'
@@ -153,7 +172,7 @@ export function resolveState(s: Signals, now: number): { state: CompanionState; 
 
 const EYE_CONTACT = new Set<CompanionState>(['greeting', 'celebrating', 'happy', 'quietlyExcited', 'listening', 'petted'])
 
-export function useCompanion(signals: Signals, force?: CompanionState | null): { state: CompanionState; gaze: Gaze } {
+export function useCompanion(signals: Signals, force?: CompanionState | null, seed = 0, personality: PersonalityWeights = NEUTRAL_PERSONALITY): { state: CompanionState; gaze: Gaze } {
   const [out, setOut] = useState<{ state: CompanionState; gaze: Gaze }>({ state: 'idle', gaze: 'away' })
   const lastChange = useRef(0)
   // Tracks what was actually SHOWN last (not the raw signal), so the awake bridge below can tell "we were just
@@ -169,7 +188,7 @@ export function useCompanion(signals: Signals, force?: CompanionState | null): {
       if (force) {
         next = { state: force, gaze: (EYE_CONTACT.has(force) ? 'viewer' : force === 'sleepy' || force === 'sleeping' ? 'closed' : force === 'looking' || force === 'waiting' ? 'window' : 'away') as Gaze }
       } else {
-        const raw = resolveState(signals, now)
+        const raw = resolveState(signals, now, seed, personality)
         const wasAsleep = lastShown.current === 'sleepy' || lastShown.current === 'sleeping'
         // A real interruption of sleep (anything the ambient rotation would not have picked on its own) earns a
         // brief "waking up" moment first — it is never appropriate to snap straight from curled-up-asleep to
@@ -202,7 +221,7 @@ export function useCompanion(signals: Signals, force?: CompanionState | null): {
       if (timer) clearTimeout(timer)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signals.chat.kind, signals.typing, signals.recording, signals.lastAppliedAt, signals.celebrateAt, signals.quietlyExcitedAt, signals.pettedAt, signals.greetAt, signals.addressedAt, signals.concernedAt, signals.waitingOpen, signals.hour, signals.happening, signals.lastToolNames.join(','), force])
+  }, [signals.chat.kind, signals.typing, signals.recording, signals.lastAppliedAt, signals.celebrateAt, signals.quietlyExcitedAt, signals.pettedAt, signals.greetAt, signals.addressedAt, signals.concernedAt, signals.waitingOpen, signals.hour, signals.happening, signals.lastToolNames.join(','), force, seed, personality.readingLove, personality.windowLove, personality.sleepOffsetMinutes])
 
   return out
 }
