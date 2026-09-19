@@ -3,13 +3,91 @@
 Source of truth for the design is `SPEC.md`. This file tracks where the build actually is.
 Update it at the end of every session (spec §11).
 
-## Current phase: Phase 9 — The living world. **All nine slices (9a–9i) built, testable.** 9a (the room as a
-place), 9b (the creature as a character system), 9c (autonomous ambient behaviour), 9d (direct interaction), 9e
-(rare initiation), 9f (familiarity through real memory), 9g (room persistence and the deferred Phase 4 features),
-9h (coherent product language) and 9i (micro-interactions and motion) all built and verified per-slice. **Not yet
-run: §9T/§9U** — spec's own overarching Phase 9 acceptance ("leave the application open for several hours...",
-"use it over multiple days...") is an observational test of the lived-in whole, not a single session's scripted
-check; needs the user's own multi-day use, the same way the Phase 0 reboot test needed a real restart. **Phase 8 — Proactivity is COMPLETE.** 8a (morning briefing), 8b (approaching-deadline alerts), 8c
+## Current phase: Product-thesis reshape (2026-09-19, on top of Phase 9)
+Phase 9's nine slices are all still there — none were rewritten — but the composition and voice around them were
+reshaped this session so the creature is the *voice* of the Secretary, not just a companion beside it. Layout now
+puts the world materially larger (grid `380–520px | fluid | 300–380px`, killed the box borders that made three
+columns read as three products), rail relabelled `NOW / UP NEXT / DEADLINES / WAITING / OPEN` with one calm visual
+language (no more per-section colored boxes). Every proactive Secretary line (briefing, follow-up, deadline alert,
+initiation, naming) now flows through one arbitrator (`main/creatureVoice.ts`) that records why it fired, is
+attributed to the creature in the UI, and answers "why are you telling me this?" honestly from stored source
+context. The creature has a persistent 32-bit seed (`main/creaturePersonality.ts`) giving it its own reading/window
+love, sleep timing, resting spot and expressiveness — the ambient rotation reads from this weighted, so two
+users' creatures behave differently. Emotional signals (`overwhelmed`, `deadlineHoursLeft`, `planning`,
+`returnFromAway`) and a care surface (`come sit with me`, `you should sleep`, `do you want tea?`, `look at this`)
+make the creature respond to the user's real state and let the user care for it without maintenance. Rare
+memorable moments (`renderer/creatureMoments.ts` — `napAtDesk`, `rainWindow`, `unusualNap`) are per-day-capped and
+seed-deterministic so they recur predictably per creature. **All Phase 1–8 intelligence is untouched.** Deadline
+alerts now deliver as chat-from-creature when the app is foreground and as a Windows toast when it isn't — never
+both about the same event. Full narrative in the "Reshape" section below.
+
+**Phase 9 slices as previously delivered still stand.** 9a (the room as a place), 9b (the creature as a character
+system), 9c (autonomous ambient behaviour), 9d (direct interaction), 9e (rare initiation), 9f (familiarity through
+real memory), 9g (room persistence and the deferred Phase 4 features), 9h (coherent product language) and 9i
+(micro-interactions and motion) all built and verified per-slice. **§9T/§9U** — the multi-hour/multi-day
+observational acceptance — is the user's own to run.
+
+## Product-thesis reshape (2026-09-19)
+- **The reframe:** the product is a serious AI Secretary with a persistent character-driven creature companion.
+  The creature is the *voice* through which the Secretary's proactive intelligence reaches the user, and the
+  emotional presence that makes using the product personal. The Secretary is competence; the creature is presence.
+  Both must be true simultaneously.
+- **Layout (step 1):** `App.tsx` grid changed from `260px | fluid | 300px` to `minmax(380px,1.2fr) |
+  minmax(0,1.6fr) | minmax(300px,0.85fr)`. The world gets meaningful presence instead of reading as a sidebar
+  illustration. Killed the bold "Secretary" h1 that competed with the world; dropped the rounded-3xl bg-white/50
+  container around the chat feed so cream bleeds throughout; rail sections lose their per-section colored
+  backgrounds (was `bg-amber-50` / `bg-white/60` / `bg-sky-50/70`) and become one calm column of headers.
+  Sections renamed to the spec's requested hierarchy: **NOW** (overdue + running happenings), **UP NEXT** (dated
+  today+tomorrow), **DEADLINES** (hard/deadline items, next 14 days, deduped from Up Next), **WAITING**, **OPEN**.
+- **Companion context (step 2):** `main/companionContext.ts` — one small semantic summary derived from existing
+  Secretary intelligence (top priority from 7c, upcoming deadline with feasibility from 7b, day load from 6a,
+  overdue/waiting counts, active plan behind, user context from 5d, meaningful recent completion from
+  activities). Never the whole database; used by the voice layer to decide *what* to say and record what drove it.
+- **Creature voice arbitrator (step 3):** `main/creatureVoice.ts` unifies every proactive line the Secretary
+  computes. Records every delivery as a `ProactiveRecord` (source rule, content, item refs, compact context
+  snapshot) in a rolling settings entry. `lastRecentProactive` within a 1-hour window drives explanation.
+  Deadline alerts (8b) now branch on `appIsForeground()` — a chat message from the creature when the user is
+  looking, a Windows toast when they aren't; never both about the same event. New tier-0 route for "why are you
+  telling me this?" → `explain_proactive` tool → honest answer from the recorded source context, 0 model calls.
+- **Character seed (step 4):** `main/creaturePersonality.ts` — 32-bit seed generated once, stored forever in
+  `settings['creature.seed']`. `vectorFor(seed)` derives narrow-range personality traits (readingLove 0.15-0.40,
+  windowLove 0.10-0.30, rainAffinity, sleepOffsetMinutes ±90, restingSpot, expressiveness, curiosity). Exposed
+  to the renderer via read-only `creature.seed` and `creature.personality` settings. Ambient rotation in
+  `companionState.ts` now weights by (seed, personality) — each creature has its own rotation sequence AND its
+  own preferences. Habit-drift scaffolded (`bumpDrift`/`readDrift`) but not yet fed real events.
+- **Emotional signals + care surface (step 5+6):** New `Signals` fields:
+  - `overwhelmed` (3+ overdue OR low-energy context) → creature suppresses ordinary happy/quietlyExcited blips,
+    no stretches, no glances — stays present in whatever gentle pose the rotation picked.
+  - `deadlineHoursLeft` (hours to soonest hard deadline).
+  - `planning` (last tool round was recommend_now/plan_week/refine_week_plan/assess_deadline).
+  - `returnFromAway` (localStorage `creature.last_close` marker, gap > 12h → brief greeting).
+  Care surface — four tier-0 router rules + `careSitAt`/`careSleepAt`/`careTeaAt`/`careLookAt` signals set
+  client-side so the creature moves in the same moment the reply lands: "come sit with me" → attentive, "you
+  should sleep" → sleepy in the nest, "do you want tea?" → tea activity, "look at this" → looking. Warm short
+  replies, no tasks, no reminders, no happenings — invariant 9 preserved.
+- **Rare memorable moments (step 7):** `renderer/creatureMoments.ts` runs after `useCompanion` and may override
+  the base pose with a "moment". Per-day-capped in localStorage, deterministic per (day, seed) so once discovered
+  the character-signature moments recur predictably:
+  - `napAtDesk`: after >30 min of no user activity, working hours, in a stable seed-derived 5-minute window per day
+  - `rainWindow`: on cloudy/misty days, pull to the window gated by personality.rainAffinity
+  - `unusualNap`: at most once/week, on a random seed-derived weekday, curls up somewhere unusual
+- **Attribution UI (step 9):** proactive messages (anything delivered via `IPC.messageAdded`) are tagged in
+  `App.tsx` and rendered with a small mocha glyph + creature-name (or "from the room") above the bubble, plus a
+  slightly warmer `bg-accent/15` bubble. Ordinary tool replies stay unattributed — the creature's strongest visual
+  presence is reserved for its own unsolicited moments. Known limitation: same-day re-load of a proactive line via
+  chatHistory doesn't get the tag; would need a schema migration to add a `proactive` column. The moment-of-
+  delivery presence is what matters for attachment; a re-render of yesterday's briefing isn't the moment.
+- **Not built in this session, deliberately deferred:**
+  - Deep voice styling pass (step 8) — router replies and code-generated phrasings are warm but haven't been swept
+    against a formal style guide. A dedicated pass would tighten tone consistency.
+  - Room canvas polish (step 11) — the existing Room.tsx is unchanged this session. The composition impact came
+    from giving it more physical space; visible object detail could deepen with more time.
+  - Habit-drift signal wiring — `bumpDrift` is exported but no code path calls it yet on real events (a
+    morning-open, a completion in an armchair-environment). This is scaffolding for a future pass.
+  - "Proud stretch" per-seed variant on project completions — scaffolded in `creatureMoments.ts` but not wired.
+  - `§9T/§9U` — multi-day observational tests remain the user's to run.
+
+**Phase 8 — Proactivity is COMPLETE.** 8a (morning briefing), 8b (approaching-deadline alerts), 8c
 (missed-task and waiting-item follow-up), 8d (adaptive intensity, quiet hours) built and tested; SPEC.md's own Phase 8 line
 has no lettered slices at all (8a–8d were this session's own organisational split, not spec text) — "conversational
 replanning" is PARTIALLY covered by 7f (full preview, nothing moves without approval, a proactive nudge) but NOT by a
