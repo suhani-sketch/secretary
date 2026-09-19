@@ -182,6 +182,15 @@ export default function App(): React.JSX.Element {
   const [greetAt, setGreetAt] = useState(0)
   const [addressedAt, setAddressedAt] = useState(0)
   const [concernedAt, setConcernedAt] = useState(0)
+  // Care surface (reshape "user can care FOR the creature"): four direct-address triggers the user can raise
+  // conversationally. They move the creature; they never create tasks, reminders, or happenings (invariant 9).
+  const [careSitAt, setCareSitAt] = useState(0)
+  const [careSleepAt, setCareSleepAt] = useState(0)
+  const [careTeaAt, setCareTeaAt] = useState(0)
+  const [careLookAt, setCareLookAt] = useState(0)
+  // Return-from-away (reshape): a persistent 'closed at' marker in localStorage. If the gap is > 12h, the creature
+  // greets on next open. Written on every unload; missing on first launch means no greeting.
+  const [returnFromAway, setReturnFromAway] = useState(false)
   const [typingAt, setTypingAt] = useState(0)
   const [hour, setHour] = useState(new Date().getHours())
   const [environment, setEnvironment] = useState<EnvironmentId>('trees')
@@ -247,6 +256,37 @@ export default function App(): React.JSX.Element {
         /* corrupted — keep the neutral default */
       }
     })
+    // Return-from-away (reshape): compare last-close timestamp against now. > 12h → greeting on next open,
+    // then rewrite the marker. Missing marker (first ever run) → no greeting; that's what the naming moment is for.
+    try {
+      const raw = localStorage.getItem('creature.last_close')
+      if (raw) {
+        const then = Date.parse(raw)
+        if (!Number.isNaN(then) && Date.now() - then > 12 * 3600 * 1000) {
+          setReturnFromAway(true)
+          setGreetAt(Date.now())
+          setTimeout(() => setReturnFromAway(false), 8000) // once the greeting has landed, drop back
+        }
+      }
+      const writeMarker = (): void => {
+        try {
+          localStorage.setItem('creature.last_close', new Date().toISOString())
+        } catch {
+          /* private mode / storage full — a missing marker just means no greeting next time */
+        }
+      }
+      window.addEventListener('beforeunload', writeMarker)
+      // On a hidden window (tray) we may not get beforeunload for a while — a periodic write keeps the marker
+      // fresh enough that a real >12h close is unambiguous.
+      const marker = setInterval(writeMarker, 5 * 60 * 1000)
+      return () => {
+        window.removeEventListener('beforeunload', writeMarker)
+        clearInterval(marker)
+      }
+    } catch {
+      /* localStorage unavailable — return-from-away simply never fires */
+    }
+    return undefined
   }, [])
   // Dev hook: "#state:working,light:night,env:rain" forces creature state / light band / environment for screenshots.
   const hashParts = Object.fromEntries(window.location.hash.replace('#', '').split(',').map((p) => p.split(':') as [string, string]))
@@ -419,6 +459,14 @@ export default function App(): React.JSX.Element {
     const tempId = `tmp-${Date.now()}`
     setMessages((m) => [...m, { id: tempId, role: 'user', content: text, tier: null, created_at: new Date().toISOString(), pending: true }])
     if (/\b(you|your|thanks|thank you|hey|hello|hi|good morning|good night|please)\b/i.test(text)) setAddressedAt(Date.now())
+    // Care surface (reshape): the four "user cares FOR the creature" phrases the state machine listens for. The
+    // signal is set client-side BEFORE the send fires, so the creature moves in the same tick the reply comes
+    // back — the two systems (router REPLY, companion state) respond to the same phrase and appear as one.
+    const low = text.toLowerCase()
+    if (/^(?:come )?sit with me|keep me company|stay (?:here|with me)/.test(low)) setCareSitAt(Date.now())
+    else if (/^(?:you should |go )?(?:take a nap|sleep|go to sleep|rest)/.test(low)) setCareSleepAt(Date.now())
+    else if (/^(?:do you want |want )?(?:some )?tea\??$|^(?:let's )?have tea$/.test(low)) setCareTeaAt(Date.now())
+    else if (/^(?:look at |see )(?:this|that|the sky|outside)|^look\.?$/.test(low)) setCareLookAt(Date.now())
     try {
       const res = await window.api.sendChat(text)
       setMessages((m) => [...m.filter((x) => x.id !== tempId), res.userMessage, { ...res.assistantMessage, applied: res.applied, error: res.error }])
@@ -660,6 +708,16 @@ export default function App(): React.JSX.Element {
         ? 'waiting'
         : null
 
+  // Emotional signals from real state (reshape "the creature cares about the user"). Never invented; every value
+  // maps to a specific real thing the Secretary is already tracking:
+  //   overwhelmed = 3+ overdue right now, OR a low-energy context entry today. When true, the creature stops the
+  //     ordinary small-completion happy blip, no stretches, no unprompted glances — quieter presence, on purpose.
+  //   deadlineHoursLeft = hours until the soonest hard-or-deadline item (already computed in `deadlineItems`).
+  //   planning = the most recent tool round was a planning call, so the creature naturally moves to the desk
+  //     alongside them (the chat.kind === 'tools' path already handles this; this signal is here for future use).
+  const overwhelmed = overdueItems.length >= 3
+  const deadlineHoursLeft = deadlineItems[0]?.due_at_utc ? (new Date(deadlineItems[0].due_at_utc!).getTime() - now) / 3600000 : null
+  const planning = lastToolNames.some((n) => n === 'plan_week' || n === 'refine_week_plan' || n === 'recommend_now' || n === 'assess_deadline')
   const companion = useCompanion(
     {
       chat: status,
@@ -675,7 +733,15 @@ export default function App(): React.JSX.Element {
       concernedAt,
       waitingOpen: waitingItems.length,
       hour,
-      happening: happeningKind
+      happening: happeningKind,
+      overwhelmed,
+      deadlineHoursLeft,
+      planning,
+      returnFromAway,
+      careSitAt,
+      careSleepAt,
+      careTeaAt,
+      careLookAt
     },
     forcedState,
     creatureSeed,

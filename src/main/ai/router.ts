@@ -574,6 +574,22 @@ export function routeTier0(rawText: string): ToolCallSpec[] | null {
     return [{ name: REPLY, args: { text: "Sitting right here with you." } }]
   }
 
+  // ---- Care surface (reshape): the user talks TO the creature. Never a task or a reminder — invariant 9. The
+  //      creature's own state moves in response (App.tsx sets careSitAt/careSleepAt/… before send), so both the
+  //      reply and the visible pose change come from the same phrase and read as one moment.
+  if (/^(?:you should |go |please )?(?:take a nap|sleep|go to sleep|rest)\.?$/.test(text)) {
+    return [{ name: REPLY, args: { text: "Mm. Curling up for a bit." } }]
+  }
+  if (/^(?:do you want |want )?(?:some )?tea\??$|^(?:let's )?have tea\.?$/.test(text)) {
+    return [{ name: REPLY, args: { text: "Tea sounds good, actually." } }]
+  }
+  if (/^(?:look at |see )(?:this|that|the sky|outside)\.?$|^look\.?$/.test(text)) {
+    return [{ name: REPLY, args: { text: "Looking." } }]
+  }
+  if (/^(?:come )?sit with me\.?$/.test(text)) {
+    return [{ name: REPLY, args: { text: "Right here." } }]
+  }
+
   // ---- "note for thursday: bring the signed copy" → a note on that DATE (information, never a task) ----
   if ((m = /^(?:add (?:a )?)?note (?:for|on|about) (today|tomorrow|(?:this |next )?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|the \d{1,2}(?:st|nd|rd|th)?(?: of \w+)?|\w+ \d{1,2}(?:st|nd|rd|th)?)\s*[:\-–—,]\s*(.+)$/.exec(text))) {
     const when = parseWhen(m[1])

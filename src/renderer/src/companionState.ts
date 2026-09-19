@@ -68,6 +68,25 @@ export interface Signals {
    * null → nothing is happening and it simply exists.
    */
   happening: 'focus' | 'cooking' | 'waiting' | null
+  /**
+   * Emotional signals (reshape "the creature cares about the user"): computed by App.tsx from real state.
+   * `overwhelmed` — user has >=3 overdue OR a low-energy context entry today. When true, the creature is
+   *   quieter: suppresses stretches, softens celebrations, prefers gentle poses (reading/looking).
+   * `deadlineHoursLeft` — hours until the soonest hard deadline, or null. <= 4 with importance high earns a
+   *   brief `concerned`.
+   * `planning` — user is inside a planning loop (recommend_now / plan_week / refine_week_plan / assess_deadline).
+   *   Creature moves to the desk alongside them.
+   * `returnFromAway` — the app just opened after being closed for >12h. A brief `greeting` earns priority.
+   * `careAt.{sit,sleep,tea,look}` — user directly asked the creature to do something. Sparse, deliberate.
+   */
+  overwhelmed: boolean
+  deadlineHoursLeft: number | null
+  planning: boolean
+  returnFromAway: boolean
+  careSitAt: number
+  careSleepAt: number
+  careTeaAt: number
+  careLookAt: number
 }
 
 const DUR = { celebrating: 2600, greeting: 2400, happy: 1400, quietlyExcited: 1800, petted: 1700, concerned: 6000, recovering: 1400, awake: 1200 }
@@ -130,6 +149,8 @@ function inFlourishWindow(now: number, seed: number, chancePct: number, windowMs
   return r < chancePct && now % FLOURISH_SLOT_MS < windowMs
 }
 
+const CARE_DUR = { sit: 6000, sleep: 10000, tea: 8000, look: 4000 }
+
 export function resolveState(s: Signals, now: number, seed = 0, personality: PersonalityWeights = NEUTRAL_PERSONALITY): { state: CompanionState; gaze: Gaze } {
   // 0. Recording outranks everything — you are actively speaking to it.
   if (s.recording) return { state: 'listening', gaze: 'viewer' }
@@ -142,14 +163,24 @@ export function resolveState(s: Signals, now: number, seed = 0, personality: Per
     if (names.some((n) => WRITE_TOOLS.test(n))) return { state: 'writing', gaze: 'desk' }
     return { state: 'working', gaze: 'desk' }
   }
+  // 1b. Care surface — the user just asked the creature to do something (spec "user can care FOR the creature").
+  //     These outrank ambient life and momentary happy blips but never a real process or genuine news above.
+  if (now - s.careLookAt < CARE_DUR.look) return { state: 'looking', gaze: 'window' }
+  if (now - s.careTeaAt < CARE_DUR.tea) return { state: 'tea', gaze: 'away' }
+  if (now - s.careSleepAt < CARE_DUR.sleep) return { state: 'sleepy', gaze: 'closed' }
+  if (now - s.careSitAt < CARE_DUR.sit) return { state: 'attentive', gaze: 'viewer' }
+  // 1c. Return-from-away — a brief greeting the first time we see the user after a long closed period.
+  if (s.returnFromAway && now - s.greetAt < DUR.greeting * 1.5) return { state: 'greeting', gaze: 'viewer' }
   // 2. Momentary states with fixed durations — biggest news wins when more than one is still live.
   if (now - s.celebrateAt < DUR.celebrating) return { state: 'celebrating', gaze: 'viewer' }
   if (now - s.greetAt < DUR.greeting) return { state: 'greeting', gaze: 'viewer' }
   // Direct interaction (9d) — clicking it is deliberate, so it outranks the ordinary "something happened" blips
   // below, but never a real process or genuine news (celebrating/greeting already returned above this).
   if (now - s.pettedAt < DUR.petted) return { state: 'petted', gaze: 'viewer' }
-  if (now - s.quietlyExcitedAt < DUR.quietlyExcited) return { state: 'quietlyExcited', gaze: now - s.addressedAt < 15000 ? 'viewer' : 'away' }
-  if (now - s.lastAppliedAt < DUR.happy) return { state: 'happy', gaze: now - s.addressedAt < 15000 ? 'viewer' : 'away' }
+  // When the user is overwhelmed, the creature does not do the ordinary "quietly excited" blip on a small
+  // completion — it stays present and softer instead. A real celebration for finishing a whole project still fires.
+  if (!s.overwhelmed && now - s.quietlyExcitedAt < DUR.quietlyExcited) return { state: 'quietlyExcited', gaze: now - s.addressedAt < 15000 ? 'viewer' : 'away' }
+  if (!s.overwhelmed && now - s.lastAppliedAt < DUR.happy) return { state: 'happy', gaze: now - s.addressedAt < 15000 ? 'viewer' : 'away' }
   if (now - s.concernedAt < DUR.concerned) return { state: 'concerned', gaze: 'desk' }
   // A brief settling moment right after concern passes — never snap straight back to neutral.
   if (now - s.concernedAt < DUR.concerned + DUR.recovering) return { state: 'recovering', gaze: 'away' }
@@ -164,8 +195,11 @@ export function resolveState(s: Signals, now: number, seed = 0, personality: Per
   //    own once its short window passes. Neither is attention-seeking: a stretch does not pause for acknowledgement,
   //    and the glance below is a look, not a request.
   const pose = ambientPose(now, s.waitingOpen, s.hour, seed, personality)
-  if ((pose === 'idle' || pose === 'working') && inFlourishWindow(now, 17, 6, 2500)) return { state: 'stretching', gaze: 'away' }
-  if (pose === 'idle' && inFlourishWindow(now, 41, 8, 1600)) return { state: 'idle', gaze: 'viewer' } // looks toward the user, then back to what it was doing
+  // "The creature cares about the user": if the user is overwhelmed, the creature is quieter — no stretches, no
+  // glances toward the user for a beat (which could read as "check on me"). It stays present, in whatever gentle
+  // pose the rotation picked; that presence is the point.
+  if (!s.overwhelmed && (pose === 'idle' || pose === 'working') && inFlourishWindow(now, 17, 6, 2500)) return { state: 'stretching', gaze: 'away' }
+  if (!s.overwhelmed && pose === 'idle' && inFlourishWindow(now, 41, 8, 1600)) return { state: 'idle', gaze: 'viewer' } // looks toward the user, then back to what it was doing
   const gaze: Gaze = pose === 'sleepy' || pose === 'sleeping' ? 'closed' : pose === 'reading' || pose === 'working' ? 'desk' : pose === 'looking' ? 'window' : 'away'
   return { state: pose, gaze }
 }
@@ -221,7 +255,7 @@ export function useCompanion(signals: Signals, force?: CompanionState | null, se
       if (timer) clearTimeout(timer)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signals.chat.kind, signals.typing, signals.recording, signals.lastAppliedAt, signals.celebrateAt, signals.quietlyExcitedAt, signals.pettedAt, signals.greetAt, signals.addressedAt, signals.concernedAt, signals.waitingOpen, signals.hour, signals.happening, signals.lastToolNames.join(','), force, seed, personality.readingLove, personality.windowLove, personality.sleepOffsetMinutes])
+  }, [signals.chat.kind, signals.typing, signals.recording, signals.lastAppliedAt, signals.celebrateAt, signals.quietlyExcitedAt, signals.pettedAt, signals.greetAt, signals.addressedAt, signals.concernedAt, signals.waitingOpen, signals.hour, signals.happening, signals.lastToolNames.join(','), force, seed, personality.readingLove, personality.windowLove, personality.sleepOffsetMinutes, signals.overwhelmed, signals.deadlineHoursLeft, signals.planning, signals.returnFromAway, signals.careSitAt, signals.careSleepAt, signals.careTeaAt, signals.careLookAt])
 
   return out
 }
