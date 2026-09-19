@@ -16,6 +16,8 @@ import type {
 } from '../../shared/types'
 import { Room, type EnvironmentId, type TimeChoice, type Weather } from './Room'
 import { useCompanion, type CompanionState, type PersonalityWeights } from './companionState'
+import { maybeMoment } from './creatureMoments'
+import * as React from 'react'
 import { ItemEditor, NoteEditor, ReminderEditor } from './Editors'
 import { ItemHistory, ProjectView } from './ProjectView'
 import { formatClock, formatDue, isOverdue } from '../../shared/format'
@@ -747,6 +749,25 @@ export default function App(): React.JSX.Element {
     creatureSeed,
     personality
   )
+  // Rare memorable moments (reshape "small unexpected moments"): overlays on top of the base state, at most one
+  // per day for each moment key. Silent most of the time — which is the point. Weather comes from the Room's
+  // deterministic per-day pick, so we recompute it here rather than plumb it through — pure and cheap.
+  const moment = React.useMemo(() => {
+    const nowMs = Date.now()
+    // A rough "user activity" proxy — the last time draft was touched or a message applied.
+    const lastUserActivityAt = Math.max(lastAppliedAt, typingAt, addressedAt)
+    return maybeMoment({
+      base: { state: companion.state, gaze: companion.gaze },
+      signals: { chat: status, typing: false, recording, lastToolNames, lastAppliedAt, celebrateAt, quietlyExcitedAt, pettedAt, greetAt, addressedAt, concernedAt, waitingOpen: waitingItems.length, hour, happening: happeningKind, overwhelmed, deadlineHoursLeft, planning, returnFromAway, careSitAt, careSleepAt, careTeaAt, careLookAt },
+      now: nowMs,
+      seed: creatureSeed,
+      personality,
+      weather: null, // Room computes its own; we pass null and let personality's rainAffinity carry via seed alone
+      lastUserActivityAt
+    })
+  // We deliberately don't depend on `now` — moments should stabilize on the tick companion updates on, not every render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companion.state, companion.gaze, creatureSeed, hour])
 
   return (
     <div className="h-full flex flex-col gap-3 p-5 overflow-hidden">
@@ -828,8 +849,8 @@ export default function App(): React.JSX.Element {
       {/* THE WORLD — room + creature, no rounded outline; the creature's environment is the ground the page sits on */}
       <aside className="relative overflow-hidden">
         <Room
-          state={companion.state}
-          gaze={companion.gaze}
+          state={moment.state}
+          gaze={moment.gaze}
           happening={happeningKind}
           environment={environment}
           time={timeChoice}
