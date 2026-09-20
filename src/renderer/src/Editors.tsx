@@ -33,11 +33,31 @@ const RECURRENCE: { label: string; rrule: string | null }[] = [
 
 export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }): React.JSX.Element {
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-cocoa/30" onMouseDown={onClose}>
-      <div className="w-[520px] max-w-[92vw] max-h-[90vh] overflow-y-auto rounded-3xl bg-cream shadow-xl p-6" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">{title}</h2>
-          <button onClick={onClose} className="text-stone-500 hover:text-stone-800 text-sm">
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-cocoa/40" onMouseDown={onClose}>
+      <div
+        className="surface-dark-panel w-[520px] max-w-[92vw] max-h-[90vh] overflow-y-auto rounded-3xl shadow-xl p-6"
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{
+          background: 'var(--panel-bg)',
+          border: '1px solid var(--panel-hairline)',
+          color: 'var(--panel-text)'
+        }}
+      >
+        <div
+          className="flex items-center justify-between mb-4 pb-3"
+          style={{ borderBottom: '1px solid color-mix(in srgb, var(--color-accent) 40%, transparent)' }}
+        >
+          <h2
+            className="italic tracking-tight"
+            style={{ fontFamily: '"Cormorant Garamond", Georgia, serif', fontSize: 22, color: 'var(--panel-text)' }}
+          >
+            {title}
+          </h2>
+          <button
+            onClick={onClose}
+            className="italic transition-colors hover:opacity-100"
+            style={{ fontFamily: '"Cormorant Garamond", Georgia, serif', fontSize: 13, color: 'var(--panel-text-soft)', opacity: 0.75 }}
+          >
             close
           </button>
         </div>

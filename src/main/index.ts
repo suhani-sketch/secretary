@@ -1,4 +1,4 @@
-import { BrowserWindow, Notification, app, ipcMain, powerMonitor, protocol, session, shell } from 'electron'
+import { BrowserWindow, Notification, app, dialog, ipcMain, powerMonitor, protocol, session, shell } from 'electron'
 import { existsSync, statSync } from 'fs'
 import { promises as fsp } from 'fs'
 import { join } from 'path'
@@ -211,21 +211,25 @@ function installToastActivation(): void {
   }
 }
 
-// ---- AI provider (spec §4). The key lives in .env next to package.json and never leaves the main process. ----
+// ---- AI provider (spec §4). Key never leaves the main process. Two sources, in order: a key the user pasted into
+// Settings (repo setting 'ai.gemini_key' — the friendly path for anyone who isn't editing files by hand), then a
+// .env next to package.json (the original dev-only path, kept for my own local runs). Re-callable: the Settings
+// UI calls this again right after saving a new key, so chat works without a restart.
 function setupProvider(): void {
-  loadDotenv({ path: join(app.getAppPath(), '.env'), quiet: true })
+  const savedKey = repo.getSettingValue('ai.gemini_key')
+  if (!savedKey) loadDotenv({ path: join(app.getAppPath(), '.env'), quiet: true })
   // Comma-separated fallback chain; free-tier quotas are per model, so siblings absorb bursts.
   aiModel = process.env['GEMINI_MODEL'] || 'gemini-3.5-flash-lite,gemini-3.6-flash,gemini-3.8-flash'
-  const key = process.env['GEMINI_API_KEY']
+  const key = savedKey || process.env['GEMINI_API_KEY']
   if (key && key.trim()) {
     provider = new GeminiProvider(
       key.trim(),
       aiModel.split(',').map((s) => s.trim()).filter(Boolean)
     )
-    log('info', 'ai.provider', `gemini / ${aiModel} (key present)`)
+    log('info', 'ai.provider', `gemini / ${aiModel} (key ${savedKey ? 'from Settings' : 'from .env'})`)
   } else {
     provider = null
-    log('warn', 'ai.provider', 'GEMINI_API_KEY missing from .env — chat will explain instead of working')
+    log('warn', 'ai.provider', 'No Gemini key set — chat will explain instead of working')
   }
 }
 
@@ -674,6 +678,47 @@ function registerIpc(): void {
     if (typeof text !== 'string' || !text.trim()) throw new Error('Empty message')
     return enqueueChat({ provider, onStatus: sendChatStatus, onChanged: notifyRendererChanged }, text.slice(0, 8000))
   })
+  // Creature generative voice (Phase 4, 2026-09-19) — one small model call per utterance, aware of real state,
+  // in Chiku's Victorian character. Rate-limited to 20/day; on budget-exhausted / no-provider / error, returns
+  // null and the renderer falls back to its static utterance pool.
+  ipcMain.handle('companion:generateUtterance', async (_e, ctx: unknown) => {
+    try {
+      const context = ctx as import('./creatureGenerativeVoice').CreatureContext
+      const { generateUtterance, injectMemorySummary } = await import('./creatureGenerativeVoice')
+      injectMemorySummary(context)
+      const res = await generateUtterance(provider, context)
+      return res
+    } catch (e) {
+      log('warn', 'creature_voice.ipc_error', (e as Error).message)
+      return { text: null, reason: 'error' as const }
+    }
+  })
+  // Phase 6: direct conversation with Chiku. The renderer detects a "chiku" prefix and routes the message
+  // here instead of the Secretary tool pipeline. She replies in-character with awareness of memory.
+  ipcMain.handle('companion:converse', async (_e, userMessage: string, ctx: unknown) => {
+    if (typeof userMessage !== 'string' || !userMessage.trim()) return { text: null, reason: 'error' as const }
+    try {
+      const { converseWithCreature } = await import('./creatureConversation')
+      const res = await converseWithCreature(provider, userMessage, ctx as import('./creatureConversation').ConverseContext)
+      return res
+    } catch (e) {
+      log('warn', 'creature_conversation.ipc_error', (e as Error).message)
+      return { text: null, reason: 'error' as const }
+    }
+  })
+  // Phase 5: memory event recording. Renderer calls these on real events to keep her memory current.
+  ipcMain.handle('companion:memory:completion', async (_e, title: string) => {
+    try {
+      const { recordCompletion } = await import('./creatureMemory')
+      recordCompletion(String(title || 'a task'))
+    } catch (e) { log('warn', 'creature_memory.completion_failed', (e as Error).message) }
+  })
+  ipcMain.handle('companion:memory:postpone', async (_e, title: string) => {
+    try {
+      const { recordPostponement } = await import('./creatureMemory')
+      recordPostponement(String(title || 'a task'))
+    } catch (e) { log('warn', 'creature_memory.postpone_failed', (e as Error).message) }
+  })
   // Voice (Phase 7a "Voice"): audio goes to Gemini directly through enqueueVoice; the recording is ALSO written to a
   // local file here, purely for the user's own record — it is never read back or sent anywhere but that one model call.
   ipcMain.handle(IPC.sendVoice, (_e, base64: string, mimeType: string) => {
@@ -691,6 +736,54 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.chatHistory, (_e, limit?: number) => repo.recentMessages(limit ?? 60))
   ipcMain.handle(IPC.listExtractions, (_e, limit?: number) => repo.listExtractions(limit ?? 30))
+  // Data export: SQLite backup written directly to a user-chosen location. Uses better-sqlite3's own backup API so
+  // WAL data is checkpointed cleanly and the file is a valid, restore-ready copy — not a mid-write snapshot.
+  ipcMain.handle('data:export', async () => {
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+    const stamp = new Date().toISOString().slice(0, 10)
+    const suggested = `secretary-backup-${stamp}.db`
+    const result = await dialog.showSaveDialog(win, {
+      title: 'Save Secretary backup',
+      defaultPath: suggested,
+      filters: [{ name: 'Secretary database', extensions: ['db'] }]
+    })
+    if (result.canceled || !result.filePath) return { ok: false as const, reason: 'cancelled' }
+    try {
+      const db = getDb()
+      // better-sqlite3 exposes `backup(destPath)` returning a promise that checkpoints WAL and produces a whole copy.
+      await (db as unknown as { backup: (p: string) => Promise<unknown> }).backup(result.filePath)
+      log('info', 'data.export', `backup written to ${result.filePath}`)
+      return { ok: true as const, path: result.filePath }
+    } catch (e) {
+      log('warn', 'data.export.failed', (e as Error).message)
+      return { ok: false as const, reason: (e as Error).message }
+    }
+  })
+  ipcMain.handle('data:reveal', async () => {
+    try {
+      shell.showItemInFolder(dbPath())
+      return { ok: true as const, path: dbPath() }
+    } catch (e) {
+      return { ok: false as const, reason: (e as Error).message }
+    }
+  })
+  // AI key, entered in Settings (the friends-and-family path, distinct from the dev-only .env). The raw key is
+  // never sent back to the renderer once saved — only whether one is set and its last 4 characters, enough to
+  // confirm "yes, that's the key I pasted" without re-displaying a secret in plain text.
+  ipcMain.handle('ai:getStatus', () => ({
+    hasKey: provider !== null,
+    keyHint: repo.getSettingValue('ai.gemini_key')?.slice(-4) ?? null,
+    model: aiModel
+  }))
+  ipcMain.handle('ai:setKey', (_e, key: string) => {
+    if (typeof key !== 'string') throw new Error('Bad key')
+    const trimmed = key.trim()
+    if (trimmed) repo.setSettingValue('ai.gemini_key', trimmed)
+    else repo.deleteSettingValue('ai.gemini_key')
+    setupProvider()
+    log('info', 'ai.key_set', trimmed ? 'key saved from Settings' : 'key cleared')
+    return { hasKey: provider !== null, keyHint: trimmed ? trimmed.slice(-4) : null, model: aiModel }
+  })
 }
 
 /**

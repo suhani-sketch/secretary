@@ -278,6 +278,15 @@ export interface SecretaryApi {
 
   // Conversation
   sendChat(text: string): Promise<ChatResponse>
+  /** Creature generative voice (Phase 4). Returns null text if the daily budget is exhausted, provider is
+   *  unavailable, or the call errors — the renderer falls back to a static pool in that case. */
+  companionGenerateUtterance(ctx: unknown): Promise<{ text: string | null; reason?: 'budget_exhausted' | 'no_provider' | 'error' }>
+  /** Phase 6: direct conversation with Chiku. Sends the user's message (which was addressed to her via the
+   *  "chiku" prefix) and gets her Victorian response. */
+  companionConverse(userMessage: string, ctx: unknown): Promise<{ text: string | null; reason?: 'no_provider' | 'error' }>
+  /** Phase 5: memory event recording. */
+  companionMemoryCompletion(title: string): Promise<void>
+  companionMemoryPostpone(title: string): Promise<void>
   /** Voice (7a spoken): audio goes to Gemini directly, through the same extraction pipeline as a typed dump.
    *  `base64` is the recording (WAV), never sent anywhere but the model and a local file. */
   sendVoice(base64: string, mimeType: string): Promise<ChatResponse>
@@ -329,6 +338,14 @@ export interface SecretaryApi {
   activitiesForTarget(targetType: string, targetId: string, limit?: number): Promise<Activity[]>
   /** Stated/inferred preferences (default reminder time etc.) for the Settings surface (9h) — read-only, never written directly. */
   listPreferences(): Promise<{ key: string; value: string; source: string }[]>
+  /** Write a full SQLite backup to a user-chosen location. WAL is checkpointed cleanly; the copy is restore-ready. */
+  dataExport(): Promise<{ ok: true; path: string } | { ok: false; reason: string }>
+  /** Open the folder containing the live database file, so the user can copy or archive it themselves. */
+  dataReveal(): Promise<{ ok: true; path: string } | { ok: false; reason: string }>
+  /** Whether an AI key is currently configured (Settings-saved key, or the dev .env as a fallback) and which model chain is active. */
+  aiGetStatus(): Promise<{ hasKey: boolean; keyHint: string | null; model: string }>
+  /** Save (or, given an empty string, clear) the user's own Gemini key. Takes effect immediately, no restart needed. */
+  aiSetKey(key: string): Promise<{ hasKey: boolean; keyHint: string | null; model: string }>
 }
 
 /** One occurrence of an event: the series row plus this instance's start/end. `occurrence_start_utc` identifies it in `exdates`. */

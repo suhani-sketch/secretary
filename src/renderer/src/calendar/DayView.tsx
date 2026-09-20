@@ -147,8 +147,8 @@ export function DayView({ dateLocal, onSelect, selection, onQuick, refreshKey, w
                 ))}
               </Section>
             )}
-            <section className="rounded-2xl bg-white/50 p-3">
-              <button className="text-xs font-medium uppercase tracking-wide text-stone-500 flex items-center gap-2" onClick={() => setShowDone((v) => !v)}>
+            <section className="rounded-2xl p-3" style={{ background: 'var(--panel-bg-strong, rgba(255,255,255,0.5))' }}>
+              <button className="text-xs font-medium uppercase tracking-wide flex items-center gap-2" style={{ color: 'var(--panel-text-soft, var(--color-mocha))' }} onClick={() => setShowDone((v) => !v)}>
                 <span>{showDone ? '▾' : '▸'}</span> Completed ({day.completed.length})
               </button>
               {showDone && (
@@ -164,8 +164,8 @@ export function DayView({ dateLocal, onSelect, selection, onQuick, refreshKey, w
               )}
             </section>
             {(s.is_past || s.is_today) && (
-              <section className="rounded-2xl bg-white/50 p-3">
-                <button className="text-xs font-medium uppercase tracking-wide text-stone-500 flex items-center gap-2" onClick={() => setShowHistory((v) => !v)}>
+              <section className="rounded-2xl p-3" style={{ background: 'var(--panel-bg-strong, rgba(255,255,255,0.5))' }}>
+                <button className="text-xs font-medium uppercase tracking-wide flex items-center gap-2" style={{ color: 'var(--panel-text-soft, var(--color-mocha))' }} onClick={() => setShowHistory((v) => !v)}>
                   <span>{showHistory || s.is_past ? '▾' : '▸'}</span> What happened ({day.history.length})
                 </button>
                 {(showHistory || s.is_past) && (
@@ -184,9 +184,9 @@ export function DayView({ dateLocal, onSelect, selection, onQuick, refreshKey, w
           </div>
 
           {/* right: the schedule — time-bound things only */}
-          <section className="rounded-2xl bg-white/50 p-3 flex flex-col min-h-0">
-            <h3 className="text-xs font-medium uppercase tracking-wide text-stone-500 mb-2">
-              Schedule <span className="normal-case font-normal text-stone-400">· {s.scheduled_minutes ? `${hours(s.scheduled_minutes)} booked` : 'nothing booked'}{s.conflicts ? ` · ${s.conflicts} clash${s.conflicts === 1 ? '' : 'es'}` : ''}</span>
+          <section className="rounded-2xl p-3 flex flex-col min-h-0" style={{ background: 'var(--panel-bg-strong, rgba(255,255,255,0.5))' }}>
+            <h3 className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: 'var(--panel-text-soft, var(--color-mocha))' }}>
+              Schedule <span className="normal-case font-normal" style={{ opacity: 0.7 }}>· {s.scheduled_minutes ? `${hours(s.scheduled_minutes)} booked` : 'nothing booked'}{s.conflicts ? ` · ${s.conflicts} clash${s.conflicts === 1 ? '' : 'es'}` : ''}</span>
             </h3>
             {(day.unscheduled.some(isHard) || day.overdue.some(isHard) || day.reminders.length > 0) && (
               <div className="mb-2 flex items-center gap-1.5 flex-wrap text-[11px]">
@@ -235,12 +235,12 @@ export function DayView({ dateLocal, onSelect, selection, onQuick, refreshKey, w
 
 function Section({ title, count, empty, hint, children, ulRef }: { title: string; count: number; empty: string; hint?: string; children: React.ReactNode; ulRef?: React.RefObject<HTMLUListElement | null> }): React.JSX.Element {
   return (
-    <section className="rounded-2xl bg-white/50 p-3">
-      <h3 className="text-xs font-medium uppercase tracking-wide text-stone-500 flex items-baseline gap-2">
-        {title} <span className="text-stone-400">({count})</span>
-        {hint && <span className="normal-case font-normal text-[10px] text-stone-400 ml-auto">{hint}</span>}
+    <section className="rounded-2xl p-3" style={{ background: 'var(--panel-bg-strong, rgba(255,255,255,0.5))' }}>
+      <h3 className="text-xs font-medium uppercase tracking-wide flex items-baseline gap-2" style={{ color: 'var(--panel-text-soft, var(--color-mocha))' }}>
+        {title} <span style={{ opacity: 0.65 }}>({count})</span>
+        {hint && <span className="normal-case font-normal text-[10px] ml-auto" style={{ opacity: 0.7 }}>{hint}</span>}
       </h3>
-      <ul ref={ulRef} className="mt-1.5 flex flex-col gap-0.5">{count ? children : <li className="text-sm text-stone-400 px-1">{empty}</li>}</ul>
+      <ul ref={ulRef} className="mt-1.5 flex flex-col gap-0.5">{count ? children : <li className="text-sm px-1" style={{ opacity: 0.6 }}>{empty}</li>}</ul>
     </section>
   )
 }

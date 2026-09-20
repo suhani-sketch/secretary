@@ -12,32 +12,45 @@
  * against the blush world.
  */
 @theme {
-  /* Editorial paper palette — warm cream, cocoa typography, muted rose as accent only. The world panel has its
-     own scene palette; the app shell is neutral and quiet. */
-  --color-cream: #F0E9DE;         /* page background — warm paper, not blush */
-  --color-cocoa: #3E332E;         /* primary text — deeper for legibility */
-  --color-accent: #A57076;        /* muted rose accent — creature glyph, active tabs (NEVER a fill) */
-  --color-cocoa-soft: #3A2D28;    /* user bubble */
-  --color-mocha: #8B6A55;         /* warm wood */
-  --color-paper: #F7F1E5;         /* soft paper — assistant bubble, subtle raised surfaces */
-  --color-paper-2: #E6DDCA;       /* deeper warm surface — dividers, chips */
-  --color-paper-3: #E6DDCA;
-  --color-paper-4: #E6DDCA;
-  --color-sand: #D8CBB2;          /* editorial sand */
-  --color-ash: #7A6F63;           /* secondary text */
-  --color-ash-2: #5A5049;         /* deeper secondary text */
+  /* Victorian old-money palette (2026-09-19, aesthetic refinement pass). Values match the design brief exactly:
+     paper #F7F2E9, warm ivory #EFE6D8, deep espresso #2C211C, walnut #4A3328, muted olive #626650, antique
+     brass #A78A58, warm stone #D8CEC0, faded ink #766B61, antique rose #B98286 (used sparingly, dominant only
+     in the stained glass). No candy pink, no muddy dark brown, no beige-on-beige. */
+  --color-cream: #F7F2E9;         /* page background — paper */
+  --color-cocoa: #2C211C;         /* primary text — deep espresso ink */
+  --color-accent: #A78A58;        /* antique brass — the signature metallic accent */
+  --color-cocoa-soft: #4A3328;    /* user bubble — walnut */
+  --color-mocha: #766B61;         /* faded ink for secondary body text */
+  --color-paper: #EFE6D8;         /* soft warm ivory — assistant bubble, raised surfaces */
+  --color-paper-2: #E5DCD2;       /* soft border tone */
+  --color-paper-3: #E5DCD2;
+  --color-paper-4: #E5DCD2;
+  --color-sand: #D8CEC0;          /* warm stone */
+  --color-ash: #766B61;           /* faded ink — secondary text */
+  --color-ash-2: #4A3328;         /* walnut for stronger secondary text */
   --color-pure: #FFFFFF;
   --color-tan: #D3B590;           /* warm sand */
   --color-slate-soft: #7E8592;    /* muted slate — waiting */
   --color-rust: #A66E55;          /* warm terracotta — subtle warmth accent */
-  --color-ink-muted: #7A6F63;
+  --color-ink-muted: #766B61;     /* faded ink — brief's #766B61 */
   --color-ink-muted-2: #98897C;
-  --color-warn-amber: #B08048;    /* quiet amber for urgency */
-  /* Zone surface tokens — for the app shell's three panels */
-  --color-zone-world: #E4D9C3;    /* WORLD panel base — warm walnut-cream, distinct from page */
-  --color-zone-chat: #F7F1E5;     /* CONVERSATION panel base — quiet paper */
-  --color-zone-rail: #ECE3D2;     /* AWARENESS panel base — subtly warmer than page */
-  --color-zone-border: #C9B994;   /* zone boundary — subtle warm hairline */
+  --color-warn-amber: #A78A58;    /* antique brass — brief's #A78A58 */
+  /* Victorian material tokens (2026-09-19, refinement pass) — the app's canonical palette per the design brief:
+     paper / walnut / espresso / olive / brass / rose / stone. These flow through every non-locked surface. */
+  --color-walnut: #4A3328;        /* walnut */
+  --color-olive: #626650;         /* muted olive */
+  --color-brass: #A78A58;         /* antique brass — the metallic accent */
+  --color-antique-rose: #B98286;  /* antique rose — used sparingly, dominant only in stained glass */
+  --color-espresso: #2C211C;      /* deep espresso ink */
+  --color-warm-ivory: #EFE6D8;    /* warm ivory */
+  --color-warm-stone: #D8CEC0;    /* warm stone — primary border */
+  --color-border-soft: #E5DCD2;   /* soft border */
+  --color-faded-ink: #766B61;     /* faded ink — functional metadata */
+  /* Zone surface tokens — brought into the paper/ivory system */
+  --color-zone-world: #EDE2CE;    /* WORLD panel base — warm ivory-cream */
+  --color-zone-chat: #F7F2E9;     /* CONVERSATION panel base — paper */
+  --color-zone-rail: #EFE6D8;     /* AWARENESS panel base — warm ivory */
+  --color-zone-border: #D8CEC0;   /* zone boundary — warm stone */
 }
 :root {
   --cream: var(--color-cream);
@@ -69,17 +82,22 @@
    utilities (text-stone-500, bg-amber-50 …) keep their meaning — muted stays muted, a badge stays a badge. */
 :root[data-theme="dark"] {
   color-scheme: dark;
-  /* Dusty-rose after the lamps come on: deep warm charcoal world, warm cocoa surfaces, light dusty-rose text.
-     Same emotional palette as light mode, deeper values — not an inversion. */
-  --color-cream: #1E1A19;
-  --color-cocoa: #E9DBD7;
-  --color-accent: #B98288;
-  --color-cocoa-soft: #4B3B37;
-  --color-mocha: #A97865;
-  --color-paper: #2A2320;
-  --color-paper-2: #322824;
-  --color-paper-3: #322824;
-  --color-paper-4: #322824;
+  /* Coordinated warm cocoa (colour-coordination pass, 2026-09-19). Values now match the LibraryScene palette:
+     the shell's cream/paper/cocoa/accent sit on the same warm rose/cocoa axis as the room's walls, shelves,
+     rug, and pink dawn window. No cool blue-cocoa greys anywhere; text and accents echo the room's own
+     interior palette. */
+  /* Dark mode counterpart of the Victorian palette — same aesthetic, deeper values. The espresso ink becomes
+     the background, paper becomes the text, antique brass stays the accent. Walnut furniture, muted olive,
+     antique rose (sparingly). */
+  --color-cream: #2C211C;         /* page bg — deep espresso ink */
+  --color-cocoa: #F7F2E9;         /* text — paper */
+  --color-accent: #A78A58;        /* antique brass */
+  --color-cocoa-soft: #4A3328;    /* user bubble — walnut */
+  --color-mocha: #96856F;         /* warmer faded ink for dark mode */
+  --color-paper: #3A2C24;         /* assistant bubble bg — warmer than espresso, still deep */
+  --color-paper-2: #4A3B32;
+  --color-paper-3: #4A3B32;
+  --color-paper-4: #4A3B32;
   --color-sand: #3A302E;
   --color-ash: #A4938F;
   --color-ash-2: #C5B4B0;
@@ -110,11 +128,12 @@
   --color-amber-700: #E5B77E;
   --color-amber-800: #EDC48F;
   --color-amber-900: #F0CFA1;
-  /* Rose → dusty rose that mirrors the accent, never bubblegum. */
-  --color-rose-50: #3A2426;
-  --color-rose-100: #482A2E;
-  --color-rose-500: #C88E92;
-  --color-rose-900: #E9C0C4;
+  /* Rose scale reworked to burgundy/oxblood — no more dusty pink in badges/pills. Deep leather-bound tones
+     that sit with the walnut/brass palette. */
+  --color-rose-50: #2E1B1A;
+  --color-rose-100: #3E2422;
+  --color-rose-500: #8B4A3E;
+  --color-rose-900: #C48A75;
   --color-emerald-50: #16302A;
   --color-emerald-100: #1D3B33;
   --color-emerald-200: #2B5548;
@@ -129,7 +148,48 @@
   --color-red-50: #3A1F1F;
   --color-red-700: #F09A9A;
   --color-red-800: #F5B0B0;
+  /* Zone tokens must flip in dark mode too — otherwise the panels stay light beige while the inherited text
+     (cocoa → light dusty-rose) becomes near-invisible against them. Deep-warm charcoals matching the paper/cream
+     shifts above, with the rail slightly warmer than the chat so all three zones stay legibly distinct. */
+  --color-zone-world: #2C211C;   /* world: espresso ink — matches the LibraryScene shelf depths */
+  --color-zone-chat: #251C18;    /* chat: subtly deeper — the quiet reading surface */
+  --color-zone-rail: #3A2726;    /* rail: subtle antique-rose tinted warmth — a whisper of pink */
+  --color-zone-border: #4A3B32;  /* border: warm walnut hairline */
 }
+
+/* Dark-mode surface tokens for the Calendar/Things/Settings surfaces ONLY — scoped so the Conversation home
+   screen (which reads directly from the Victorian light-mode tokens on purpose) is not affected. Attach the
+   class .surface-dark-panel to any panel that should participate; the tokens below are only read inside it. */
+:root[data-theme="dark"] .surface-dark-panel {
+  /* panel surface — deep olive-walnut, keeps the warm green cast, a smidgen lighter than the first attempt */
+  --panel-bg: #453E32;
+  --panel-bg-strong: #4E4739;  /* raised inner cards, slightly brighter than the outer panel */
+  --panel-text: #F3ECE4;       /* body text — paper */
+  --panel-text-soft: #C8BDB1;  /* secondary/metadata — warm stone */
+  --panel-hairline: color-mix(in srgb, var(--color-accent) 42%, transparent);
+}
+:root .surface-dark-panel {
+  --panel-bg: color-mix(in srgb, var(--color-warm-ivory) 92%, transparent);
+  --panel-bg-strong: color-mix(in srgb, var(--color-paper) 82%, transparent);
+  --panel-text: var(--color-espresso);
+  --panel-text-soft: var(--color-faded-ink);
+  --panel-hairline: color-mix(in srgb, var(--color-accent) 30%, transparent);
+}
+
+/* Inside .surface-dark-panel in dark mode, remap bg-white/N so the many `bg-white/50`, `bg-white/70`, `bg-white/80`
+   utilities scattered across DayPanel / MonthView / WeekView / AgendaView don't collapse to near-black. In light
+   mode these keep their normal Tailwind meaning. */
+:root[data-theme="dark"] .surface-dark-panel .bg-white\/30 { background-color: color-mix(in srgb, #F3ECE4 10%, transparent); }
+:root[data-theme="dark"] .surface-dark-panel .bg-white\/50 { background-color: color-mix(in srgb, #F3ECE4 15%, transparent); }
+:root[data-theme="dark"] .surface-dark-panel .bg-white\/60 { background-color: color-mix(in srgb, #F3ECE4 20%, transparent); }
+:root[data-theme="dark"] .surface-dark-panel .bg-white\/70 { background-color: color-mix(in srgb, #F3ECE4 24%, transparent); }
+:root[data-theme="dark"] .surface-dark-panel .bg-white\/80 { background-color: color-mix(in srgb, #F3ECE4 30%, transparent); }
+:root[data-theme="dark"] .surface-dark-panel .hover\:bg-white\/70:hover { background-color: color-mix(in srgb, #F3ECE4 28%, transparent); }
+:root[data-theme="dark"] .surface-dark-panel .hover\:bg-white\/80:hover { background-color: color-mix(in srgb, #F3ECE4 34%, transparent); }
+:root[data-theme="dark"] .surface-dark-panel .hover\:bg-white:hover { background-color: color-mix(in srgb, #F3ECE4 40%, transparent); }
+:root[data-theme="dark"] .surface-dark-panel .bg-paper-2\/70 { background-color: color-mix(in srgb, #F3ECE4 12%, transparent); }
+/* raw bg-white (no opacity) used for active/highlighted rows — a warm cream tint instead of solid dark charcoal */
+:root[data-theme="dark"] .surface-dark-panel .bg-white:not([class*="bg-white\/"]) { background-color: color-mix(in srgb, #F3ECE4 38%, transparent); }
 
 html, body, #root { height: 100%; }
 body {
@@ -138,6 +198,56 @@ body {
   color: var(--cocoa);
   font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Chapter-heading — rail section labels. Wider tracked serif small-caps in burnished brass, with a subtle
+   brass gilt rule underneath. Reads as "an old library's section markers" rather than app UI labels.
+   Old-money-library pass, 2026-09-19. */
+.chapter-heading {
+  font-family: "Cormorant Garamond", "EB Garamond", "Playfair Display", Georgia, "Times New Roman", serif;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  padding-bottom: 6px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
+}
+/* Nav pills — engraved brass plaques for the four surfaces. Active state gets a real refined brass ring +
+   subtle inner shadow, inactive is quiet serif small-caps that light up warm on hover. Old-money-library
+   pass, 2026-09-19. */
+.nav-pill {
+  font-family: "Cormorant Garamond", "EB Garamond", Georgia, "Times New Roman", serif;
+  font-size: 15px;
+  letter-spacing: 0.12em;
+  padding: 4px 14px;
+  border-radius: 999px;
+  color: var(--color-ash);
+  transition: color .18s ease, background-color .18s ease, border-color .18s ease, box-shadow .18s ease;
+  border: 1px solid transparent;
+  font-style: italic;
+}
+.nav-pill:hover {
+  color: var(--color-cocoa);
+  background: color-mix(in srgb, var(--color-paper) 55%, transparent);
+}
+/* Lamp click zone — subtle amber halo on hover so the user can find where to click. Off state fades to
+   invisible; the button is still hittable regardless. */
+.lamp-click-zone:hover {
+  background: radial-gradient(circle, rgba(214,168,105,0.45) 0%, rgba(214,168,105,0.14) 55%, transparent 80%) !important;
+  cursor: pointer;
+}
+/* Curtain hover — a warm brass glow along the edge so the user can tell they're interactive. */
+.curtain-click:hover {
+  filter: brightness(1.15) drop-shadow(0 0 6px rgba(214,168,105,0.6));
+  cursor: pointer;
+}
+.nav-pill.is-active {
+  color: var(--color-cocoa);
+  background: color-mix(in srgb, var(--color-accent) 8%, var(--color-paper));
+  border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--color-accent) 30%, transparent),
+              0 1px 2px rgba(0,0,0,0.25);
 }
 
 /* ---- Calendar (Phase 6): FullCalendar 6 themed through its CSS variables, so it sits in the cream room. ---- */

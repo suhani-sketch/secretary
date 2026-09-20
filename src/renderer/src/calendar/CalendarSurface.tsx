@@ -136,23 +136,50 @@ export function CalendarSurface(p: Props): React.JSX.Element {
   }
 
   return (
-    <div className="flex flex-col min-h-0 h-full gap-4">
-      {/* header: date navigation · status · view controls */}
-      <header className="flex items-center gap-3 rounded-3xl bg-white/50 px-5 py-3">
+    <div className="surface-dark-panel flex flex-col min-h-0 h-full gap-4">
+      {/* Victorian calendar header: warm paper base, brass gilt hairline underneath, serif italic title. */}
+      <header
+        className="flex items-center gap-3 rounded-2xl px-5 py-3"
+        style={{
+          background: 'var(--panel-bg)',
+          border: '1px solid var(--panel-hairline)',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.06)'
+        }}
+      >
         <div className="flex items-center gap-1">
-          <button className="rounded-lg px-2.5 py-1 text-sm bg-white/80 hover:bg-white" onClick={() => p.onChangeDate(step(-1))} title="Previous">
+          <button
+            className="rounded-full w-8 h-8 flex items-center justify-center text-base hover:bg-[color:var(--color-accent)]/15 transition-colors"
+            style={{ color: 'var(--panel-text)', border: '1px solid var(--panel-hairline)' }}
+            onClick={() => p.onChangeDate(step(-1))}
+            title="Previous"
+          >
             ‹
           </button>
-          <button className="rounded-lg px-2.5 py-1 text-sm bg-white/80 hover:bg-white disabled:opacity-40" onClick={() => p.onChangeDate(today)} disabled={isToday}>
+          <button
+            className="rounded-full px-3 py-1 text-[13px] italic hover:bg-[color:var(--color-accent)]/15 transition-colors disabled:opacity-40"
+            style={{ color: 'var(--panel-text)', border: '1px solid var(--panel-hairline)', fontFamily: '"Cormorant Garamond", Georgia, serif', letterSpacing: '0.06em' }}
+            onClick={() => p.onChangeDate(today)}
+            disabled={isToday}
+          >
             today
           </button>
-          <button className="rounded-lg px-2.5 py-1 text-sm bg-white/80 hover:bg-white" onClick={() => p.onChangeDate(step(1))} title="Next">
+          <button
+            className="rounded-full w-8 h-8 flex items-center justify-center text-base hover:bg-[color:var(--color-accent)]/15 transition-colors"
+            style={{ color: 'var(--panel-text)', border: '1px solid var(--panel-hairline)' }}
+            onClick={() => p.onChangeDate(step(1))}
+            title="Next"
+          >
             ›
           </button>
         </div>
-        <button className="text-xl font-semibold tracking-tight truncate min-w-0 text-left hover:text-mocha" onClick={() => selectOn(p.dateLocal, selection?.kind === 'date' && panelDate === p.dateLocal ? ({ kind: 'date' } as Selection) : { kind: 'date' })} title="Open the day panel">
+        <button
+          className="italic tracking-tight truncate min-w-0 text-left hover:text-[color:var(--color-accent)] transition-colors"
+          style={{ fontFamily: '"Cormorant Garamond", Georgia, serif', fontSize: 26, color: 'var(--panel-text)' }}
+          onClick={() => selectOn(p.dateLocal, selection?.kind === 'date' && panelDate === p.dateLocal ? ({ kind: 'date' } as Selection) : { kind: 'date' })}
+          title="Open the day panel"
+        >
           {title}
-          {summary?.is_past && <span className="text-sm text-stone-400 font-normal"> · looking back</span>}
+          {summary?.is_past && <span className="text-sm opacity-60 font-normal not-italic" style={{ fontFamily: 'Georgia, serif' }}> · looking back</span>}
         </button>
         {summary?.status && p.mode === 'day' && (
           <span className={`text-xs rounded-full px-2 py-0.5 whitespace-nowrap ${STATUS_TONE[summary.status]}`} title={`${hours(summary.scheduled_minutes)} scheduled · ${summary.due} due · ${summary.overdue} overdue · ~${hours(summary.due_effort_minutes)} of due work · ${hours(summary.available_minutes)} available${summary.conflicts ? ` · ${summary.conflicts} clash${summary.conflicts === 1 ? '' : 'es'}` : ''}`}>
@@ -170,9 +197,29 @@ export function CalendarSurface(p: Props): React.JSX.Element {
               <option value={6}>Sat</option>
             </select>
           </label>
-          <div className="flex rounded-xl bg-white/80 p-0.5" role="tablist" aria-label="Calendar view">
+          <div
+            className="flex rounded-full p-0.5"
+            role="tablist"
+            aria-label="Calendar view"
+            style={{ background: 'var(--panel-bg-strong)', border: '1px solid var(--panel-hairline)' }}
+          >
             {MODES.map((m) => (
-              <button key={m.id} role="tab" aria-selected={p.mode === m.id} onClick={() => p.onChangeMode(m.id)} className={`rounded-lg px-3 py-1 text-sm ${p.mode === m.id ? 'bg-cocoa text-cream' : 'text-stone-600 hover:bg-white'}`} title={m.job}>
+              <button
+                key={m.id}
+                role="tab"
+                aria-selected={p.mode === m.id}
+                onClick={() => p.onChangeMode(m.id)}
+                className="rounded-full px-3.5 py-1 text-[13px] italic transition-colors"
+                style={{
+                  fontFamily: '"Cormorant Garamond", Georgia, serif',
+                  letterSpacing: '0.05em',
+                  color: p.mode === m.id ? 'var(--panel-text)' : 'var(--panel-text-soft)',
+                  background: p.mode === m.id ? 'color-mix(in srgb, var(--color-accent) 22%, var(--panel-bg))' : 'transparent',
+                  border: p.mode === m.id ? '1px solid color-mix(in srgb, var(--color-accent) 55%, transparent)' : '1px solid transparent',
+                  boxShadow: p.mode === m.id ? 'inset 0 1px 0 color-mix(in srgb, var(--color-accent) 25%, transparent)' : 'none'
+                }}
+                title={m.job}
+              >
                 {m.label}
               </button>
             ))}
@@ -194,7 +241,15 @@ export function CalendarSurface(p: Props): React.JSX.Element {
 
       {/* body: the view, with the day panel beside it when something is selected */}
       <div className={`flex-1 min-h-0 grid gap-4 ${selection && day ? 'grid-cols-[minmax(0,1fr)_360px]' : 'grid-cols-1'}`}>
-        <div className="min-h-0 rounded-3xl bg-white/50 p-5">
+        <div
+          className="min-h-0 rounded-2xl p-5"
+          style={{
+            background: 'var(--panel-bg)',
+            border: '1px solid var(--panel-hairline)',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+            color: 'var(--panel-text)'
+          }}
+        >
           {p.mode === 'day' && <DayView dateLocal={p.dateLocal} onSelect={(s) => selectOn(p.dateLocal, s)} selection={panelDate === p.dateLocal ? selection : null} onQuick={p.onQuick} refreshKey={p.refreshKey} weekStart={p.weekStart} onLoaded={(b) => setDays((ds) => (ds.some((d) => d.date === b.date) ? ds.map((d) => (d.date === b.date ? b : d)) : [...ds, b]))} />}
           {p.mode === 'month' && (days.length ? <MonthView gridStart={range.from} days={days} monthLabel={title} ym={p.dateLocal.slice(0, 7)} weekStart={p.weekStart} todayLocal={today} onOpenDay={openDay} /> : <Loading />)}
           {p.mode === 'week' && (days.length ? <WeekView weekStartDate={range.from} days={days} weekStart={p.weekStart} todayLocal={today} onOpenDay={openDay} onSelectOn={selectOn} onQuick={p.onQuick} refreshKey={p.refreshKey} /> : <Loading />)}

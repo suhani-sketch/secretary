@@ -39,21 +39,54 @@ export function ThingsSurface({ active, archived, partsOf, lastActivityAt, onOpe
     .sort((a, b) => (lastActivityAt.get(b.id) ?? b.updated_at).localeCompare(lastActivityAt.get(a.id) ?? a.updated_at))
 
   return (
-    <div className="flex flex-col min-h-0 h-full gap-4">
-      <header className="flex items-center gap-3 rounded-3xl bg-white/50 px-5 py-3">
-        <span className="text-xl font-semibold tracking-tight">Things</span>
-        <span className="text-xs text-stone-400 hidden lg:inline whitespace-nowrap">
-          every project the assistant is tracking — structured, at a glance
+    <div className="surface-dark-panel flex flex-col min-h-0 h-full gap-4">
+      <header
+        className="flex items-center gap-3 rounded-2xl px-5 py-3"
+        style={{
+          background: 'var(--panel-bg)',
+          border: '1px solid var(--panel-hairline)',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.06)'
+        }}
+      >
+        <span
+          className="italic tracking-tight"
+          style={{ fontFamily: '"Cormorant Garamond", Georgia, serif', fontSize: 26, color: 'var(--panel-text)' }}
+        >
+          Things
+        </span>
+        <span
+          className="hidden lg:inline whitespace-nowrap italic opacity-70"
+          style={{ fontFamily: '"Cormorant Garamond", Georgia, serif', fontSize: 13, color: 'var(--panel-text-soft)' }}
+        >
+          every project the Secretary is quietly keeping
         </span>
         <div className="ml-auto flex items-center gap-3">
-          <div className="flex rounded-xl bg-white/80 p-0.5" role="tablist" aria-label="Things view">
+          <div
+            className="flex rounded-full p-0.5"
+            role="tablist"
+            aria-label="Things view"
+            style={{ background: 'var(--panel-bg-strong)', border: '1px solid var(--panel-hairline)' }}
+          >
             {(
               [
                 ['active', `Active (${active.length})`],
                 ['archived', `Done (${archived.length})`]
               ] as [typeof tab, string][]
             ).map(([id, label]) => (
-              <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)} className={`rounded-lg px-3 py-1 text-sm ${tab === id ? 'bg-cocoa text-cream' : 'text-stone-600 hover:bg-white'}`}>
+              <button
+                key={id}
+                role="tab"
+                aria-selected={tab === id}
+                onClick={() => setTab(id)}
+                className="rounded-full px-3.5 py-1 text-[13px] italic transition-colors"
+                style={{
+                  fontFamily: '"Cormorant Garamond", Georgia, serif',
+                  letterSpacing: '0.05em',
+                  color: tab === id ? 'var(--panel-text)' : 'var(--panel-text-soft)',
+                  background: tab === id ? 'color-mix(in srgb, var(--color-accent) 22%, var(--panel-bg))' : 'transparent',
+                  border: tab === id ? '1px solid color-mix(in srgb, var(--color-accent) 55%, transparent)' : '1px solid transparent'
+                }}
+              >
                 {label}
               </button>
             ))}
@@ -61,7 +94,15 @@ export function ThingsSurface({ active, archived, partsOf, lastActivityAt, onOpe
         </div>
       </header>
 
-      <div className="flex-1 min-h-0 rounded-3xl bg-white/50 p-5 overflow-y-auto">
+      <div
+        className="flex-1 min-h-0 rounded-2xl p-5 overflow-y-auto"
+        style={{
+          background: 'var(--panel-bg)',
+          border: '1px solid var(--panel-hairline)',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+          color: 'var(--panel-text)'
+        }}
+      >
         {rows.length === 0 ? (
           <div className="h-full flex items-center justify-center text-sm text-stone-400 text-center">
             {tab === 'active' ? (
@@ -82,7 +123,13 @@ export function ThingsSurface({ active, archived, partsOf, lastActivityAt, onOpe
                 <button
                   key={p.id}
                   onClick={() => onOpen(p)}
-                  className="item-in group text-left rounded-2xl bg-white/70 hover:bg-white p-4 flex flex-col gap-2 min-w-0"
+                  className="item-in group text-left rounded-xl p-4 flex flex-col gap-2 min-w-0 transition-shadow"
+                  style={{
+                    background: 'var(--panel-bg-strong)',
+                    border: '1px solid color-mix(in srgb, var(--color-accent) 45%, transparent)',
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
+                    color: 'var(--panel-text)'
+                  }}
                 >
                   <div className="flex items-start gap-2">
                     <TypeGlyph item={p} />

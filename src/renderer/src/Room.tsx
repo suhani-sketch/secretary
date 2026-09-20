@@ -102,9 +102,42 @@ interface Props {
    *  change: when the creature is idle (pose === 'sit'), the default position picks based on this instead of
    *  always the rug — two creatures with different `restingSpot` values visibly idle in different places. */
   restingSpot?: 'nest' | 'armchair' | 'bench' | 'rug'
+  /** Last-spot continuity (companion-home pass, 2026-09-19): the spot the creature was at when the app closed.
+   *  Honored briefly on mount so reopening feels like "she's still there", then released the moment the
+   *  ambient rotation moves on to a real, distinct activity. Never fights natural behaviour for long. */
+  initialSpotId?: string | null
+  /** Fires when the rendered spot changes to a persistent (non-momentary) position — reading, working,
+   *  looking, idle, sleepy, etc. Skipped for petted/greeting/celebrating/etc. so a click doesn't overwrite
+   *  the memory of "her spot". Used to persist to settings. */
+  onSpotChange?: (spotId: string) => void
+  /** Fires on EVERY spot change (including momentary roams and reactions). App uses this to position the
+   *  app-level CompanionRenderer against the world panel's measured bounds — Phase 2, 2026-09-19. */
+  onSpotResolved?: (spot: { x: number; y: number; scale: number; gaze: Gaze }) => void
+  /** Autonomous roaming (companion-home pass v2, 2026-09-19): a non-null index means the creature has
+   *  autonomously left her room and is currently at one of the roam waypoints defined below. `null` means she's
+   *  home. The App decides WHEN to roam (a randomized-interval timer that avoids clockwork feel); Room owns
+   *  WHERE. Waypoints are in the SceneRenderer's own coordinate space so they can extend past x=1 (out into
+   *  the merged window's chat and rail regions, since both containers are overflow-visible). */
+  roamingIdx?: number | null
 }
 
-export function Room({ state, gaze, environment, time, happening, onPet, onChangeEnvironment, onChangeTime, favorites, rotation, onToggleFavorite, onToggleRotation, completedCount, weatherOverride, restingSpot = 'rug' }: Props): React.JSX.Element {
+// The four roam waypoints. Coordinates are in SceneRenderer's own frame where x=0/y=0 is the world's top-left
+// and x=1/y=1 is the world's bottom-right. Because world aside + SceneRenderer are overflow-visible, x>1
+// visually extends into the chat and rail regions of the merged window.
+// Given grid ratios 1.2:1.35:0.65 = 37.5%:42.2%:20.3%, world width is 37.5% of the merged window, so
+//   x=1.5 → merged x ≈ 56%     (chat)
+//   x=2.0 → merged x ≈ 75%     (chat/rail boundary)
+//   x=2.4 → merged x ≈ 90%     (rail)
+// Scales are deliberately smaller than a room spot's 0.85 — she reads as a small critter visiting, not a
+// mascot planted on top of your content.
+const ROAM_WAYPOINTS: SceneSpot[] = [
+  { id: 'roam-chat-top', x: 1.35, y: 0.10, scale: 0.55, activity: 'looking', furniture: null, gaze: 'viewer', occlusionState: 'verified' },
+  { id: 'roam-divider', x: 1.02, y: 0.55, scale: 0.55, activity: 'idle', furniture: null, gaze: 'away', occlusionState: 'verified' },
+  { id: 'roam-rail-top', x: 2.35, y: 0.09, scale: 0.5, activity: 'looking', furniture: null, gaze: 'away', occlusionState: 'verified' },
+  { id: 'roam-chat-bottom', x: 1.55, y: 0.92, scale: 0.5, activity: 'attentive', furniture: null, gaze: 'viewer', occlusionState: 'verified' }
+]
+
+export function Room({ state, gaze, environment, time, happening, onPet, onChangeEnvironment, onChangeTime, favorites, rotation, onToggleFavorite, onToggleRotation, completedCount, weatherOverride, restingSpot = 'rug', initialSpotId, onSpotChange, onSpotResolved, roamingIdx = null }: Props): React.JSX.Element {
   const [hour, setHour] = useState(new Date().getHours())
   const [today, setToday] = useState(() => new Date().toISOString().slice(0, 10))
   useEffect(() => {
@@ -128,21 +161,71 @@ export function Room({ state, gaze, environment, time, happening, onPet, onChang
   const pose = happening === 'cooking' && (basePose === 'sit' || basePose === 'window') ? 'kitchen' : basePose
   const [menu, setMenu] = useState(false)
 
+  // Last-spot continuity (companion-home pass, 2026-09-19): honour `initialSpotId` only while the creature is
+  // GENUINELY idle on mount — the emotional payoff is "she's still where I left her". The moment the natural
+  // ambient rotation moves on to a real activity (reading/looking/working), or 90s of wall clock pass, the
+  // bias is released and normal picking resumes. Fights natural behaviour for at most one ambient slot.
+  const [honoringInitial, setHonoringInitial] = useState<boolean>(!!initialSpotId)
+  useEffect(() => {
+    if (!honoringInitial) return
+    const t = setTimeout(() => setHonoringInitial(false), 90_000)
+    return () => clearTimeout(t)
+  }, [honoringInitial])
+  const activity = scene ? mapStateToSceneActivity(state) : 'idle'
+  useEffect(() => {
+    if (honoringInitial && activity !== 'idle') setHonoringInitial(false)
+  }, [activity, honoringInitial])
+  const spotForRender = useMemo(() => {
+    if (!scene) return null
+    // Autonomous roaming: while a waypoint index is set, she's out at that waypoint (chat area, rail area,
+    // divider). Everything else — natural-pick, initial-spot restore — steps aside for her wandering. Returns
+    // automatically when App clears the index. The waypoints are declared outside the component so their
+    // identity stays stable across re-renders (no jitter from a new object literal per render).
+    if (roamingIdx !== null && roamingIdx >= 0 && roamingIdx < ROAM_WAYPOINTS.length) {
+      return ROAM_WAYPOINTS[roamingIdx]
+    }
+    if (honoringInitial && initialSpotId) {
+      const restored = scene.spots.find((s) => s.id === initialSpotId)
+      if (restored && activity === 'idle') return restored
+    }
+    return pickSceneSpot(scene.spots, activity, restingSpot, scene.restingSpotMap)
+  }, [scene, activity, restingSpot, honoringInitial, initialSpotId, roamingIdx])
+  // Persist the spot outward for meaningful, non-momentary activities only. Momentary states like `attentive`
+  // (petted/greeting/celebrating/quietlyExcited) reflect a fleeting reaction, not a place the creature lives.
+  // A roam waypoint is also excluded — she is out wandering, not moving in permanently; persisting a roam id
+  // would leave her stuck outside the room on next open.
+  const activityIsPersistent = activity !== 'attentive' && roamingIdx === null
+  const spotIdForRender = spotForRender?.id ?? null
+  useEffect(() => {
+    if (spotIdForRender && activityIsPersistent) onSpotChange?.(spotIdForRender)
+  }, [spotIdForRender, activityIsPersistent, onSpotChange])
+  // Report the resolved spot upward on every change. App uses this to position the app-level CompanionRenderer
+  // against the world panel's measured bounds. Phase 2 (2026-09-19). Includes momentary spots (roams, peeks)
+  // so the creature can visually follow her state everywhere, not just to the last "persistent" one.
+  const gazeForRender = useMemo<Gaze>(() => {
+    if (!spotForRender) return 'away'
+    switch (spotForRender.gaze) {
+      case 'book': return 'desk'
+      case 'closed': return 'closed'
+      case 'window': return 'window'
+      case 'desk': return 'desk'
+      case 'viewer': return 'viewer'
+      case 'away-up': return 'away'
+      default: return 'away'
+    }
+  }, [spotForRender])
+  useEffect(() => {
+    if (spotForRender) {
+      onSpotResolved?.({ x: spotForRender.x, y: spotForRender.y, scale: spotForRender.scale, gaze: gazeForRender })
+    }
+  }, [spotForRender, gazeForRender, onSpotResolved])
+
   // World redesign — if the current scene has assets, render via SceneRenderer. Every existing hook above has
   // already run; the branch happens after the hook block so the hook-order rule stays satisfied.
-  if (scene && worldContext) {
-    const preferredSpot = pickSceneSpot(scene.spots, mapStateToSceneActivity(state), restingSpot, scene.restingSpotMap)
-    const sceneGaze: Gaze =
-      preferredSpot.gaze === 'book' ? 'desk'
-      : preferredSpot.gaze === 'closed' ? 'closed'
-      : preferredSpot.gaze === 'window' ? 'window'
-      : preferredSpot.gaze === 'desk' ? 'desk'
-      : preferredSpot.gaze === 'viewer' ? 'viewer'
-      : preferredSpot.gaze === 'away-up' ? 'away'
-      : 'away'
+  if (scene && worldContext && spotForRender) {
     return (
       <div className="relative h-full w-full">
-        <SceneRenderer world={worldContext} state={state} gaze={sceneGaze} spot={{ x: preferredSpot.x, y: preferredSpot.y, scale: preferredSpot.scale }} onPet={onPet} />
+        <SceneRenderer world={worldContext} />
         {/* Preserve the scene menu so the user can still switch worlds (back to a legacy SVG environment or to
             the same illustrated scene). Same visual pill as the legacy path. */}
         <button className="absolute top-3 right-3 z-10 rounded-full text-[10px] tracking-[0.14em] uppercase px-2.5 py-1 font-medium" style={{ background: 'rgba(233,219,193,0.75)', color: '#3A2D28', boxShadow: '0 1px 3px rgba(0,0,0,0.15)' }} onClick={() => setMenu((v) => !v)}>
@@ -713,16 +796,23 @@ function pickSceneSpot(
   restingSpot: 'nest' | 'armchair' | 'bench' | 'rug',
   restingSpotMap: Record<string, string | undefined>
 ): SceneSpot {
+  const preferredId = restingSpotMap[restingSpot]
+  // Personality-visible idle behaviour (2026-09-19, creature-as-home pass): when the creature is genuinely idle,
+  // its preferred resting spot wins over the scene's default idle position — an "armchair"-personality creature
+  // idles in the chair, a "bench" creature idles at the window, without a per-scene idle-tagging change. The chair
+  // is a scene spot tagged `reading`, but that's fine — the creature is simply sitting there, not necessarily
+  // reading. The user gradually notices "she prefers the chair" without any label pointing at it.
+  if (activity === 'idle' && preferredId) {
+    const restingSpotEntry = spots.find((s) => s.id === preferredId)
+    if (restingSpotEntry) return restingSpotEntry
+  }
   const exactMatches = spots.filter((s) => s.activity === activity)
   if (exactMatches.length) {
-    // Bias toward the resting-spot-derived preference when multiple options exist.
-    const preferredId = restingSpotMap[restingSpot]
     const preferred = preferredId ? exactMatches.find((s) => s.id === preferredId) : undefined
     return preferred ?? exactMatches[0]
   }
-  const restingSpotId = restingSpotMap[restingSpot]
-  if (restingSpotId) {
-    const spot = spots.find((s) => s.id === restingSpotId)
+  if (preferredId) {
+    const spot = spots.find((s) => s.id === preferredId)
     if (spot) return spot
   }
   return spots.find((s) => s.id === 'rug-center') ?? spots[0]

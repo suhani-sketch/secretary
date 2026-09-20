@@ -21,6 +21,10 @@ const api: SecretaryApi = {
   },
 
   sendChat: (text) => ipcRenderer.invoke(IPC.sendChat, text),
+  companionGenerateUtterance: (ctx) => ipcRenderer.invoke('companion:generateUtterance', ctx),
+  companionConverse: (userMessage, ctx) => ipcRenderer.invoke('companion:converse', userMessage, ctx),
+  companionMemoryCompletion: (title) => ipcRenderer.invoke('companion:memory:completion', title),
+  companionMemoryPostpone: (title) => ipcRenderer.invoke('companion:memory:postpone', title),
   sendVoice: (base64, mimeType) => ipcRenderer.invoke(IPC.sendVoice, base64, mimeType),
   chatHistory: (limit) => ipcRenderer.invoke(IPC.chatHistory, limit),
   listExtractions: (limit) => ipcRenderer.invoke(IPC.listExtractions, limit),
@@ -63,7 +67,11 @@ const api: SecretaryApi = {
   listUnscheduled: () => ipcRenderer.invoke(IPC.listUnscheduled),
   listPlans: () => ipcRenderer.invoke(IPC.listPlans),
   getPlanProgress: (planId) => ipcRenderer.invoke(IPC.getPlanProgress, planId),
-  listPreferences: () => ipcRenderer.invoke(IPC.listPreferences)
+  listPreferences: () => ipcRenderer.invoke(IPC.listPreferences),
+  dataExport: () => ipcRenderer.invoke('data:export'),
+  dataReveal: () => ipcRenderer.invoke('data:reveal'),
+  aiGetStatus: () => ipcRenderer.invoke('ai:getStatus'),
+  aiSetKey: (key: string) => ipcRenderer.invoke('ai:setKey', key)
 }
 
 contextBridge.exposeInMainWorld('api', api)

@@ -31,10 +31,24 @@ interface Props {
 
 function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }): React.JSX.Element {
   return (
-    <section className="rounded-2xl bg-white/60 p-4 flex flex-col gap-2">
+    <section
+      className="rounded-xl p-4 flex flex-col gap-2"
+      style={{
+        background: 'var(--panel-bg-strong)',
+        border: '1px solid var(--panel-hairline)',
+        color: 'var(--panel-text)'
+      }}
+    >
       <div>
-        <h2 className="text-xs font-medium uppercase tracking-wide text-stone-500">{title}</h2>
-        {hint && <p className="text-xs text-stone-400 mt-0.5">{hint}</p>}
+        <h2 className="chapter-heading" style={{ color: 'var(--color-accent)' }}>{title}</h2>
+        {hint && (
+          <p
+            className="italic mt-1"
+            style={{ fontFamily: '"Cormorant Garamond", Georgia, serif', fontSize: 13, color: 'var(--panel-text-soft)' }}
+          >
+            {hint}
+          </p>
+        )}
       </div>
       {children}
     </section>
@@ -43,7 +57,17 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
 
 function Pill({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }): React.JSX.Element {
   return (
-    <button onClick={onClick} className={`rounded-full px-3 py-1 text-sm ${active ? 'bg-cocoa text-cream' : 'bg-white/80 text-stone-600 hover:bg-white'}`}>
+    <button
+      onClick={onClick}
+      className="rounded-full px-3.5 py-1 text-[13px] italic transition-colors"
+      style={{
+        fontFamily: '"Cormorant Garamond", Georgia, serif',
+        letterSpacing: '0.05em',
+        color: active ? 'var(--panel-text)' : 'var(--panel-text-soft)',
+        background: active ? 'color-mix(in srgb, var(--color-accent) 22%, var(--panel-bg))' : 'color-mix(in srgb, var(--panel-bg-strong) 70%, transparent)',
+        border: `1px solid color-mix(in srgb, var(--color-accent) ${active ? 55 : 30}%, transparent)`
+      }}
+    >
       {children}
     </button>
   )
@@ -57,13 +81,16 @@ export function SettingsSurface(p: Props): React.JSX.Element {
   const [quietDraftEnd, setQuietDraftEnd] = useState('08:00')
   const [defaultReminderTime, setDefaultReminderTime] = useState<{ value: string; stated: boolean } | null>(null)
   const [reminderDraft, setReminderDraft] = useState('09:00')
+  const [aiStatus, setAiStatus] = useState<{ hasKey: boolean; keyHint: string | null; model: string } | null>(null)
+  const [keyDraft, setKeyDraft] = useState('')
 
   const loadPrefs = async (): Promise<void> => {
-    const [ni, qs, qe, prefs] = await Promise.all([
+    const [ni, qs, qe, prefs, ai] = await Promise.all([
       window.api.getSetting('notify.intensity'),
       window.api.getSetting('notify.quiet_start'),
       window.api.getSetting('notify.quiet_end'),
-      window.api.listPreferences()
+      window.api.listPreferences(),
+      window.api.aiGetStatus()
     ])
     setIntensity(ni === 'low' ? 'low' : 'normal')
     setQuietStart(qs ?? '')
@@ -73,6 +100,7 @@ export function SettingsSurface(p: Props): React.JSX.Element {
     const drt = prefs.find((x) => x.key === 'default_reminder_time')
     setDefaultReminderTime(drt ? { value: drt.value, stated: drt.source === 'stated' } : null)
     if (drt) setReminderDraft(drt.value)
+    setAiStatus(ai)
   }
 
   useEffect(() => {
@@ -95,15 +123,46 @@ export function SettingsSurface(p: Props): React.JSX.Element {
     await p.quick('set_preference', { key: 'default_reminder_time', value: reminderDraft })
     await loadPrefs()
   }
+  const saveKey = async (): Promise<void> => {
+    const res = await window.api.aiSetKey(keyDraft.trim())
+    setAiStatus(res)
+    setKeyDraft('')
+    p.say(res.hasKey ? 'Key saved — chat is ready.' : 'Key cleared.')
+  }
 
   return (
-    <div className="flex flex-col min-h-0 h-full gap-4">
-      <header className="flex items-center gap-3 rounded-3xl bg-white/50 px-5 py-3">
-        <span className="text-xl font-semibold tracking-tight">Settings</span>
-        <span className="text-xs text-stone-400 hidden lg:inline whitespace-nowrap">how Secretary behaves — quiet hours, defaults, the little things</span>
+    <div className="surface-dark-panel flex flex-col min-h-0 h-full gap-4">
+      <header
+        className="flex items-center gap-3 rounded-2xl px-5 py-3"
+        style={{
+          background: 'var(--panel-bg)',
+          border: '1px solid var(--panel-hairline)',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.06)'
+        }}
+      >
+        <span
+          className="italic tracking-tight"
+          style={{ fontFamily: '"Cormorant Garamond", Georgia, serif', fontSize: 26, color: 'var(--panel-text)' }}
+        >
+          Settings
+        </span>
+        <span
+          className="hidden lg:inline whitespace-nowrap italic opacity-70"
+          style={{ fontFamily: '"Cormorant Garamond", Georgia, serif', fontSize: 13, color: 'var(--panel-text-soft)' }}
+        >
+          how the Secretary behaves; quiet hours, defaults, the small things
+        </span>
       </header>
 
-      <div className="flex-1 min-h-0 rounded-3xl bg-white/50 p-5 overflow-y-auto">
+      <div
+        className="flex-1 min-h-0 rounded-2xl p-5 overflow-y-auto"
+        style={{
+          background: 'var(--panel-bg)',
+          border: '1px solid var(--panel-hairline)',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+          color: 'var(--panel-text)'
+        }}
+      >
         <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3 content-start max-w-4xl">
           <Section title="Appearance">
             <div className="flex gap-2">
@@ -178,7 +237,73 @@ export function SettingsSurface(p: Props): React.JSX.Element {
           </Section>
 
           <Section title="The room" hint="favourite scenes and rotation live in the room's own scene button — a visual choice, kept beside what it changes">
-            <p className="text-sm text-stone-600">{p.creatureName ? `Named ${p.creatureName}.` : 'Not yet named.'}</p>
+            <p className="text-sm">{p.creatureName ? `Named ${p.creatureName}.` : 'Not yet named.'}</p>
+          </Section>
+
+          <Section title="AI key" hint="a free Gemini key from aistudio.google.com/apikey — this is what lets typed and spoken messages be understood">
+            <p className="text-sm">
+              {aiStatus?.hasKey ? (
+                <>Key set{aiStatus.keyHint ? <span style={{ opacity: 0.7 }}> · ending {aiStatus.keyHint}</span> : null} · <span style={{ opacity: 0.7 }}>{aiStatus.model.split(',')[0]}</span></>
+              ) : (
+                <span style={{ opacity: 0.7 }}>No key set — chat will explain instead of working.</span>
+              )}
+            </p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <input
+                type="password"
+                value={keyDraft}
+                onChange={(e) => setKeyDraft(e.target.value)}
+                placeholder="paste your Gemini key"
+                className="bg-white/80 rounded-lg px-2 py-1 text-sm w-56"
+              />
+              <button className="rounded-lg px-2.5 py-1 text-sm bg-cocoa text-cream hover:bg-cocoa/90 disabled:opacity-40" disabled={!keyDraft.trim()} onClick={() => void saveKey()}>Save</button>
+              {aiStatus?.hasKey && (
+                <button className="rounded-lg px-2.5 py-1 text-sm bg-white/80 hover:bg-white text-stone-600" onClick={() => { setKeyDraft(''); void window.api.aiSetKey('').then((r) => { setAiStatus(r); p.say('Key cleared.') }) }}>Clear</button>
+              )}
+            </div>
+          </Section>
+
+          <Section title="Your data" hint="the whole database is one file on your machine; take a copy of it whenever you like">
+            <div className="flex gap-2 flex-wrap">
+              <button
+                className="rounded-full px-3.5 py-1 text-[13px] italic transition-colors"
+                style={{
+                  fontFamily: '"Cormorant Garamond", Georgia, serif',
+                  letterSpacing: '0.05em',
+                  color: 'var(--panel-text)',
+                  background: 'color-mix(in srgb, var(--color-accent) 22%, var(--panel-bg))',
+                  border: '1px solid color-mix(in srgb, var(--color-accent) 55%, transparent)'
+                }}
+                onClick={async () => {
+                  const r = await window.api.dataExport()
+                  if (r.ok) p.say(`Backup saved to ${r.path.split(/[/\\]/).pop() ?? r.path}`)
+                  else if (r.reason !== 'cancelled') p.say(`Backup failed: ${r.reason}`)
+                }}
+                title="Write a full copy of the database to a place you choose"
+              >
+                Save a backup…
+              </button>
+              <button
+                className="rounded-full px-3.5 py-1 text-[13px] italic transition-colors"
+                style={{
+                  fontFamily: '"Cormorant Garamond", Georgia, serif',
+                  letterSpacing: '0.05em',
+                  color: 'var(--panel-text-soft)',
+                  background: 'color-mix(in srgb, var(--panel-bg-strong) 70%, transparent)',
+                  border: '1px solid color-mix(in srgb, var(--color-accent) 30%, transparent)'
+                }}
+                onClick={async () => {
+                  const r = await window.api.dataReveal()
+                  if (!r.ok) p.say(`Could not open the folder: ${r.reason}`)
+                }}
+                title="Open the folder that holds the live database"
+              >
+                Show the file
+              </button>
+            </div>
+            <p className="italic text-xs mt-1" style={{ fontFamily: '"Cormorant Garamond", Georgia, serif', color: 'var(--panel-text-soft)' }}>
+              To restore a backup, quit Secretary and copy the saved <span className="font-medium">.db</span> file over the live one — the folder button above opens the right place.
+            </p>
           </Section>
         </div>
       </div>

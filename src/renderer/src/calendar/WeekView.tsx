@@ -76,10 +76,16 @@ export function WeekView({ weekStartDate, days, weekStart, todayLocal, onOpenDay
         renderDayHeader={(date, label) => {
           const d = byDate.get(date)
           const s = d?.summary
+          const hasDeadline = s && !s.is_past && s.hard_deadlines > 0
           return (
-            <button className={`w-full text-left px-1 py-0.5 rounded-lg hover:bg-white/70 ${date === todayLocal ? 'ring-1 ring-mocha' : ''}`} onClick={() => onOpenDay(date)} title="Open this day">
+            <button className={`w-full text-left px-1 py-0.5 rounded-lg hover:bg-white/70 ${date === todayLocal ? 'ring-1 ring-mocha' : hasDeadline ? 'ring-1 ring-cocoa' : ''}`} onClick={() => onOpenDay(date)} title="Open this day">
               <div className="flex items-baseline gap-1.5">
                 <span className={`text-xs ${date === todayLocal ? 'font-semibold text-cocoa' : 'text-stone-700'}`}>{label}</span>
+                {hasDeadline && (
+                  <span className="inline-flex items-center gap-0.5 text-[10px] rounded-full px-1 bg-cocoa text-cream" title={`${s.hard_deadlines} hard deadline${s.hard_deadlines === 1 ? '' : 's'}`}>
+                    ◆
+                  </span>
+                )}
                 {s?.status && <span className={`text-[10px] ${STATUS_TONE[s.status]}`}>{s.status}</span>}
                 {s?.is_past && s.completed > 0 && <span className="text-[10px] text-stone-400">✓ {s.completed}</span>}
               </div>

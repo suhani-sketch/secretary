@@ -15,7 +15,13 @@ import type {
   ToolRunResult
 } from '../../shared/types'
 import { Room, type EnvironmentId, type TimeChoice, type Weather } from './Room'
-import { useCompanion, type CompanionState, type PersonalityWeights } from './companionState'
+import { useCompanion, type CompanionState, type PersonalityWeights, type Gaze } from './companionState'
+import { useCompanionModel } from './companion/model'
+import { CompanionRenderer } from './companion/CompanionRenderer'
+import { CompanionUtterance } from './companion/CompanionUtterance'
+import { pickUtterance, pickTaskReminder, type UtteranceKind } from './companion/utterances'
+import { computeCreatureBox, localRect, type Bounds } from './companion/positioning'
+import { bandForHour } from './Room'
 import { maybeMoment } from './creatureMoments'
 import * as React from 'react'
 import { ItemEditor, NoteEditor, ReminderEditor } from './Editors'
@@ -190,6 +196,143 @@ export default function App(): React.JSX.Element {
   const [careSleepAt, setCareSleepAt] = useState(0)
   const [careTeaAt, setCareTeaAt] = useState(0)
   const [careLookAt, setCareLookAt] = useState(0)
+  // Companion state — personality, roaming, spot persistence, awareness — is now owned by useCompanionModel
+  // (renderer/companion/model.ts). See the pass description in that file. This block used to hold a scattered
+  // set of state hooks and timer effects; they now live inside the model. App feeds AwarenessEvents into
+  // companion.notice(), and reads companion.state / companion.gaze / companion.roamingIdx / etc.
+  // Phase 2 (2026-09-19): the Companion is rendered at app level, not inside the world panel. Refs measure
+  // the merged Conversation window and the world aside inside it; the world's local rect + the resolved
+  // spot from Room feed positioning.ts to place her absolutely against the merged window.
+  const windowRef = useRef<HTMLDivElement>(null)
+  const worldRef = useRef<HTMLElement>(null)
+  const [resolvedSpot, setResolvedSpot] = useState<{ x: number; y: number; scale: number; gaze: Gaze } | null>(null)
+  const [worldLocal, setWorldLocal] = useState<Bounds | null>(null)
+  // Creature-voice pass (2026-09-19): small floating utterances the creature murmurs beside her body — the
+  // "Victorian aside". Distinct from chat proactive lines. Fires on time-of-day triggers (morning + dusk) and
+  // on user-caused moments (petting, completion). One utterance at a time, auto-clears after 8s.
+  const [utteranceText, setUtteranceText] = useState<string | null>(null)
+  const lastUtteranceAtRef = useRef<number>(0)
+  // Bubbles now persist until the user clicks them (per user request). No auto-timeouts anywhere. The
+  // user dismisses by clicking the cloud; new utterances replace the current one immediately.
+  const sayUtterance = useCallback((text: string) => {
+    setUtteranceText(text)
+    lastUtteranceAtRef.current = Date.now()
+  }, [])
+  // Utterance dispatcher — Phase 4 (2026-09-19). Prefers the GENERATIVE Victorian voice via Gemini so every
+  // line is fresh and specifically aware of state. If the daily budget is exhausted, provider is offline,
+  // or the call errors, falls back to the static utterance pool (utterances.ts) so she is never silent for
+  // architectural reasons. Rate-limited by shared minimum gap so she doesn't chatter.
+  const utterKind = useCallback((kind: UtteranceKind, opts: { forceIgnoreGap?: boolean } = {}) => {
+    const now = Date.now()
+    const MIN_GAP_MS = 90_000
+    if (!opts.forceIgnoreGap && now - lastUtteranceAtRef.current < MIN_GAP_MS) return
+    if (utteranceText !== null && !opts.forceIgnoreGap) return
+    // Build context from the current app state.
+    const heavy = overwhelmedRef.current
+    const overdue = overdueRef.current
+    const overdueTitles = overdue.slice(0, 3).map((i) => i.title)
+    const weekAgo = Date.now() - 7 * 24 * 3600 * 1000
+    const recentDone = itemsRef.current.filter((it) => {
+      if (it.status !== 'done') return false
+      const doneAt = it.completed_at ? Date.parse(it.completed_at) : NaN
+      return !Number.isNaN(doneAt) && doneAt > weekAgo
+    })
+    const ctx = {
+      kindHint: kind,
+      timeBand: bandForHour(new Date().getHours()),
+      hour: new Date().getHours(),
+      overdueCount: overdue.length,
+      overdueTitles,
+      recentlyDoneCount: recentDone.length,
+      recentlyDoneTitles: recentDone.slice(0, 3).map((i) => i.title),
+      overwhelmed: heavy,
+      creatureName: creatureNameRef.current,
+      weekdayName: new Date().toLocaleDateString(undefined, { weekday: 'long' }),
+      messageCountLastHour: 0
+    }
+    const usePool = (): void => {
+      const today = new Date().toISOString().slice(0, 10)
+      const key = `utterance.pool.${kind}.${today}`
+      let usedIdx = new Set<number>()
+      try {
+        const raw = localStorage.getItem(key)
+        if (raw) usedIdx = new Set(JSON.parse(raw) as number[])
+      } catch { /* ignore */ }
+      const picked = pickUtterance(kind, usedIdx)
+      if (!picked) return
+      usedIdx.add(picked.index)
+      try { localStorage.setItem(key, JSON.stringify(Array.from(usedIdx))) } catch { /* ignore */ }
+      sayUtterance(picked.text)
+    }
+    // Attempt generative first; if it fails or returns null, fall through to pool.
+    void window.api.companionGenerateUtterance(ctx).then((res) => {
+      if (res && res.text && typeof res.text === 'string') {
+        sayUtterance(res.text)
+      } else {
+        usePool()
+      }
+    }).catch(() => usePool())
+  }, [sayUtterance, utteranceText])
+  // Lamp-lit ambience (2026-09-19): the user can light the lamp at dusk; a warm glow washes the whole app.
+  // Stored per-session in memory only — a fresh day, a fresh dusk, a fresh lighting of the lamp.
+  const [lampOn, setLampOn] = useState(false)
+  // Curtains — drawn closed at morning until the user clicks them to swing open (daylight streams in).
+  const [curtainsOpen, setCurtainsOpen] = useState(true)
+  // First-run onboarding — a chained sequence of introduction bubbles the first time the app opens. Each
+  // waits for the user to dismiss the previous one. Persists a "completed" flag in localStorage so it
+  // never runs a second time.
+  const onboardingQueueRef = useRef<string[]>([])
+  const onboardingActiveRef = useRef(false)
+  const startOnboarding = useCallback((): void => {
+    if (onboardingActiveRef.current) return
+    let done = false
+    try { done = localStorage.getItem('onboarding.completed') === '1' } catch { /* no storage */ }
+    if (done) return
+    onboardingActiveRef.current = true
+    onboardingQueueRef.current = [
+      'Welcome, my dearest chiku. I am babe, your constant companion. I shall be here whenever you need me, and often when you do not, I am afraid.',
+      'You may address me by name at any time. Begin a message with "babe," and I shall reply as your friend rather than through your Secretary.',
+      'Should you wish to hear my thoughts on demand, a small double-click upon me will summon a bubble. Otherwise I shall speak when the moment feels right.',
+      'Do notice the lamp beside my chair. A gentle click will kindle it, and a warm glow shall spread across the whole page. Extinguish it likewise.',
+      'The curtains, too, will draw and part at your touch. When they are open, daylight streams into the study. When drawn, we are cocooned.',
+      'Small poems, gentle reminders, warm words for hard days: these I shall provide freely. That is all, chiku. Welcome home.'
+    ]
+  }, [])
+  const advanceOnboarding = useCallback((): void => {
+    if (!onboardingActiveRef.current) return
+    const next = onboardingQueueRef.current.shift()
+    if (next) {
+      setUtteranceText(next)
+      lastUtteranceAtRef.current = Date.now()
+    } else {
+      onboardingActiveRef.current = false
+      try { localStorage.setItem('onboarding.completed', '1') } catch { /* ignore */ }
+    }
+  }, [])
+  useEffect(() => {
+    startOnboarding()
+    // First bubble lands ~3 seconds after app opens so she settles at her spot first.
+    const t = window.setTimeout(() => advanceOnboarding(), 3000)
+    return () => window.clearTimeout(t)
+  }, [startOnboarding, advanceOnboarding])
+  useEffect(() => {
+    const win = windowRef.current
+    const world = worldRef.current
+    if (!win || !world) return
+    const remeasure = (): void => {
+      setWorldLocal(localRect(world.getBoundingClientRect(), win.getBoundingClientRect()))
+    }
+    remeasure()
+    const ro = new ResizeObserver(remeasure)
+    ro.observe(win)
+    ro.observe(world)
+    // Also remeasure on window resize since parent grid tracks depend on viewport width.
+    window.addEventListener('resize', remeasure)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', remeasure)
+    }
+  }, [surface])
   // Return-from-away (reshape): a persistent 'closed at' marker in localStorage. If the gap is > 12h, the creature
   // greets on next open. Written on every unload; missing on first launch means no greeting.
   const [returnFromAway, setReturnFromAway] = useState(false)
@@ -198,6 +341,214 @@ export default function App(): React.JSX.Element {
   const [proactiveNoticeAt, setProactiveNoticeAt] = useState(0)
   const [typingAt, setTypingAt] = useState(0)
   const [hour, setHour] = useState(new Date().getHours())
+  // ---- Creature voice — all triggers ----
+  // Anchor utterances: morning-curtains and evening-lamp. These are specific prompts tied to an actual UI
+  // interaction, so they use hard-coded lines (not pooled) and fire at most once per day per band.
+  useEffect(() => {
+    const band = bandForHour(hour)
+    if (band !== 'morning' && band !== 'evening') return
+    const today = new Date().toISOString().slice(0, 10)
+    const key = `utterance.anchor.${band}.${today}`
+    let done = false
+    try { done = localStorage.getItem(key) === '1' } catch { /* no storage */ }
+    if (done) return
+    if (band === 'evening' && lampOn) return
+    if (band === 'morning' && !curtainsOpen) return
+    const t = window.setTimeout(() => {
+      if (band === 'morning') {
+        setCurtainsOpen(false)
+        sayUtterance('Good morrow — the day awaits. Might we draw back the curtains?')
+      } else {
+        sayUtterance('Twilight descends upon us. Perhaps you would kindle the lamp?')
+      }
+      try { localStorage.setItem(key, '1') } catch { /* ignore */ }
+    }, 8000)
+    return () => window.clearTimeout(t)
+  }, [hour, sayUtterance, lampOn, curtainsOpen])
+  // Welcome-back utterance: fires on mount when the user has been away >2h (using the same localStorage
+  // marker returnFromAway uses). One-shot, ~4s after mount so she's had a moment to settle in her spot.
+  useEffect(() => {
+    let raw: string | null = null
+    try { raw = localStorage.getItem('creature.last_close') } catch { /* ignore */ }
+    if (!raw) return
+    const then = Date.parse(raw)
+    if (Number.isNaN(then)) return
+    const gapMs = Date.now() - then
+    if (gapMs < 2 * 3600 * 1000) return
+    const t = window.setTimeout(() => utterKind('welcome_back', { forceIgnoreGap: true }), 4000)
+    return () => window.clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  // Overdue comfort: if there are 3+ overdue items on mount and again periodically, she offers a warm word.
+  // At most one comfort line per 4 hours per session; the pool itself is small so exhaustion silences her
+  // naturally for the day. Uses overwhelmedRef so it never has to depend on `overdueItems` (which is declared
+  // later in the component); the ref is synced by a small effect placed after that declaration.
+  const lastOverdueComfortAtRef = useRef<number>(0)
+  useEffect(() => {
+    const check = (): void => {
+      if (!overwhelmedRef.current) return
+      const now = Date.now()
+      if (now - lastOverdueComfortAtRef.current < 4 * 3600 * 1000) return
+      utterKind('overdue_comfort')
+      lastOverdueComfortAtRef.current = Date.now()
+    }
+    const t = window.setTimeout(check, 6000)
+    // Re-check periodically so newly-arrived overdues can trigger even after mount.
+    const iv = window.setInterval(check, 5 * 60_000)
+    return () => { window.clearTimeout(t); window.clearInterval(iv) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  // Rotating time-of-day utterances beyond the two anchors — soft afternoon poems and late-night worries.
+  // Once per day per band, offset randomly within the band so it's not clockwork.
+  useEffect(() => {
+    const band = bandForHour(hour)
+    if (band !== 'afternoon' && band !== 'night') return
+    // Note: bandForHour returns 'morning' | 'day' | 'evening' | 'night'. 'day' covers 11-17 (our "afternoon"
+    // pool) — remap for the pool key.
+    const kind: UtteranceKind = band === 'night' ? 'night' : 'afternoon'
+    const today = new Date().toISOString().slice(0, 10)
+    const key = `utterance.tod.${kind}.${today}`
+    let done = false
+    try { done = localStorage.getItem(key) === '1' } catch { /* ignore */ }
+    if (done) return
+    // Fire once, 3-8 minutes after entering the band, so multiple bands during a session all get a chance.
+    const delayMs = (3 + Math.random() * 5) * 60_000
+    const t = window.setTimeout(() => {
+      utterKind(kind)
+      try { localStorage.setItem(key, '1') } catch { /* ignore */ }
+    }, delayMs)
+    return () => window.clearTimeout(t)
+  }, [hour, utterKind])
+  // Idle-observation rotation. On an ordinary day: every 3–6 minutes, 55% chance to speak, mostly
+  // observations / book asides / occasional love / rare poems. On an OVERWHELMED day (3+ overdue OR the
+  // user's stated low-energy context): rotation TIGHTENS — every 90s–3min, 75% chance — and the pool
+  // biases hard toward comfort / love / achievement-reminder. She leans in when it's hard, not away.
+  // A poem is always rare and gets a longer hold so it can be read.
+  const overwhelmedRef = useRef(false)
+  // Refs synced in place after their sources are declared (temporal-dead-zone workaround so effects placed
+  // higher in the component can still read the current values via ref.current).
+  const itemsRef = useRef<Item[]>([])
+  const overdueRef = useRef<Item[]>([])
+  const creatureNameRef = useRef<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    const tick = (): void => {
+      if (cancelled) return
+      const heavy = overwhelmedRef.current
+      const speakChance = heavy ? 0.78 : 0.55
+      if (Math.random() < speakChance) {
+        const r = Math.random()
+        let kind: UtteranceKind
+        if (heavy) {
+          // Heavy-day mix: comfort dominant, love + achievement close behind, some observation, rare poem.
+          if (r < 0.35) kind = 'overwhelmed_comfort'
+          else if (r < 0.60) kind = 'love'
+          else if (r < 0.78) kind = 'overdue_comfort'
+          else if (r < 0.90) kind = 'idle_observation'
+          else kind = 'poem'
+        } else {
+          // Ordinary-day mix: observations + book, occasional love, rare poem.
+          if (r < 0.55) kind = 'idle_observation'
+          else if (r < 0.72) kind = 'book_aside'
+          else if (r < 0.87) kind = 'love'
+          else if (r < 0.95) kind = 'poem'
+          else kind = 'idle_observation'
+        }
+        utterKind(kind)
+      }
+      const heavyPace = overwhelmedRef.current
+      const nextMs = heavyPace
+        ? (1.5 + Math.random() * 1.5) * 60_000    // 90s-3min when overwhelmed
+        : (3 + Math.random() * 3) * 60_000        // 3-6min otherwise
+      window.setTimeout(tick, nextMs)
+    }
+    const first = window.setTimeout(tick, (2 + Math.random() * 3) * 60_000)
+    return () => {
+      cancelled = true
+      window.clearTimeout(first)
+    }
+  }, [utterKind])
+  // Task-reminder rotation — she gently names a real overdue item by title, roughly every 8–15 minutes.
+  // Reads the current overdue list from the ref; picks one at random; substitutes it into a Victorian
+  // template. If nothing is overdue, she says nothing. She NEVER scolds; the templates are worded as a
+  // friend's tender nudge.
+  useEffect(() => {
+    let cancelled = false
+    const tick = (): void => {
+      if (cancelled) return
+      const overdue = overdueRef.current
+      if (overdue.length > 0) {
+        const heavy = overwhelmedRef.current
+        // On heavy days, fire more often. On light days, gentle occasional nudge.
+        if (Math.random() < (heavy ? 0.7 : 0.45)) {
+          const pick = overdue[Math.floor(Math.random() * overdue.length)]
+          const text = pickTaskReminder(pick.title)
+          // Bypass the pool cooldown so task reminders can land even when observations are silent.
+          // Do respect the "one bubble at a time" rule though.
+          if (utteranceText === null) {
+            setUtteranceText(text)
+            lastUtteranceAtRef.current = Date.now()
+          }
+        }
+      }
+      const nextMs = (overwhelmedRef.current ? 6 : 8 + Math.random() * 7) * 60_000
+      window.setTimeout(tick, nextMs)
+    }
+    // First reminder can come as early as 3 minutes in.
+    const first = window.setTimeout(tick, (3 + Math.random() * 3) * 60_000)
+    return () => {
+      cancelled = true
+      window.clearTimeout(first)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  // Achievement reminder — occasionally she surfaces something the user actually finished recently. Reads
+  // real state (items done in the past 7 days) and names one as a small warm ledger entry. Rate-limited by
+  // the shared cooldown. When overwhelmed, this fires more eagerly — the mind needs its own achievements
+  // named on a hard day, not more of the undone.
+  useEffect(() => {
+    let cancelled = false
+    const tick = (): void => {
+      if (cancelled) return
+      const heavy = overwhelmedRef.current
+      const weekAgo = Date.now() - 7 * 24 * 3600 * 1000
+      const recentlyDone = itemsRef.current.filter((it) => {
+        if (it.status !== 'done') return false
+        const doneAt = it.completed_at ? Date.parse(it.completed_at) : NaN
+        return !Number.isNaN(doneAt) && doneAt > weekAgo
+      })
+      if (recentlyDone.length > 0 && Math.random() < (heavy ? 0.75 : 0.35)) {
+        const pick = recentlyDone[Math.floor(Math.random() * recentlyDone.length)]
+        const opener = heavy
+          ? [
+              'And do not forget: you finished "',
+              'Consider what you have already done. "',
+              'Only yesterday, in a manner of speaking, you completed "',
+              'A small ledger for the hard days: you did "'
+            ][Math.floor(Math.random() * 4)]
+          : [
+              'It occurs to me — you finished "',
+              'A quiet triumph, remembered: "',
+              'One does not forget "'
+            ][Math.floor(Math.random() * 3)]
+        const closer = heavy
+          ? '". That still counts, my dear. Always will.'
+          : '". Duly noted, still, in my book.'
+        // Bypass the pool machinery; this is a dynamically composed line. No timeout — bubble persists
+        // until the user clicks to dismiss it.
+        setUtteranceText(opener + pick.title + closer)
+        lastUtteranceAtRef.current = Date.now()
+      }
+      const nextMs = (heavy ? 4 : 8 + Math.random() * 6) * 60_000
+      window.setTimeout(tick, nextMs)
+    }
+    const first = window.setTimeout(tick, (5 + Math.random() * 5) * 60_000)
+    return () => {
+      cancelled = true
+      window.clearTimeout(first)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const [environment, setEnvironment] = useState<EnvironmentId>('trees')
   const [timeChoice, setTimeChoice] = useState<TimeChoice>('auto')
   // Room persistence (9g): favourites, rotation and the creature's own name, restored the same way
@@ -205,10 +556,9 @@ export default function App(): React.JSX.Element {
   const [favorites, setFavorites] = useState<EnvironmentId[]>([])
   const [rotation, setRotation] = useState(false)
   const [creatureName, setCreatureName] = useState<string | null>(null)
-  // Character seed + derived personality (attachment reshape). Neutral defaults keep the pre-personality
-  // behaviour intact until getSetting comes back; the real values arrive within the first tick after mount.
-  const [creatureSeed, setCreatureSeed] = useState<number>(0)
-  const [personality, setPersonality] = useState<PersonalityWeights>({ readingLove: 0.25, windowLove: 0.2, rainAffinity: 0.4, sleepOffsetMinutes: 0, restingSpot: 'nest', expressiveness: 0.55, curiosity: 0.4 })
+  // creatureSeed / personality / initialSpotId / last-spot persistence — all consolidated into
+  // useCompanionModel (renderer/companion/model.ts). App builds Signals from real inputs and feeds them in;
+  // the Companion decides the rest.
   const prevOverdue = useRef<number | null>(null)
   useEffect(() => {
     const t = setInterval(() => setHour(new Date().getHours()), 30_000)
@@ -231,7 +581,21 @@ export default function App(): React.JSX.Element {
         /* ignore */
       }
     }
-    void window.api.getSetting('scene.environment').then((v) => v && setEnvironment(v as EnvironmentId))
+    // The world panel was widened for the companion-home pass (2026-09-19); legacy 260×900 SVG scenes now sit as
+    // a tall narrow strip in the wider box. Library (500×900, designed for this width and holding all the recent
+    // illustrated work) is a much better default. If the persisted setting is any legacy scene AND the user has
+    // never explicitly picked Library, upgrade the default to library and re-persist so the choice sticks. The
+    // scene chip still exposes every other environment for a user who wants to switch back.
+    void window.api.getSetting('scene.environment').then((v) => {
+      if (v === 'library') { setEnvironment('library'); return }
+      if (v && v !== 'trees' && v !== 'rain' && v !== 'coast' && v !== 'winter' && v !== 'fireplace') {
+        // Not a known legacy scene — respect whatever it is.
+        setEnvironment(v as EnvironmentId)
+        return
+      }
+      setEnvironment('library')
+      void window.api.setSetting('scene.environment', 'library')
+    })
     void window.api.getSetting('scene.timeOfDay').then((v) => v && setTimeChoice(v as TimeChoice))
     void window.api.getSetting('ui.theme').then((v) => (v === 'dark' || v === 'light') && setTheme(v, false))
     void window.api.getSetting('scene.favorites').then((v) => {
@@ -245,22 +609,8 @@ export default function App(): React.JSX.Element {
     })
     void window.api.getSetting('scene.rotation').then((v) => setRotation(v === '1'))
     void window.api.getSetting('creature.name').then((v) => setCreatureName(v))
-    // Character seed + derived personality (the "attachment" reshape): each creature has its own rotation cadence
-    // and its own tastes — seeded once and forever on first launch, exposed as read-only settings so the ambient
-    // rotation reads consistently from renderer and main.
-    void window.api.getSetting('creature.seed').then((v) => {
-      const n = v ? parseInt(v, 10) : 0
-      if (Number.isFinite(n)) setCreatureSeed(n >>> 0)
-    })
-    void window.api.getSetting('creature.personality').then((v) => {
-      if (!v) return
-      try {
-        const p = JSON.parse(v) as PersonalityWeights
-        setPersonality(p)
-      } catch {
-        /* corrupted — keep the neutral default */
-      }
-    })
+    // (creature.seed / creature.personality / companion.last_spot are loaded by useCompanionModel — see
+    // renderer/companion/model.ts. Nothing to duplicate here.)
     // Return-from-away (reshape): compare last-close timestamp against now. > 12h → greeting on next open,
     // then rewrite the marker. Missing marker (first ever run) → no greeting; that's what the naming moment is for.
     try {
@@ -455,6 +805,11 @@ export default function App(): React.JSX.Element {
   const completeWithFeedback = (tool: string, id: string, extra: Record<string, unknown> = {}): void => {
     if (completingIds.has(id)) return
     setCompletingIds((s) => new Set(s).add(id))
+    // Phase 5: record the completion in Chiku's memory so future generative lines can reference her rhythm.
+    const finishedItem = itemsRef.current.find((it) => it.id === id)
+    if (finishedItem) {
+      void window.api.companionMemoryCompletion(finishedItem.title).catch(() => { /* best effort */ })
+    }
     setTimeout(() => {
       void quick(tool, { id, ...extra })
       setCompletingIds((s) => {
@@ -463,6 +818,7 @@ export default function App(): React.JSX.Element {
         n.delete(id)
         return n
       })
+      utterKind('task_complete')
     }, 260)
   }
 
@@ -470,9 +826,41 @@ export default function App(): React.JSX.Element {
     const text = draft.trim()
     if (!text || status.kind !== 'idle') return
     setDraft('')
+    // Phase 6 (2026-09-19): if the user addressed the creature by name (whatever creatureName is set to,
+    // e.g. "babe"), divert to her conversation route. Secretary tool pipeline is skipped; the creature
+    // replies as a thought bubble instead of a chat message.
+    const nameForAddress = (creatureNameRef.current || 'babe').trim()
+    const addressRe = new RegExp(`^\\s*(hey\\s+)?${nameForAddress}\\b[\\s,:.!?]*`, 'i')
+    if (nameForAddress && addressRe.test(text)) {
+      // She's being addressed by name — mark it so her state machine turns attentive and gazes at the user
+      // for a few seconds before the reply lands, so it feels like she looked up at you first.
+      setAddressedAt(Date.now())
+      setProactiveNoticeAt(Date.now())
+      const heavy = overwhelmedRef.current
+      const overdue = overdueRef.current
+      const weekAgo = Date.now() - 7 * 24 * 3600 * 1000
+      const recentDone = itemsRef.current.filter((it) => {
+        if (it.status !== 'done') return false
+        const doneAt = it.completed_at ? Date.parse(it.completed_at) : NaN
+        return !Number.isNaN(doneAt) && doneAt > weekAgo
+      })
+      void window.api.companionConverse(text, {
+        overdueTitles: overdue.slice(0, 3).map((i) => i.title),
+        recentlyDoneTitles: recentDone.slice(0, 3).map((i) => i.title),
+        timeBand: bandForHour(new Date().getHours()),
+        weekdayName: new Date().toLocaleDateString(undefined, { weekday: 'long' }),
+        creatureName: creatureNameRef.current
+      }).then((res) => {
+        if (res && res.text) sayUtterance(res.text)
+      }).catch(() => { /* silent */ })
+      return
+    }
     const tempId = `tmp-${Date.now()}`
     setMessages((m) => [...m, { id: tempId, role: 'user', content: text, tier: null, created_at: new Date().toISOString(), pending: true }])
     if (/\b(you|your|thanks|thank you|hey|hello|hi|good morning|good night|please)\b/i.test(text)) setAddressedAt(Date.now())
+    // Occasional warm reactive murmur when the user speaks. Rate-limited by the shared cooldown so a fast
+    // conversation never triggers a stream of asides.
+    if (Math.random() < 0.35) utterKind('message_sent')
     // Care surface (reshape): the four "user cares FOR the creature" phrases the state machine listens for. The
     // signal is set client-side BEFORE the send fires, so the creature moves in the same tick the reply comes
     // back — the two systems (router REPLY, companion state) respond to the same phrase and appear as one.
@@ -649,6 +1037,12 @@ export default function App(): React.JSX.Element {
   const now = Date.now()
   const overdueItems = openItems.filter((i) => isOverdue(i.due_at_utc, i.due_precision, now)).sort((a, b) => a.due_at_utc!.localeCompare(b.due_at_utc!))
   const overdueIds = new Set(overdueItems.map((i) => i.id))
+  // Sync refs used by the creature-voice triggers (which live earlier in the component and can't touch these
+  // variables directly due to temporal dead zone; the triggers read the refs instead).
+  overwhelmedRef.current = overdueItems.length >= 3
+  itemsRef.current = items
+  overdueRef.current = overdueItems
+  creatureNameRef.current = creatureName
   // DEADLINES: hard deadlines (or explicit kind='deadline') within 14 days, not already in NOW.
   const deadlineHorizon = now + 14 * 24 * 3600 * 1000
   const deadlineItems = openItems
@@ -732,8 +1126,11 @@ export default function App(): React.JSX.Element {
   const overwhelmed = overdueItems.length >= 3
   const deadlineHoursLeft = deadlineItems[0]?.due_at_utc ? (new Date(deadlineItems[0].due_at_utc!).getTime() - now) / 3600000 : null
   const planning = lastToolNames.some((n) => n === 'plan_week' || n === 'refine_week_plan' || n === 'recommend_now' || n === 'assess_deadline')
-  const companion = useCompanion(
-    {
+  // The Companion is a persistent application-level entity now (companion/model.ts). App still constructs
+  // Signals — that's the raw awareness channel — but every companion-related decision (state, roaming, spot,
+  // mood, attention, intention, persistence) is owned by the model.
+  const companion = useCompanionModel({
+    signals: {
       chat: status,
       typing: draft.trim().length > 0 && Date.now() - typingAt < 8000,
       recording,
@@ -758,10 +1155,8 @@ export default function App(): React.JSX.Element {
       careLookAt,
       proactiveNoticeAt
     },
-    forcedState,
-    creatureSeed,
-    personality
-  )
+    force: forcedState
+  })
   // Rare memorable moments (reshape "small unexpected moments"): overlays on top of the base state, at most one
   // per day for each moment key. Silent most of the time — which is the point. Weather comes from the Room's
   // deterministic per-day pick, so we recompute it here rather than plumb it through — pure and cheap.
@@ -773,14 +1168,14 @@ export default function App(): React.JSX.Element {
       base: { state: companion.state, gaze: companion.gaze },
       signals: { chat: status, typing: false, recording, lastToolNames, lastAppliedAt, celebrateAt, quietlyExcitedAt, pettedAt, greetAt, addressedAt, concernedAt, waitingOpen: waitingItems.length, hour, happening: happeningKind, overwhelmed, deadlineHoursLeft, planning, returnFromAway, careSitAt, careSleepAt, careTeaAt, careLookAt, proactiveNoticeAt },
       now: nowMs,
-      seed: creatureSeed,
-      personality,
+      seed: companion.seed,
+      personality: companion.personality,
       weather: null, // Room computes its own; we pass null and let personality's rainAffinity carry via seed alone
       lastUserActivityAt
     })
   // We deliberately don't depend on `now` — moments should stabilize on the tick companion updates on, not every render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [companion.state, companion.gaze, creatureSeed, hour])
+  }, [companion.state, companion.gaze, companion.seed, hour])
 
   return (
     <div className="h-full flex flex-col gap-2 px-5 pt-3 pb-4 overflow-hidden">
@@ -794,13 +1189,48 @@ export default function App(): React.JSX.Element {
             ['settings', 'Settings']
           ] as [Surface, string][]
         ).map(([id, label]) => (
-          <button key={id} onClick={() => setSurface(id)} className={`rounded-full px-3.5 py-1 font-medium tracking-tight text-[13px] transition-colors ${surface === id ? 'bg-cocoa text-cream' : 'text-ash hover:bg-[color:var(--color-paper)] hover:text-cocoa'}`} aria-current={surface === id ? 'page' : undefined}>
+          <button key={id} onClick={() => setSurface(id)} className={`nav-pill ${surface === id ? 'is-active' : ''}`} aria-current={surface === id ? 'page' : undefined}>
             {label}
           </button>
         ))}
+        {/* Creature name + date — a small parchment card on the right side of the top nav (moved here from
+            the world panel where it competed with the illustration). */}
+        <div
+          className="ml-auto flex flex-col gap-0.5 rounded-2xl px-3 py-1.5"
+          style={{
+            background: 'color-mix(in srgb, var(--color-warm-ivory) 88%, transparent)',
+            border: '1px solid color-mix(in srgb, var(--color-accent) 40%, transparent)',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.12)',
+            color: 'var(--color-espresso)',
+            lineHeight: 1
+          }}
+        >
+          {creatureName && (
+            <span
+              className="italic text-right"
+              style={{
+                fontFamily: '"Cormorant Garamond", "EB Garamond", Georgia, serif',
+                fontSize: 15,
+                letterSpacing: '0.02em'
+              }}
+            >
+              {creatureName}
+            </span>
+          )}
+          <span
+            className="opacity-80 text-right"
+            style={{
+              fontFamily: '"Cormorant Garamond", Georgia, serif',
+              fontSize: 11,
+              letterSpacing: '0.06em'
+            }}
+          >
+            {new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}
+          </span>
+        </div>
         <button
           onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-          className="ml-auto rounded-full px-3 py-1 text-stone-500 hover:bg-white/60 hover:text-stone-800"
+          className="rounded-full px-3 py-1 text-stone-500 hover:bg-white/60 hover:text-stone-800"
           title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
           aria-pressed={theme === 'dark'}
         >
@@ -858,16 +1288,24 @@ export default function App(): React.JSX.Element {
       )}
 
       {surface === 'conversation' && (
-      <div className="flex-1 min-h-0 grid grid-cols-[minmax(360px,0.95fr)_minmax(0,1.55fr)_minmax(280px,0.7fr)] gap-4 overflow-hidden">
-      {/* THE WORLD — contained surface with editorial border, so it reads as a "window into" the Secretary's world */}
-      <aside className="relative overflow-hidden rounded-2xl border border-[color:var(--color-zone-border)] shadow-[0_1px_2px_rgba(62,51,46,0.06)]" style={{ background: 'var(--color-zone-world)' }}>
+      /* ONE architectural window (2026-09-19): the three regions used to be three separate cards with visible
+         gaps between them, which read as "three boxes" rather than one place. Merged into a single outer surface
+         with rounded corners + a single warm hairline border; the three children now touch, share the same
+         background family, and are separated only by a subtle 1px vertical divider — the whole thing reads as one
+         window looking into the Secretary's world. */
+      <div ref={windowRef} className="flex-1 min-h-0 grid grid-cols-[minmax(420px,1.2fr)_minmax(0,1.35fr)_minmax(270px,0.65fr)] overflow-hidden rounded-2xl border border-[color:var(--color-zone-border)] shadow-[0_1px_3px_rgba(62,51,46,0.08)] relative" style={{ background: 'var(--color-zone-chat)' }}>
+      {/* THE WORLD — a spatial region of the unified window, not its own card. overflow-visible is deliberate:
+          it lets the creature roam past the world's own right edge into the chat region for a brief "peek" when
+          the user is active (companion-home pass, style A). Clipping is handled by the merged outer window's
+          rounded-2xl overflow-hidden, so nothing escapes the unified frame. */}
+      <aside ref={worldRef} className="relative" style={{ background: 'var(--color-zone-world)' }}>
         <Room
           state={moment.state}
           gaze={moment.gaze}
           happening={happeningKind}
           environment={environment}
           time={timeChoice}
-          onPet={() => setPettedAt(Date.now())}
+          onPet={() => { setPettedAt(Date.now()); companion.pet(); utterKind('pet') }}
           onChangeEnvironment={(e) => {
             setEnvironment(e)
             setRotation(false) // a direct pick is a direct pick — rotation (9g) stops choosing for the room
@@ -892,19 +1330,19 @@ export default function App(): React.JSX.Element {
           }}
           completedCount={completedProjectsCount}
           weatherOverride={weatherOverride}
-          restingSpot={personality.restingSpot}
+          restingSpot={companion.restingSpot}
+          initialSpotId={companion.initialSpotId}
+          onSpotChange={companion.reportSpot}
+          onSpotResolved={setResolvedSpot}
+          roamingIdx={companion.roamingIdx}
         />
-        <div className="absolute top-3 left-4 z-10 text-[11px] tracking-wide pointer-events-none flex flex-col gap-0.5" style={{ color: 'rgba(255,238,210,0.85)', textShadow: '0 1px 2px rgba(0,0,0,0.45)' }}>
-          {creatureName && <span className="font-medium">{creatureName}</span>}
-          <span className="opacity-90">{new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}</span>
-        </div>
         <p className="absolute bottom-2 left-0 right-0 text-[11px] text-stone-500 text-center pointer-events-none">
           {status.kind === 'throttled' ? `one moment — retrying in ${status.retryInSeconds}s` : ''}
         </p>
       </aside>
 
-      {/* CONVERSATION — quiet paper surface, editorial border to match the world panel */}
-      <main className="flex flex-col min-h-0 rounded-2xl border border-[color:var(--color-zone-border)] shadow-[0_1px_2px_rgba(62,51,46,0.04)] px-5 py-3" style={{ background: 'var(--color-zone-chat)' }}>
+      {/* CONVERSATION — the working region of the unified window, quiet paper */}
+      <main className="flex flex-col min-h-0 px-5 py-3 border-l border-[color:var(--color-zone-border)]/60" style={{ background: 'var(--color-zone-chat)' }}>
         <header className="flex items-center justify-end mb-2 h-6">
           <div className="flex gap-3 text-xs text-stone-500">
             <button onClick={() => void quick('undo_last', {})} className="hover:text-stone-800" title="Undo the last change">
@@ -918,7 +1356,8 @@ export default function App(): React.JSX.Element {
 
         {info && !info.ai.hasKey && (
           <div className="mb-3 rounded-xl bg-amber-50 text-amber-900 text-sm px-4 py-2">
-            No API key found. Put <code>GEMINI_API_KEY=…</code> in the <code>.env</code> file next to <code>package.json</code>, then quit and reopen the app. Everything else still works by hand.
+            No AI key set yet — go to <button className="underline font-medium" onClick={() => setSurface('settings')}>Settings</button> and paste in a free key from{' '}
+            <a className="underline font-medium" href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">aistudio.google.com/apikey</a>. Everything else still works by hand.
           </div>
         )}
 
@@ -934,7 +1373,10 @@ export default function App(): React.JSX.Element {
           {status.kind !== 'idle' && <span className="self-start text-sm text-ash italic animate-pulse">…</span>}
         </div>
 
-        <div className="mt-3 border-t border-paper-2 flex items-end gap-2 py-2">
+        {/* Input bar — Phase 2 polish: given a warm surface, subtle inner border, and focus ring so it reads as
+            a real input, not a hairline strip. The previous bare-text textarea disappeared into the panel
+            background. */}
+        <div className="mt-3 flex items-end gap-2 rounded-2xl border border-[color:var(--color-zone-border)]/70 bg-[color:var(--color-paper-2)]/50 px-2 py-1.5 shadow-[inset_0_1px_2px_rgba(62,51,46,0.08)] focus-within:border-[color:var(--color-accent)]/70 focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-accent)_20%,transparent)]">
           <textarea
             ref={inputRef}
             value={draft}
@@ -945,8 +1387,8 @@ export default function App(): React.JSX.Element {
             }}
             onKeyDown={onKey}
             rows={Math.min(6, Math.max(1, draft.split('\n').length))}
-            placeholder={recording ? `listening — ${recordSeconds}s, press again to send` : 'type or dump here — Enter to send, Shift+Enter for a new line'}
-            className="flex-1 resize-none bg-transparent px-3 py-2 outline-none text-[15px] leading-relaxed disabled:opacity-50"
+            placeholder={recording ? `listening — ${recordSeconds}s, press again to send` : 'tell me whats up chiku'}
+            className="flex-1 resize-none bg-transparent px-2 py-1.5 outline-none text-[15px] leading-relaxed text-cocoa placeholder:text-[color:var(--color-ash)] placeholder:italic disabled:opacity-50"
           />
           {recording && (
             <button onClick={() => stopRecording(true)} title="Cancel — nothing sent" className="rounded-xl px-3 py-2 text-sm text-stone-500 hover:bg-paper">
@@ -969,15 +1411,13 @@ export default function App(): React.JSX.Element {
         {flash && <p key={flashSeq} className="mt-2 text-xs text-stone-500 flash-in">{flash}</p>}
       </main>
 
-      {/* Right side — "what the Secretary is currently aware of." Not a rail with card-sections; a quiet column
-          of context text on the same warm world. Tight vertical rhythm; small tracked labels are the only
-          section markers. */}
-      <aside className="flex flex-col gap-3 min-h-0 overflow-y-auto rounded-2xl border border-[color:var(--color-zone-border)] shadow-[0_1px_2px_rgba(62,51,46,0.04)] px-4 py-4 text-[13px]" style={{ background: 'var(--color-zone-rail)' }}>
+      {/* AWARENESS — the quiet right region of the unified window */}
+      <aside className="flex flex-col gap-3 min-h-0 overflow-y-auto px-4 py-4 text-[13px] border-l border-[color:var(--color-zone-border)]/60" style={{ background: 'var(--color-zone-rail)' }}>
         {!showDebug ? (
           <>
             {(overdueItems.length > 0 || happenings.some((h) => h.state === 'running')) && (
               <section className="flex flex-col gap-1.5 min-h-0">
-                <h2 className="text-[10px] font-medium uppercase tracking-[0.18em] text-amber-800/70">Right now</h2>
+                <h2 className="chapter-heading text-[color:var(--color-accent)]">Right now</h2>
                 <ul className="flex flex-col gap-1">
                   {overdueItems.slice(0, 8).map((it) => (
                     <li key={it.id} className={`item-in group text-sm flex items-start gap-2 rounded-lg px-1 py-1 hover:bg-white/40 cursor-pointer ${completingIds.has(it.id) ? 'completing' : ''}`} onClick={() => setEditing({ kind: 'item', item: it })}>
@@ -1002,7 +1442,7 @@ export default function App(): React.JSX.Element {
               </section>
             )}
             <section className="flex flex-col gap-1.5 min-h-0">
-              <h2 className="text-[10px] font-medium uppercase tracking-[0.18em] text-ash">Coming up</h2>
+              <h2 className="chapter-heading text-[color:var(--color-accent)]">Coming up</h2>
               {upcoming.length === 0 && <p className="text-sm text-stone-400">Nothing dated, no alarms set.</p>}
               <ul className="flex flex-col gap-1 overflow-y-auto">
                 {upcoming.slice(0, 10).map((u) => (
@@ -1040,7 +1480,7 @@ export default function App(): React.JSX.Element {
             <RightNow happenings={happenings} onFinish={(id, outcome) => void quick('finish_happening', { id, outcome })} />
             {deadlineItems.length > 0 && (
               <section className="flex flex-col gap-1.5 min-h-0">
-                <h2 className="text-[10px] font-medium uppercase tracking-[0.18em] text-ash">Deadlines</h2>
+                <h2 className="chapter-heading text-[color:var(--color-accent)]">Deadlines</h2>
                 <ul className="flex flex-col gap-1">
                   {deadlineItems.slice(0, 6).map((it) => (
                     <li key={it.id} className={`item-in group text-sm flex items-start gap-2 rounded-lg px-1 py-1 hover:bg-white/40 cursor-pointer ${completingIds.has(it.id) ? 'completing' : ''}`} onClick={() => setEditing({ kind: 'item', item: it })}>
@@ -1056,7 +1496,7 @@ export default function App(): React.JSX.Element {
             )}
             {constraints.length > 0 && (
               <section className="flex flex-col gap-1 min-h-0">
-                <h2 className="text-[10px] font-medium uppercase tracking-[0.18em] text-ash">Unavailable · preferences</h2>
+                <h2 className="chapter-heading text-[color:var(--color-accent)]">Unavailable · preferences</h2>
                 <ul className="flex flex-col gap-0.5 overflow-y-auto">
                   {constraints.slice(0, 8).map((c) => (
                     <li key={c.id} className="group text-xs flex items-center gap-2 rounded-lg px-1 py-0.5 hover:bg-white/80">
@@ -1087,7 +1527,7 @@ export default function App(): React.JSX.Element {
             )}
             {waitingItems.length > 0 && (
               <section className="flex flex-col gap-1.5 min-h-0">
-                <h2 className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-soft">Waiting for</h2>
+                <h2 className="chapter-heading text-[color:var(--color-accent)]">Waiting for</h2>
                 <ul className="flex flex-col gap-1 overflow-y-auto">
                   {waitingItems.map((w) => {
                     const late = isOverdue(w.due_at_utc, w.due_precision, now)
@@ -1123,7 +1563,7 @@ export default function App(): React.JSX.Element {
               </section>
             )}
             <section className="flex flex-col gap-1.5 min-h-0 flex-1 mt-1 pt-3 border-t border-paper-2/60">
-              <h2 className="text-[10px] font-medium uppercase tracking-[0.18em] text-ash">Also on the list · {standalone.filter((i) => !i.is_suggestion).length}</h2>
+              <h2 className="chapter-heading text-[color:var(--color-accent)]">Also on the list · {standalone.filter((i) => !i.is_suggestion).length}</h2>
               {standalone.length === 0 && <p className="text-sm text-ash italic">Nothing else on the list.</p>}
               <ul className="flex flex-col gap-1 overflow-y-auto">
                 {standalone.slice(0, 30).map((it) => (
@@ -1191,7 +1631,277 @@ export default function App(): React.JSX.Element {
           <DebugPanel info={info} logs={logs} aiCalls={aiCalls} activities={activities} extractions={extractions} reminders={reminders} say={say} refresh={refresh} onOpenReminder={(r) => setEditing({ kind: 'reminder', reminder: r })} />
         )}
       </aside>
+      {/* CompanionRenderer — she lives here at merged-window level. Two spot-selection rules apply:
+          (1) If a bubble is showing, she's pinned to the chair-seat spot so the user can read her without her
+              wandering off (user request 2026-09-19).
+          (2) If her natural spot lands in the curtain area (scene x < 0.28), she's diverted to the chair
+              instead so she never disappears behind the burgundy velvet. */}
+      {resolvedSpot && worldLocal && (() => {
+        const chairSpot = { x: 0.60, y: 0.78, scale: 0.85, gaze: resolvedSpot.gaze }
+        const inCurtain = resolvedSpot.x < 0.28 && resolvedSpot.y < 0.75
+        const effective = (utteranceText !== null || inCurtain) ? chairSpot : resolvedSpot
+        const box = computeCreatureBox(effective, worldLocal)
+        return (
+          <>
+            <CompanionRenderer
+              state={moment.state}
+              gaze={effective.gaze}
+              dim={bandForHour(hour) === 'night' ? 0.28 : bandForHour(hour) === 'evening' ? 0.08 : 0}
+              box={box}
+              onPet={() => { setPettedAt(Date.now()); companion.pet(); utterKind('pet') }}
+              onDoubleClick={() => {
+                // On double-click she DEFINITELY speaks. Bypasses the shared cooldown so it always lands,
+                // even if she has just spoken. Picks a kind at random weighted toward warmer/reflective
+                // options so the summoned thought feels like a small gift rather than a task nag.
+                const heavy = overwhelmedRef.current
+                const pool: UtteranceKind[] = heavy
+                  ? ['love', 'overwhelmed_comfort', 'love', 'poem', 'love']
+                  : ['love', 'idle_observation', 'book_aside', 'poem', 'love', 'idle_observation']
+                const kind = pool[Math.floor(Math.random() * pool.length)]
+                utterKind(kind, { forceIgnoreGap: true })
+              }}
+            />
+            <CompanionUtterance
+              text={utteranceText}
+              box={box}
+              onDismiss={() => {
+                setUtteranceText(null)
+                if (onboardingActiveRef.current) {
+                  // Give the user a breath, then bring in the next line.
+                  window.setTimeout(() => advanceOnboarding(), 900)
+                }
+              }}
+            />
+          </>
+        )
+      })()}
+      {/* Clickable lamp zone — mapped through the scene's actual rendered position within the letterboxed
+          SVG. The Library uses preserveAspectRatio="xMidYMax meet" on viewBox 500×900 (aspect 0.556). When
+          the world panel is wider aspect than the SVG, the SVG fills height and letterboxes horizontally
+          (centered). Chair-lamp scene coords are (0.88, 0.70); we translate those into panel coordinates
+          honouring the letterbox so the click zone lands over the visible lamp shade. */}
+      {worldLocal && (() => {
+        const svgAspect = 500 / 900
+        const panelAspect = worldLocal.width / worldLocal.height
+        let svgW: number, svgH: number, offsetX: number, offsetY: number
+        if (panelAspect > svgAspect) {
+          svgH = worldLocal.height
+          svgW = svgH * svgAspect
+          offsetX = (worldLocal.width - svgW) / 2
+          offsetY = 0
+        } else {
+          svgW = worldLocal.width
+          svgH = svgW / svgAspect
+          offsetX = 0
+          offsetY = worldLocal.height - svgH
+        }
+        // Chair-lamp shade in scene coords — moved up from y=0.70 to y=0.60 to land on the SHADE itself
+        // (the previous y=0.70 was landing on the lamp base/stem, so the user had to click below the shade).
+        const lampX = worldLocal.left + offsetX + 0.88 * svgW
+        const lampY = worldLocal.top + offsetY + 0.60 * svgH
+        return (
+          <button
+            className="absolute rounded-full lamp-click-zone"
+            aria-label={lampOn ? 'Extinguish the lamp' : 'Light the lamp'}
+            title={lampOn ? 'Extinguish the lamp' : 'Light the lamp'}
+            onClick={() => { console.log('lamp clicked'); setLampOn((v) => !v); setUtteranceText(null) }}
+            style={{
+              left: lampX,
+              top: lampY,
+              width: svgW * 0.16,
+              height: svgW * 0.22,
+              transform: 'translate(-50%, -50%)',
+              background: lampOn
+                ? 'radial-gradient(circle, rgba(214,168,105,0.35) 0%, transparent 70%)'
+                : 'radial-gradient(circle, rgba(214,168,105,0.06) 0%, transparent 70%)',
+              cursor: 'pointer',
+              border: 'none',
+              zIndex: 30,
+              transition: 'background .4s ease'
+            }}
+          />
+        )
+      })()}
+      {/* Warm lamp-lit overlay — always rendered, opacity animates on lampOn/off so lighting the lamp fades a
+          soft amber wash across the entire merged window. The gradient center is anchored near the chair-lamp
+          in the world panel (~33% x, ~68% y of the merged window given the world ≈ 37.5% of it) so the light
+          feels like it emanates FROM the lamp. Two layered blends: soft-light for atmospheric warmth, screen
+          for a brighter core so the effect is unmistakably visible against dark surfaces. */}
+      <div
+        aria-hidden
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background: 'radial-gradient(120% 90% at 33% 68%, rgba(214,168,105,0.35) 0%, rgba(214,168,105,0.14) 32%, transparent 68%)',
+          mixBlendMode: 'soft-light',
+          transition: 'opacity 1.4s ease',
+          opacity: lampOn ? 1 : 0
+        }}
+      />
+      <div
+        aria-hidden
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background: 'radial-gradient(50% 40% at 33% 68%, rgba(255,205,138,0.18) 0%, transparent 65%)',
+          mixBlendMode: 'screen',
+          transition: 'opacity 1.4s ease',
+          opacity: lampOn ? 1 : 0
+        }}
+      />
+      {/* --- Curtains over the pink dawn window (scene coords translated through the same letterbox math as
+          the lamp) — the SVG is preserveAspectRatio="xMidYMax meet" so scene fractions can't be applied
+          directly to panel fractions; they need to be mapped through the SVG's actual rendered rect. */}
+      {worldLocal && (() => {
+        const svgAspect = 500 / 900
+        const panelAspect = worldLocal.width / worldLocal.height
+        let svgW: number, svgH: number, offsetX: number, offsetY: number
+        if (panelAspect > svgAspect) {
+          svgH = worldLocal.height
+          svgW = svgH * svgAspect
+          offsetX = (worldLocal.width - svgW) / 2
+          offsetY = 0
+        } else {
+          svgW = worldLocal.width
+          svgH = svgW / svgAspect
+          offsetX = 0
+          offsetY = worldLocal.height - svgH
+        }
+        // Window frame in scene coords: x=18-120 (width 102), y=60-560 (height 500). Convert to panel-local px.
+        const winL = offsetX + (18 / 500) * svgW
+        const winT = offsetY + (60 / 900) * svgH
+        const winW = (102 / 500) * svgW
+        const winH = (500 / 900) * svgH
+        const halfW = winW / 2
+        // Curtain visuals: burgundy velvet with vertical gathered folds. Open state translates outward and
+        // narrows slightly (gathered look).
+        const curtainStyle = (side: 'left' | 'right'): React.CSSProperties => ({
+          position: 'absolute',
+          top: worldLocal.top + winT,
+          height: winH,
+          width: halfW * (curtainsOpen ? 0.32 : 1.02),
+          background: side === 'left'
+            ? 'repeating-linear-gradient(90deg, #3A1210 0px, #5A1E1A 8px, #3A1210 14px, #2A0E0C 22px)'
+            : 'repeating-linear-gradient(270deg, #3A1210 0px, #5A1E1A 8px, #3A1210 14px, #2A0E0C 22px)',
+          boxShadow: 'inset 0 0 12px rgba(0,0,0,0.5)',
+          transition: 'transform 1.6s cubic-bezier(.4,0,.2,1), width 1.6s ease',
+          cursor: 'pointer',
+          zIndex: 6
+        })
+        return (
+          <>
+            <button
+              className="curtain-click"
+              aria-label={curtainsOpen ? 'Draw the curtains closed' : 'Draw the curtains open'}
+              title={curtainsOpen ? 'Draw the curtains closed' : 'Draw the curtains open'}
+              onClick={() => { setCurtainsOpen((v) => !v); setUtteranceText(null) }}
+              style={{
+                ...curtainStyle('left'),
+                left: worldLocal.left + winL,
+                transform: curtainsOpen ? `translateX(-20%)` : `translateX(0)`,
+                transformOrigin: 'left center',
+                borderTopLeftRadius: 6,
+                borderTopRightRadius: 2,
+                border: 'none',
+                zIndex: 20
+              }}
+            />
+            <button
+              className="curtain-click"
+              aria-label={curtainsOpen ? 'Draw the curtains closed' : 'Draw the curtains open'}
+              title={curtainsOpen ? 'Draw the curtains closed' : 'Draw the curtains open'}
+              onClick={() => { setCurtainsOpen((v) => !v); setUtteranceText(null) }}
+              style={{
+                ...curtainStyle('right'),
+                left: worldLocal.left + winL + halfW,
+                width: halfW * (curtainsOpen ? 0.32 : 1.02),
+                transform: curtainsOpen ? `translateX(180%)` : `translateX(0)`,
+                transformOrigin: 'right center',
+                borderTopRightRadius: 6,
+                borderTopLeftRadius: 2,
+                border: 'none',
+                zIndex: 20
+              }}
+            />
+            {/* Curtain rod — brass, above the window, always visible */}
+            <div
+              aria-hidden
+              className="absolute pointer-events-none"
+              style={{
+                left: worldLocal.left + winL - 6,
+                top: worldLocal.top + winT - 4,
+                width: winW + 12,
+                height: 4,
+                background: `linear-gradient(180deg, ${'#C79A56'}, #8A6733)`,
+                borderRadius: 2,
+                boxShadow: '0 1px 2px rgba(0,0,0,0.3)',
+                zIndex: 7
+              }}
+            />
+          </>
+        )
+      })()}
+      {/* Daylight streaming in — three-layer beautiful sunrise wash anchored at the window position (~7% x,
+          ~35% y). A soft-light warm-pink haze bathes the whole app; a bright screen-blend rose glow radiates
+          from the window; a broader golden overlay adds warmth to the room. When curtains close, everything
+          fades to nothing. Meant to feel like actual dawn spilling into the room. */}
+      <div
+        aria-hidden
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background: 'radial-gradient(110% 90% at 7% 35%, rgba(238,196,190,0.45) 0%, rgba(245,215,196,0.22) 30%, transparent 65%)',
+          mixBlendMode: 'soft-light',
+          transition: 'opacity 1.6s ease',
+          opacity: curtainsOpen ? 1 : 0
+        }}
+      />
+      <div
+        aria-hidden
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background: 'radial-gradient(60% 55% at 7% 35%, rgba(255,206,196,0.40) 0%, rgba(255,220,190,0.15) 45%, transparent 75%)',
+          mixBlendMode: 'screen',
+          transition: 'opacity 1.6s ease',
+          opacity: curtainsOpen ? 1 : 0
+        }}
+      />
+      <div
+        aria-hidden
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background: 'radial-gradient(90% 80% at 15% 42%, rgba(255,235,205,0.22) 0%, transparent 60%)',
+          mixBlendMode: 'lighten',
+          transition: 'opacity 1.6s ease',
+          opacity: curtainsOpen ? 1 : 0
+        }}
+      />
       </div>
+      )}
+
+      {/* Multi-surface Companion presence (Phase 3, 2026-09-19). On Calendar / Things / Settings surfaces
+          the world panel doesn't exist, but the creature continues to live. She appears as a small fixed
+          companion in the bottom-right corner of the viewport, still speaking, still receiving pets,
+          preserving her state across surface switches. When you go back to Conversation she rejoins her
+          world spot naturally. */}
+      {surface !== 'conversation' && resolvedSpot && (
+        <div
+          className="fixed bottom-4 right-4 pointer-events-none"
+          style={{ width: 160, height: 160, zIndex: 40 }}
+        >
+          <CompanionRenderer
+            state={moment.state}
+            gaze={resolvedSpot.gaze}
+            dim={bandForHour(hour) === 'night' ? 0.28 : bandForHour(hour) === 'evening' ? 0.08 : 0}
+            box={{ left: 80, top: 80, width: 140 }}
+            onPet={() => { setPettedAt(Date.now()); companion.pet(); utterKind('pet') }}
+          />
+          <CompanionUtterance
+            text={utteranceText}
+            box={{ left: 80, top: 80, width: 140 }}
+            onDismiss={() => {
+              setUtteranceText(null)
+              if (onboardingActiveRef.current) window.setTimeout(() => advanceOnboarding(), 900)
+            }}
+          />
+        </div>
       )}
 
       {editing?.kind === 'item' && (
@@ -1251,7 +1961,16 @@ function Bubble({ m, creatureName }: { m: UiMessage; creatureName?: string | nul
   if (user) {
     return (
       <div className="flex flex-col gap-1 max-w-[80%] self-end items-end">
-        <div className={`bubble-in rounded-2xl px-3.5 py-2 text-[15px] leading-relaxed whitespace-pre-wrap bg-cocoa-soft text-cream ${m.pending ? 'opacity-60' : ''}`}>
+        {/* User bubble — soft warm ivory (eggshell) with deep espresso text. Gentle on the eyes, still
+            distinguishable as the user's own voice, sits harmoniously in the Victorian palette. */}
+        <div
+          className={`bubble-in rounded-2xl px-3.5 py-2 text-[15px] leading-relaxed whitespace-pre-wrap ${m.pending ? 'opacity-60' : ''}`}
+          style={{
+            background: 'var(--color-warm-ivory)',
+            color: 'var(--color-espresso)',
+            border: '1px solid color-mix(in srgb, var(--color-accent) 30%, transparent)'
+          }}
+        >
           {m.content}
         </div>
       </div>
@@ -1270,10 +1989,40 @@ function Bubble({ m, creatureName }: { m: UiMessage; creatureName?: string | nul
       </div>
     )
   }
-  // Ordinary assistant reply — a soft paper bubble, warm and grounded, no dashboard grammar.
+  // Ordinary assistant reply — the Secretary's own voice. Distinct visual identity from Chiku: a soft paper
+  // bubble with a warm brass gilt rule down the left edge, a small serif "S" mark in the top-left corner,
+  // Cormorant italic first line to signal the librarian voice. Warm, competent, precise. Not the same as
+  // the pink cloud (Chiku speaks in bubbles beside her body; the Secretary speaks here in the chat).
   return (
     <div className="flex flex-col gap-1 max-w-[85%] self-start items-start">
-      <div className={`bubble-in rounded-2xl rounded-tl-md px-3.5 py-2 text-[15px] leading-relaxed whitespace-pre-wrap text-cocoa border border-[color:var(--color-paper-2)] ${m.pending ? 'opacity-60' : ''}`} style={{ background: 'var(--color-paper)' }}>
+      <div
+        className={`bubble-in relative rounded-2xl rounded-tl-md pl-6 pr-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap text-cocoa ${m.pending ? 'opacity-60' : ''}`}
+        style={{
+          background: 'var(--color-paper)',
+          borderLeft: '3px solid var(--color-accent)',
+          borderTop: '1px solid color-mix(in srgb, var(--color-accent) 22%, transparent)',
+          borderRight: '1px solid color-mix(in srgb, var(--color-accent) 22%, transparent)',
+          borderBottom: '1px solid color-mix(in srgb, var(--color-accent) 22%, transparent)',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.08)'
+        }}
+      >
+        <span
+          aria-hidden
+          className="absolute select-none"
+          style={{
+            top: 4,
+            left: 6,
+            fontFamily: '"Cormorant Garamond", "EB Garamond", Georgia, serif',
+            fontStyle: 'italic',
+            fontSize: 14,
+            lineHeight: 1,
+            color: 'var(--color-accent)',
+            opacity: 0.78,
+            letterSpacing: '0.02em'
+          }}
+        >
+          S
+        </span>
         {m.content}
       </div>
       {m.applied && m.applied.length > 0 && (

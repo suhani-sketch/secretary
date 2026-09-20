@@ -58,7 +58,14 @@ export function DayPanel({ day, selection, onSelect, onQuick, onOpenEditor, onCl
   const long = new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })
 
   return (
-    <aside className="flex flex-col min-h-0 h-full rounded-3xl bg-paper-2/70 p-4 gap-3 overflow-hidden">
+    <aside
+      className="surface-dark-panel flex flex-col min-h-0 h-full rounded-3xl p-4 gap-3 overflow-hidden"
+      style={{
+        background: 'var(--panel-bg)',
+        border: '1px solid var(--panel-hairline)',
+        color: 'var(--panel-text)'
+      }}
+    >
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="text-xs uppercase tracking-wide text-stone-500">Day panel</div>

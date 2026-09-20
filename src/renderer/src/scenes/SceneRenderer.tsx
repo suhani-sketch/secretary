@@ -1,7 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { CompanionState, Gaze } from '../companionState'
-import { Companion } from '../Companion'
-import type { SceneDefinition, WorldContext } from './SceneDefinition'
+import type { WorldContext } from './SceneDefinition'
 import { LibraryScene } from './LibraryScene'
 
 /**
@@ -26,15 +24,18 @@ import { LibraryScene } from './LibraryScene'
 
 interface Props {
   world: WorldContext
-  state: CompanionState
-  gaze: Gaze
-  spot: { x: number; y: number; scale: number }
-  onPet: () => void
 }
 
 const CROSSFADE_MS = 1200
 
-export function SceneRenderer({ world, state, gaze, spot, onPet }: Props): React.JSX.Element {
+/**
+ * Phase 2 (2026-09-19): SceneRenderer is now purely the world's visual layer — background art, lamp halos,
+ * foreground, dust motes, light-band tint. The Companion is no longer rendered here; she's rendered at app
+ * level by CompanionRenderer, positioned in pixel coordinates against the world panel's measured bounds. This
+ * lets her leave the world (roam over chat/rail) and persist across surfaces without the world component
+ * needing to know about her.
+ */
+export function SceneRenderer({ world }: Props): React.JSX.Element {
   const { scene } = world
   const [, setTransitionProgress] = useState(0)
 
@@ -60,7 +61,13 @@ export function SceneRenderer({ world, state, gaze, spot, onPet }: Props): React
   const SceneBody = scene.id === 'library' ? LibraryScene : null
 
   return (
-    <div className="relative w-full h-full overflow-hidden" style={{ background: scene.palette.world, transition: 'background 1.2s ease' }}>
+    /* Background is deliberately transparent so the world aside's theme-aware --color-zone-world shows through
+       the letterbox regions around the SVG (viewBox aspect ≠ panel aspect ⇒ horizontal letterbox on both sides).
+       Earlier this div was filled with scene.palette.world (a fixed illustrated cream), which lit up as bright
+       vertical bands in dark mode along the world panel's left edge and the world/chat divider. Making it
+       transparent lets the aside's background inherit whatever the current theme uses (dark walnut charcoal in
+       dark mode; warm walnut cream in light mode) — no bright letterbox in either. */
+    <div className="relative w-full h-full" style={{ background: 'transparent' }}>
       {/* Illustrated background composition */}
       {SceneBody && (
         <div className="absolute inset-0 pointer-events-none">
@@ -68,7 +75,12 @@ export function SceneRenderer({ world, state, gaze, spot, onPet }: Props): React
         </div>
       )}
 
-      {/* Warm lamp halos — behind creature, soft radial gradient, gentle flicker */}
+      {/* Warm lamp halos — tuned tightly to the drawn shade (companion-home v3, 2026-09-19). Previous versions
+          bled a warm cream glow past the world panel's right edge, reading as a bright "white" vertical band
+          against the divider — since the chair-lamp sits at x=0.88 and world aside is now overflow-visible for
+          roaming, the halo's outer edge crossed into the merged window's chat region. Fixed by shrinking the
+          halo footprint hard: 65% of radius (was 130%), lower opacity, tighter gradient stops. The lamp still
+          reads as a lit lamp; it no longer paints the panel boundary. */}
       {scene.lighting.lamps.map((lamp) => (
         <div
           key={lamp.id}
@@ -77,49 +89,20 @@ export function SceneRenderer({ world, state, gaze, spot, onPet }: Props): React
           style={{
             left: `${lamp.x * 100}%`,
             top: `${lamp.y * 100}%`,
-            width: `${lamp.radius * 200}%`,
-            height: `${lamp.radius * 200}%`,
+            width: `${lamp.radius * 65}%`,
+            height: `${lamp.radius * 65}%`,
             transform: 'translate(-50%, -50%)',
-            background: `radial-gradient(circle, ${lamp.color} 0%, ${lamp.color}55 32%, transparent 68%)`,
-            opacity: lightOverride.lampIntensity,
+            background: `radial-gradient(circle, ${lamp.color} 0%, ${lamp.color}33 40%, transparent 78%)`,
+            opacity: lightOverride.lampIntensity * 0.38,
             transition: 'opacity 1.2s ease',
-            mixBlendMode: 'screen',
+            mixBlendMode: 'soft-light',
             filter: 'blur(4px)'
           }}
         />
       ))}
 
-      {/* Creature — visibly present, correctly scaled, with a soft contact shadow to integrate with the world */}
-      <div
-        className="absolute"
-        style={{
-          left: `${spot.x * 100}%`,
-          top: `${spot.y * 100}%`,
-          width: `${28 * spot.scale}%`,
-          transform: 'translate(-50%, -50%)',
-          transition: 'left .8s cubic-bezier(.4,0,.2,1), top .8s cubic-bezier(.4,0,.2,1), width .8s ease'
-        }}
-      >
-        {/* Contact shadow — sits BEHIND the creature body but rendered as a sibling underneath so it doesn't
-            travel with the pose transform. Softly grounds the creature in the world. */}
-        <div
-          aria-hidden
-          className="absolute pointer-events-none"
-          style={{
-            left: '10%',
-            right: '10%',
-            bottom: '3%',
-            height: '9%',
-            background: 'radial-gradient(ellipse at center, rgba(45,31,26,0.35) 0%, transparent 75%)',
-            filter: 'blur(3px)'
-          }}
-        />
-        <div style={{ width: '100%', aspectRatio: '1 / 1', cursor: 'pointer' }} onClick={onPet} role="button" aria-label="Pet the creature" title="Say hello">
-          <Companion state={state} gaze={gaze} dim={lightBand === 'night' ? 0.28 : lightBand === 'evening' ? 0.08 : 0} />
-        </div>
-      </div>
-
-      {/* Illustrated foreground composition — occludes creature at desk-region spots */}
+      {/* Illustrated foreground composition (no more creature layer between background and foreground — she is
+          app-level now, so the foreground simply sits above the background). */}
       {SceneBody && (
         <div className="absolute inset-0 pointer-events-none">
           <SceneBody band={lightBand} layer="foreground" />

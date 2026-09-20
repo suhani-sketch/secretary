@@ -28,47 +28,65 @@ interface Props {
   layer: 'background' | 'foreground'
 }
 
-// Palette — scoped to the illustration
+// Palette — one coordinated system (colour-coordination pass, 2026-09-19). Previously each element was tuned
+// on its own and the palette drifted: cool blue-gray sky, cool olive chair, cool navy books, warm walnut room.
+// Now everything sits on ONE axis: warm cocoa base, mossy-mocha midtones, brass highlights, dusty rose accents
+// echoing the pink dawn sky. No cool blues, no bright creams, no rainbow spines. The room feels like one place
+// under one light.
 const P = {
-  wall: '#3E2A20',
-  wallLight: '#5C3E2E',
-  wallHighlight: '#7A5642',
-  shelf: '#2E1E17',
+  // Warm cocoa base — the room's foundational browns
+  wall: '#3A2822',
+  wallLight: '#553A2E',
+  wallHighlight: '#75543F',
+  shelf: '#251712',
   shelfEdge: '#4A3226',
   shelfHighlight: '#6B4A38',
-  bookGreen: '#5C6B47',
-  bookOxblood: '#7D3A34',
-  bookCream: '#D8C8A5',
-  bookNavy: '#3A4256',
-  bookBrass: '#B08B4C',
-  bookMuted: '#4A3F32',
-  floor: '#4E3524',
-  floorHigh: '#6B4832',
-  floorPlank: '#3B2519',
-  rug: '#7A4C36',
-  rugPattern: '#5C6B47',
-  rugRust: '#A66E55',
-  chairOlive: '#4E5741',
-  chairOliveDark: '#38402F',
-  chairOliveLight: '#666F55',
-  chairHighlight: '#7A8467',
-  chairShadow: '#28301D',
-  brass: '#B08B4C',
-  brassDark: '#8B6B2E',
-  lampShade: '#E9DBB4',
-  lampShadeDark: '#C6B889',
-  lampWarm: '#D6A768',
-  sky: '#B8C4CE',
-  skyLower: '#E4D9C3',
-  cloud: '#DDD5CA',
-  tree: '#4E6247',
-  treeDark: '#37472F',
+  // Book spines: an earthen palette that harmonizes with the room, no cool navy or bright cream. Deep moss,
+  // warm ox-blood, warm sand, dusty rose, burnt brass, dark cocoa — five neighbours on the warm side of the
+  // wheel, no primary colors.
+  bookGreen: '#4E5942',
+  bookOxblood: '#6E362E',
+  bookCream: '#B49C7E',
+  bookNavy: '#4A3E38',   // no longer navy — a warm dark cocoa
+  bookBrass: '#9E7A44',
+  bookMuted: '#3F352B',
+  bookRose: '#8E5C57',   // dusty rose spine echoing the sky
+  // Wooden floor + warm rug that pulls the pink from the window down into the room
+  floor: '#4A3222',
+  floorHigh: '#68452F',
+  floorPlank: '#382217',
+  rug: '#6E4232',        // warm rust
+  rugPattern: '#8E5C57', // dusty rose pattern (echoes sky)
+  rugRust: '#A87266',
+  // Wingback — mossy mocha, warmer than the previous pure olive. Sits comfortably beside the walnut.
+  chairOlive: '#4C4E3E',
+  chairOliveDark: '#363828',
+  chairOliveLight: '#666852',
+  chairHighlight: '#7A7C65',
+  chairShadow: '#252718',
+  // Warm brass, less bright so it doesn't blow out in dark mode
+  brass: '#A0793F',
+  brassDark: '#7E5C24',
+  lampShade: '#D6C08E',   // warmer cream shade
+  lampShadeDark: '#B6A16E',
+  lampWarm: '#D69863',
+  // Window sky: dusty pink dawn — the source of the room's rose accents. Kept from the previous pass.
+  sky: '#E6C7C0',
+  skyLower: '#F1DAC7',
+  skyHighlight: '#F4DFD7',
+  cloud: '#F0DAD0',
+  cloudDeep: '#D8B2A6',
+  sun: '#F5D1A6',
+  bird: '#5A3E36',
+  tree: '#4E5442',       // warm mossy — matches the wingback family
+  treeDark: '#353A2C',
   windowFrame: '#4A3226',
-  desk: '#3B2519',
-  deskHigh: '#5C3E2A',
+  // Desk warms up alongside the floor
+  desk: '#3A2317',
+  deskHigh: '#5A3A28',
   deskShadow: '#1F130D',
-  paper: '#E9DBC1',
-  paperShadow: '#C6B889',
+  paper: '#D6C08E',      // paper matches lamp shades, one warm cream instead of many
+  paperShadow: '#B6A16E',
   mug: '#D5C8A5',
   mugShadow: '#9F8E6A',
   steam: '#E8DEC9'
@@ -134,24 +152,39 @@ export function LibraryScene({ band, layer }: Props): React.JSX.Element {
             <rect key={x} x={x} y="0" width="1" height="700" fill={P.shelf} opacity="0.25" />
           ))}
 
-          {/* --- Left window --- soft daylight, cloudy sky, gently indicated tree canopy at the base */}
+          {/* --- Left window --- dusty pink dawn (creature-cuter pass, 2026-09-19). A calm neutral pink sky
+              instead of the previous blue-gray daylight, with a soft sun, rim-lit clouds, small silhouette
+              birds, and warmer green trees to complement the palette. Not candy pink, not sunset — an early
+              overcast dawn painted the way the rest of the room is painted: warm and considered. */}
           <g>
             {/* Frame — slightly softer than pitch-dark */}
             <rect x="18" y="60" width="102" height="500" fill={P.wall} opacity="0.5" />
             <rect x="24" y="66" width="90" height="488" fill={P.shelfEdge} />
-            {/* Glass */}
+            {/* Glass — pink→apricot gradient */}
             <rect x="30" y="72" width="78" height="470" fill="url(#lib-sky)" />
+            {/* Soft warm sun disk, upper-right of the top pane */}
+            <circle cx="92" cy="110" r="12" fill={P.sun} opacity="0.85" />
+            <circle cx="92" cy="110" r="18" fill={P.sun} opacity="0.28" />
+            {/* Cloud band across the top pane — layered so they have soft undersides and lit rims */}
+            <ellipse cx="55" cy="140" rx="28" ry="8" fill={P.cloudDeep} opacity="0.55" />
+            <ellipse cx="55" cy="137" rx="26" ry="7" fill={P.cloud} opacity="0.85" />
+            <ellipse cx="55" cy="135" rx="18" ry="4" fill={P.skyHighlight} opacity="0.55" />
+            <ellipse cx="85" cy="180" rx="20" ry="6" fill={P.cloudDeep} opacity="0.5" />
+            <ellipse cx="85" cy="177" rx="19" ry="5" fill={P.cloud} opacity="0.8" />
+            <ellipse cx="45" cy="225" rx="24" ry="7" fill={P.cloudDeep} opacity="0.45" />
+            <ellipse cx="45" cy="222" rx="22" ry="6" fill={P.cloud} opacity="0.75" />
+            <ellipse cx="80" cy="265" rx="16" ry="5" fill={P.cloud} opacity="0.6" />
+            {/* Tiny silhouette birds — two, offset, evoking distance without noise */}
+            <path d="M 42 195 q 3 -3 5 0 q 2 -3 5 0" stroke={P.bird} strokeWidth="1" fill="none" opacity="0.7" strokeLinecap="round" />
+            <path d="M 74 215 q 2.5 -2 4 0 q 1.5 -2 4 0" stroke={P.bird} strokeWidth="0.9" fill="none" opacity="0.55" strokeLinecap="round" />
             {/* Mullion cross — thinner */}
             <rect x="66" y="72" width="3" height="470" fill={P.shelfEdge} opacity="0.85" />
             <rect x="30" y="305" width="78" height="3" fill={P.shelfEdge} opacity="0.85" />
-            {/* Painterly clouds */}
-            <ellipse cx="60" cy="140" rx="26" ry="9" fill={P.cloud} opacity="0.7" />
-            <ellipse cx="90" cy="180" rx="18" ry="7" fill={P.cloud} opacity="0.55" />
-            <ellipse cx="45" cy="225" rx="22" ry="7" fill={P.cloud} opacity="0.5" />
-            <ellipse cx="80" cy="270" rx="14" ry="5" fill={P.cloud} opacity="0.4" />
-            {/* Distant tree canopy at the base of the window (not floating orbs — a band of foliage) */}
-            <path d="M 30 460 Q 40 445 55 452 Q 68 438 82 448 Q 96 442 108 458 L 108 542 L 30 542 Z" fill={P.tree} opacity="0.85" />
-            <path d="M 30 470 Q 45 458 60 465 Q 78 452 95 462 Q 105 460 108 468 L 108 542 L 30 542 Z" fill={P.treeDark} opacity="0.7" />
+            {/* Distant tree canopy at the base of the window — warmer olive for pink-sky harmony */}
+            <path d="M 30 460 Q 40 445 55 452 Q 68 438 82 448 Q 96 442 108 458 L 108 542 L 30 542 Z" fill={P.tree} opacity="0.9" />
+            <path d="M 30 470 Q 45 458 60 465 Q 78 452 95 462 Q 105 460 108 468 L 108 542 L 30 542 Z" fill={P.treeDark} opacity="0.75" />
+            {/* A soft canopy highlight suggesting rim lighting from the pink sky */}
+            <path d="M 30 460 Q 40 445 55 452 Q 68 438 82 448 Q 96 442 108 458" stroke={P.skyHighlight} strokeWidth="1.5" fill="none" opacity="0.35" strokeLinecap="round" />
             {/* Window sill */}
             <rect x="16" y="548" width="106" height="10" fill={P.shelfEdge} />
             <rect x="12" y="556" width="114" height="6" fill={P.shelf} />
@@ -182,7 +215,9 @@ export function LibraryScene({ band, layer }: Props): React.JSX.Element {
                 { start: 268, end: 378 },
                 { start: 388, end: 484 }
               ]
-              const spineColors = [P.bookGreen, P.bookOxblood, P.bookCream, P.bookNavy, P.bookMuted, P.bookGreen, P.bookOxblood, P.bookNavy, P.bookMuted, P.bookBrass, P.bookCream, P.bookGreen]
+              // Cohesive earthen palette across the shelves — moss, ox-blood, warm sand, cocoa, brass, dusty
+              // rose. Rose appears sparsely so it registers as a subtle echo of the pink window, not a stripe.
+              const spineColors = [P.bookGreen, P.bookOxblood, P.bookCream, P.bookNavy, P.bookMuted, P.bookGreen, P.bookOxblood, P.bookRose, P.bookNavy, P.bookMuted, P.bookBrass, P.bookCream, P.bookGreen, P.bookOxblood]
               let key = 0
               for (const sy of shelfYs) {
                 for (const sec of shelfSectionsX) {
@@ -217,6 +252,207 @@ export function LibraryScene({ band, layer }: Props): React.JSX.Element {
             <line x1="140" y1="90" x2="490" y2="90" stroke={P.brass} strokeWidth="2.5" opacity="0.9" />
             <circle cx="145" cy="90" r="4" fill={P.brass} />
             <circle cx="485" cy="90" r="4" fill={P.brass} />
+
+            {/* --- Stained-glass panel v3 (aesthetic pass §12 v3, 2026-09-19) --- */}
+            {/* Redesigned to match a real Victorian botanical stained-glass window: hummingbirds and roses on a
+                frosted ivory ground with a border of jewel-tone quarrels. Two hummingbirds (one in pink+blue, one
+                in blue) with sweeping wings and beaks; three roses (ruby, gold, dusty pink) on green stems with
+                scattered leaves; complex organic leaded came. Colours: ruby, cobalt, magenta, emerald, amber,
+                dusty pink, purple, ivory. */}
+            <g>
+              {/* Walnut carved backing — larger, portrait proportion for the botanical design */}
+              <rect x="262" y="163" width="114" height="230" fill={P.shelfEdge} />
+              <rect x="264" y="165" width="110" height="226" fill={P.shelf} />
+              {/* Aperture — full portrait rectangle */}
+              <rect x="270" y="170" width="98" height="216" fill="#2A1B10" />
+              {/* Frosted ivory ground — the milky "white" glass */}
+              <rect x="272" y="172" width="94" height="212" fill="#EAE1CE" opacity="0.9" />
+
+              {/* --- Border quarrels — jewel-toned tiles ringing the design --- */}
+              {/* Top row */}
+              <rect x="272" y="172" width="9" height="9" fill="#2E4A6E" opacity="0.92" />
+              <rect x="281" y="172" width="9" height="9" fill="#C89A5C" opacity="0.9" />
+              <rect x="290" y="172" width="12" height="9" fill="#EAE1CE" opacity="0.7" />
+              <rect x="302" y="172" width="9" height="9" fill="#8A2A25" opacity="0.92" />
+              <rect x="311" y="172" width="12" height="9" fill="#EAE1CE" opacity="0.7" />
+              <rect x="323" y="172" width="9" height="9" fill="#7A3E5C" opacity="0.9" />
+              <rect x="332" y="172" width="9" height="9" fill="#C89A5C" opacity="0.9" />
+              <rect x="341" y="172" width="12" height="9" fill="#EAE1CE" opacity="0.7" />
+              <rect x="353" y="172" width="9" height="9" fill="#3F5F3E" opacity="0.9" />
+              <rect x="362" y="172" width="4" height="9" fill="#2E4A6E" opacity="0.9" />
+              {/* Bottom row */}
+              <rect x="272" y="375" width="9" height="9" fill="#2E4A6E" opacity="0.92" />
+              <rect x="281" y="375" width="12" height="9" fill="#EAE1CE" opacity="0.7" />
+              <rect x="293" y="375" width="9" height="9" fill="#7A3E5C" opacity="0.9" />
+              <rect x="302" y="375" width="9" height="9" fill="#3F5F3E" opacity="0.9" />
+              <rect x="311" y="375" width="12" height="9" fill="#EAE1CE" opacity="0.7" />
+              <rect x="323" y="375" width="9" height="9" fill="#C89A5C" opacity="0.9" />
+              <rect x="332" y="375" width="12" height="9" fill="#EAE1CE" opacity="0.7" />
+              <rect x="344" y="375" width="9" height="9" fill="#8A2A25" opacity="0.92" />
+              <rect x="353" y="375" width="9" height="9" fill="#7A3E5C" opacity="0.9" />
+              <rect x="362" y="375" width="4" height="9" fill="#3F5F3E" opacity="0.9" />
+              {/* Left column */}
+              {[
+                { y: 181, h: 20, c: '#EAE1CE', o: 0.7 },
+                { y: 201, h: 10, c: '#7A3E5C', o: 0.9 },
+                { y: 211, h: 20, c: '#EAE1CE', o: 0.7 },
+                { y: 231, h: 10, c: '#3F5F3E', o: 0.9 },
+                { y: 241, h: 22, c: '#EAE1CE', o: 0.7 },
+                { y: 263, h: 10, c: '#C89A5C', o: 0.9 },
+                { y: 273, h: 24, c: '#EAE1CE', o: 0.7 },
+                { y: 297, h: 10, c: '#8A2A25', o: 0.92 },
+                { y: 307, h: 22, c: '#EAE1CE', o: 0.7 },
+                { y: 329, h: 10, c: '#2E4A6E', o: 0.92 },
+                { y: 339, h: 36, c: '#EAE1CE', o: 0.7 }
+              ].map((t, i) => (
+                <rect key={`l${i}`} x="272" y={t.y} width="9" height={t.h} fill={t.c} opacity={t.o} />
+              ))}
+              {/* Right column */}
+              {[
+                { y: 181, h: 20, c: '#3F5F3E', o: 0.9 },
+                { y: 201, h: 22, c: '#EAE1CE', o: 0.7 },
+                { y: 223, h: 10, c: '#8A2A25', o: 0.92 },
+                { y: 233, h: 22, c: '#EAE1CE', o: 0.7 },
+                { y: 255, h: 10, c: '#7A3E5C', o: 0.9 },
+                { y: 265, h: 26, c: '#EAE1CE', o: 0.7 },
+                { y: 291, h: 10, c: '#C89A5C', o: 0.9 },
+                { y: 301, h: 26, c: '#EAE1CE', o: 0.7 },
+                { y: 327, h: 10, c: '#3F5F3E', o: 0.9 },
+                { y: 337, h: 38, c: '#EAE1CE', o: 0.7 }
+              ].map((t, i) => (
+                <rect key={`r${i}`} x="357" y={t.y} width="9" height={t.h} fill={t.c} opacity={t.o} />
+              ))}
+
+              {/* --- Central design field: x=281-357, y=181-375. Long green stems with roses + hummingbirds --- */}
+              {/* Long curving stems from the base upward */}
+              <path d="M 315 375 Q 312 350 316 320 Q 322 290 314 260 Q 310 230 320 205 Q 325 190 324 178"
+                    stroke="#3F5F3E" strokeWidth="2.2" fill="none" opacity="0.9" />
+              <path d="M 330 375 Q 334 355 330 335 Q 324 310 336 285 Q 344 260 340 240"
+                    stroke="#3F5F3E" strokeWidth="1.8" fill="none" opacity="0.85" />
+              <path d="M 305 375 Q 302 355 306 335"
+                    stroke="#3F5F3E" strokeWidth="1.6" fill="none" opacity="0.8" />
+
+              {/* Leaves scattered along stems (dark emerald with lighter highlights) */}
+              <g fill="#3F5F3E" opacity="0.92">
+                <ellipse cx="308" cy="288" rx="6" ry="2.6" transform="rotate(-25 308 288)" />
+                <ellipse cx="319" cy="232" rx="7" ry="2.8" transform="rotate(20 319 232)" />
+                <ellipse cx="326" cy="278" rx="5" ry="2.2" transform="rotate(45 326 278)" />
+                <ellipse cx="335" cy="315" rx="6" ry="2.5" transform="rotate(-28 335 315)" />
+                <ellipse cx="303" cy="345" rx="5" ry="2" transform="rotate(20 303 345)" />
+                <ellipse cx="342" cy="270" rx="6" ry="2.5" transform="rotate(35 342 270)" />
+                <ellipse cx="322" cy="200" rx="5" ry="2" transform="rotate(-15 322 200)" />
+              </g>
+              {/* Leaf mid-vein highlights */}
+              <g stroke="#6E8547" strokeWidth="0.5" fill="none" opacity="0.65">
+                <line x1="304" y1="288" x2="312" y2="288" />
+                <line x1="315" y1="231" x2="323" y2="233" />
+                <line x1="331" y1="315" x2="339" y2="315" />
+              </g>
+
+              {/* --- Rose 1: ruby red with amber outer petals, upper-left --- */}
+              <g>
+                <circle cx="301" cy="258" r="13" fill="#3F5F3E" opacity="0.75" />  {/* leaf backing */}
+                <circle cx="301" cy="256" r="11" fill="#C89A5C" opacity="0.92" />  {/* amber outer */}
+                <circle cx="301" cy="254" r="8" fill="#8A2A25" opacity="0.94" />   {/* ruby */}
+                <circle cx="301" cy="254" r="5" fill="#5A1B18" opacity="0.9" />    {/* deep centre */}
+                <path d="M 297 250 Q 301 246 305 250 M 295 254 Q 301 250 307 254 M 297 258 Q 301 254 305 258"
+                      stroke="#EAB8A2" strokeWidth="0.5" fill="none" opacity="0.7" />
+              </g>
+
+              {/* --- Rose 2: golden yellow-orange, mid-right --- */}
+              <g>
+                <circle cx="342" cy="303" r="14" fill="#3F5F3E" opacity="0.75" />
+                <circle cx="342" cy="301" r="12" fill="#C89A5C" opacity="0.94" />
+                <circle cx="342" cy="299" r="9" fill="#E8AB48" opacity="0.94" />
+                <circle cx="342" cy="299" r="5.5" fill="#B87B32" opacity="0.92" />
+                <circle cx="342" cy="299" r="2.5" fill="#7A4E1E" opacity="0.88" />
+                <path d="M 337 296 Q 342 292 347 296 M 335 300 Q 342 296 349 300 M 337 304 Q 342 300 347 304"
+                      stroke="#F5D18C" strokeWidth="0.5" fill="none" opacity="0.65" />
+              </g>
+
+              {/* --- Rose 3: dusty pink, bottom-centre --- */}
+              <g>
+                <circle cx="318" cy="352" r="12" fill="#3F5F3E" opacity="0.75" />
+                <circle cx="318" cy="350" r="10" fill="#B98286" opacity="0.94" />
+                <circle cx="318" cy="348" r="7" fill="#D6A4A8" opacity="0.94" />
+                <circle cx="318" cy="348" r="4" fill="#A05E62" opacity="0.92" />
+                <path d="M 314 345 Q 318 341 322 345 M 312 349 Q 318 345 324 349"
+                      stroke="#F0DAD0" strokeWidth="0.5" fill="none" opacity="0.65" />
+              </g>
+
+              {/* --- Hummingbird 1: pink/magenta wings + blue body, upper-left area --- */}
+              <g transform="translate(310, 218) scale(0.7)">
+                {/* Left wing — magenta, swept back */}
+                <path d="M -2 -1 Q -14 -8 -20 -3 Q -16 2 -6 3 Z" fill="#A03E5C" opacity="0.94" />
+                <path d="M -2 -1 Q -12 -6 -17 -3 Q -14 0 -5 2 Z" fill="#C55879" opacity="0.85" />
+                {/* Body — cobalt blue */}
+                <ellipse cx="0" cy="0" rx="8" ry="5" fill="#2E4A6E" />
+                {/* Belly — lighter */}
+                <ellipse cx="0" cy="2" rx="6" ry="3" fill="#4A6688" opacity="0.9" />
+                {/* Head — deeper blue */}
+                <circle cx="6" cy="-1" r="3.5" fill="#1E3555" />
+                {/* Beak — long thin */}
+                <path d="M 9 -1 L 18 -2 L 9 0 Z" fill="#241010" />
+                {/* Eye */}
+                <circle cx="7" cy="-1.5" r="0.7" fill="#EAE1CD" />
+                <circle cx="7.2" cy="-1.5" r="0.3" fill="#241010" />
+                {/* Right wing — purple, folded */}
+                <path d="M 0 3 Q -6 8 -10 6 Q -5 4 0 2 Z" fill="#7A3E5C" opacity="0.9" />
+                {/* Tail feathers */}
+                <path d="M -8 0 L -14 -2 L -13 2 Z" fill="#4A2650" />
+              </g>
+
+              {/* --- Hummingbird 2: blue, centre-right area --- */}
+              <g transform="translate(348, 240) scale(0.6)">
+                {/* Wing — sky blue, swept up */}
+                <path d="M 2 -1 Q 12 -8 17 -3 Q 12 1 5 2 Z" fill="#6E8EAE" opacity="0.94" />
+                <path d="M 2 -1 Q 10 -6 14 -3 Q 10 0 4 1 Z" fill="#8FA4BE" opacity="0.85" />
+                {/* Body */}
+                <ellipse cx="0" cy="0" rx="7.5" ry="4.5" fill="#4A6E8E" />
+                {/* Belly */}
+                <ellipse cx="0" cy="1.5" rx="5.5" ry="2.5" fill="#6E8EAE" opacity="0.9" />
+                {/* Head */}
+                <circle cx="-6" cy="-1" r="3" fill="#2E4A6E" />
+                {/* Beak */}
+                <path d="M -9 -1 L -17 -2 L -9 0 Z" fill="#241010" />
+                {/* Eye */}
+                <circle cx="-6.5" cy="-1.5" r="0.6" fill="#EAE1CD" />
+                <circle cx="-6.7" cy="-1.5" r="0.3" fill="#241010" />
+                {/* Tail */}
+                <path d="M 7 0 L 13 -1 L 12 3 Z" fill="#2E4A6E" />
+              </g>
+
+              {/* --- Complex leaded came — organic outlines around figures + border --- */}
+              <g stroke="#241610" strokeWidth="1.3" fill="none" opacity="0.88" strokeLinecap="round">
+                {/* Around rose 1 */}
+                <circle cx="301" cy="256" r="13" />
+                {/* Around rose 2 */}
+                <circle cx="342" cy="301" r="14" />
+                {/* Around rose 3 */}
+                <circle cx="318" cy="350" r="12" />
+                {/* Curving lead lines connecting the roses/figures */}
+                <path d="M 289 258 Q 285 240 292 220 Q 298 208 310 210" />
+                <path d="M 316 266 Q 324 275 336 291" />
+                <path d="M 305 350 Q 310 340 317 338" />
+                <path d="M 331 352 Q 336 340 340 318" />
+                <path d="M 336 235 Q 348 220 356 220" />
+              </g>
+              {/* Border lead frame around glass field */}
+              <rect x="272" y="172" width="94" height="212" fill="none" stroke="#241610" strokeWidth="1.6" />
+              {/* Inner border to separate quarrel border from center design */}
+              <rect x="281" y="181" width="76" height="194" fill="none" stroke="#241610" strokeWidth="1" opacity="0.8" />
+
+              {/* Walnut frame outer highlight */}
+              <rect x="264" y="165" width="110" height="226" fill="none" stroke={P.brass} strokeWidth="0.9" opacity="0.55" />
+              {/* Corner rosettes */}
+              <circle cx="268" cy="169" r="2.2" fill={P.brass} opacity="0.5" />
+              <circle cx="370" cy="169" r="2.2" fill={P.brass} opacity="0.5" />
+              <circle cx="268" cy="387" r="2.2" fill={P.brass} opacity="0.5" />
+              <circle cx="370" cy="387" r="2.2" fill={P.brass} opacity="0.5" />
+
+              {/* Very subtle warm reflection */}
+              <rect x="262" y="163" width="114" height="230" fill="url(#lib-lamp-halo)" opacity="0.05" />
+            </g>
           </g>
 
           {/* --- Rolling library ladder — leaning against the brass rail --- */}

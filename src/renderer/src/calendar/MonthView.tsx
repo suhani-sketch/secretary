@@ -44,13 +44,23 @@ export function MonthView({ days, ym, weekStart, todayLocal, onOpenDay }: Props)
               const inMonth = d.date.startsWith(ym)
               const s = d.summary
               const status = s.status
+              const hasDeadline = !s.is_past && s.hard_deadlines > 0
               return (
                 <button
                   key={d.date}
                   onClick={() => onOpenDay(d.date)}
-                  className={`relative text-left rounded-xl p-2 min-h-0 overflow-hidden flex flex-col gap-1 border ${d.date === todayLocal ? 'border-mocha' : 'border-transparent'} ${status ? STATUS_BG[status] : 'bg-white/30'} ${inMonth ? '' : 'opacity-45'} hover:ring-1 hover:ring-cocoa/30`}
+                  className={`relative text-left rounded-xl p-2 min-h-0 overflow-hidden flex flex-col gap-1 border-2 ${d.date === todayLocal ? 'border-mocha' : hasDeadline ? 'border-cocoa' : 'border-transparent'} ${status ? STATUS_BG[status] : 'bg-white/30'} ${inMonth ? '' : 'opacity-45'} hover:ring-1 hover:ring-cocoa/30`}
                   title={status ? `${d.date}: ${status} · ${Math.round(s.scheduled_minutes / 6) / 10} h booked · ${s.due} due · ${s.overdue} overdue · ${s.hard_deadlines} hard deadline${s.hard_deadlines === 1 ? '' : 's'}` : `${d.date}: past`}
                 >
+                  {hasDeadline && (
+                    <span
+                      className="absolute top-1.5 right-1.5 flex items-center justify-center w-4 h-4 rounded-full bg-cocoa text-cream text-[10px] leading-none"
+                      aria-hidden
+                      title={`${s.hard_deadlines} hard deadline${s.hard_deadlines === 1 ? '' : 's'}`}
+                    >
+                      ◆
+                    </span>
+                  )}
                   <div className="flex items-center gap-1.5 text-xs">
                     <span className={`tabular-nums ${d.date === todayLocal ? 'font-semibold text-cocoa' : 'text-stone-700'}`}>{Number(d.date.slice(8, 10))}</span>
                     {status && (
