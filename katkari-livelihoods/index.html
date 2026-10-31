@@ -451,8 +451,9 @@
       return el("div", { class: "table-wrap" }, [el("table", {}, [thead, tbody])]);
     }
 
+    let view = "board";
+
     function paint() {
-      const view = location.hash === "#cases" ? "cases" : "board";
       document.getElementById("tab-board").setAttribute("aria-pressed", view === "board" ? "true" : "false");
       document.getElementById("tab-cases").setAttribute("aria-pressed", view === "cases" ? "true" : "false");
       const main = document.getElementById("main");
@@ -629,17 +630,14 @@
     }
 
     document.getElementById("tab-board").addEventListener("click", () => {
-      if (location.hash !== "#board" && location.hash !== "") history.pushState(null, "", "#board");
-      else history.pushState(null, "", "#board");
+      view = "board";
       paint();
     });
     document.getElementById("tab-cases").addEventListener("click", () => {
-      history.pushState(null, "", "#cases");
+      view = "cases";
       paint();
     });
-    window.addEventListener("hashchange", paint);
-    if (location.hash === "#cases") paint();
-    else paint();
+    paint();
   </script>
 </body>
 </html>
