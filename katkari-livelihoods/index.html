@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Katkari livelihoods</title>
+  <meta name="description" content="Field practicum dashboard for Katkari households in Ambernath and Badlapur, 15 to 17 Oct 2026. Suhani Bhatia, TISS." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231d4f48'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,560;9..144,640&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f3eee6;
+      --card: #fffcf8;
+      --ink: #241c14;
+      --muted: #5e564c;
+      --faint: #8a8175;
+      --line: #e3d9cc;
+      --track: #efe6da;
+      --green: #1d4f48;
+      --green-soft: #e7f0ed;
+      --danger: #9a4034;
+      --warn: #8a5a12;
+      --orange: #c4622d;
+      --info: #2c5674;
+      --ok: #2f6a48;
+      --land: #a68456;
+      --forest: #3d6a78;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      background: var(--paper);
+      color: var(--ink);
+      font-family: "Source Sans 3", Inter, "Noto Sans", "Liberation Sans", sans-serif;
+      font-size: 16px;
+      line-height: 1.45;
+    }
+    button, input { font: inherit; color: inherit; }
+    .wrap { max-width: 1180px; margin: 0 auto; padding: 0 20px 48px; }
+    header.top {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: rgba(243, 238, 230, 0.94);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(8px);
+    }
+    .top-inner {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .brand { min-width: 0; }
+    h1 {
+      font-family: Fraunces, "Liberation Serif", Georgia, serif;
+      font-size: 22px;
+      font-weight: 560;
+      letter-spacing: -0.02em;
+      margin: 0;
+      line-height: 1.15;
+    }
+    .sub { margin: 3px 0 0; color: var(--faint); font-size: 13px; }
+    .tabs { margin-left: auto; display: flex; gap: 6px; flex-shrink: 0; }
+    .tabs button {
+      border: 1px solid var(--line);
+      background: var(--card);
+      color: var(--muted);
+      border-radius: 6px;
+      padding: 7px 14px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .tabs button[aria-pressed="true"] {
+      background: var(--green);
+      color: #f6f1e8;
+      border-color: var(--green);
+      font-weight: 600;
+    }
+    .tabs button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+    main { padding-top: 18px; display: grid; gap: 16px; }
+    .section-label {
+      font-weight: 700;
+      font-size: 15px;
+      margin: 6px 0 0;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      min-width: 0;
+    }
+    .card-h {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 14px 0;
+      font-weight: 700;
+      font-size: 14px;
+    }
+    .card-b { padding: 12px 14px 14px; }
+    .pill {
+      margin-left: auto;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      border-radius: 99px;
+      padding: 2px 8px;
+    }
+    .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    .grid-6 { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+    .grid-3 { display: grid; grid-template-columns: 1.35fr 1fr 0.9fr; gap: 10px; }
+    .grid-2 { display: grid; grid-template-columns: 1.2fr 1fr; gap: 10px; }
+    .grid-2e { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .grid-3e { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+    .metric, .tile, .step {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px 14px;
+      min-width: 0;
+    }
+    .tile, .step { background: var(--track); border: 0; }
+    .metric .k, .tile .k, .step .n { color: var(--muted); font-size: 12px; }
+    .metric .v {
+      font-family: Fraunces, Georgia, serif;
+      font-size: 28px;
+      line-height: 1.1;
+      margin-top: 6px;
+      font-weight: 560;
+    }
+    .metric .d, .tile .v, .caption, .prose { color: var(--muted); font-size: 13px; }
+    .metric .d { margin-top: 2px; }
+    .tile .v {
+      color: var(--ink);
+      font-weight: 700;
+      font-size: 18px;
+      margin-top: 4px;
+    }
+    .v.danger { color: var(--danger); }
+    .v.warn { color: var(--warn); }
+    .v.info { color: var(--info); }
+    .v.ok { color: var(--ok); }
+    .note {
+      background: var(--green-soft);
+      border: 1px solid #d5e4df;
+      border-radius: 8px;
+      padding: 12px 14px;
+    }
+    .note strong { display: block; font-size: 13px; margin-bottom: 4px; }
+    .prose { color: var(--ink); font-size: 15px; line-height: 1.5; margin: 0; }
+    .caption { margin: 8px 0 0; }
+    .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; font-size: 12px; color: var(--muted); }
+    .sw { width: 9px; height: 9px; border-radius: 2px; display: inline-block; margin-right: 5px; }
+    svg.chart { width: 100%; height: auto; display: block; }
+    svg.chart + .hlist { margin-top: 12px; }
+    .hlist { display: grid; gap: 10px; }
+    .hrow-top { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
+    .hrow-top span:first-child { font-weight: 600; }
+    .hrow-top span:last-child { color: var(--muted); }
+    .track { height: 10px; border-radius: 4px; background: var(--track); overflow: hidden; margin-top: 4px; }
+    .fill { height: 100%; border-radius: 4px; }
+    .donut-wrap { display: grid; justify-items: center; gap: 8px; }
+    .legend-col { display: grid; gap: 6px; width: 100%; font-size: 13px; }
+    .legend-col div { display: flex; align-items: center; gap: 8px; }
+    .legend-col b { margin-left: auto; font-weight: 600; }
+    .table-wrap { overflow: auto; max-height: 520px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 8px 8px; vertical-align: top; white-space: nowrap; }
+    th {
+      position: sticky;
+      top: 0;
+      background: var(--card);
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      font-weight: 700;
+      border-bottom: 1px solid var(--line);
+    }
+    td { border-bottom: 1px solid var(--line); }
+    tbody tr:nth-child(even) td { background: #f7f3ec; }
+    .cases { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .hh { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+    .hh-top { display: flex; align-items: center; gap: 8px; }
+    .hh-top strong { font-size: 15px; }
+    .hh p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+    .hh p.barrier { color: var(--ink); font-weight: 600; }
+    .page-h { margin: 0; font-family: Fraunces, Georgia, serif; font-size: 28px; font-weight: 560; }
+    .page-sub { margin: 4px 0 0; color: var(--muted); }
+    .mini { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .step .n { font-weight: 700; color: var(--faint); }
+    .step strong { display: block; margin-top: 8px; }
+    .step p { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+    footer.colophon { color: var(--faint); font-size: 12px; margin-top: 8px; }
+    @media (max-width: 1100px) {
+      .grid-6 { grid-template-columns: repeat(3, 1fr); }
+      .grid-3, .grid-2, .grid-4, .grid-3e { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 760px) {
+      .top-inner { flex-wrap: wrap; }
+      .tabs { margin-left: 0; }
+      .grid-6, .grid-4 { grid-template-columns: 1fr 1fr; }
+      .grid-3, .grid-2, .grid-2e, .grid-3e, .cases { grid-template-columns: 1fr; }
+      h1 { font-size: 20px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <div class="top-inner">
+      <div class="brand">
+        <h1>Katkari livelihoods</h1>
+        <p class="sub">Field practicum, Ambernath and Badlapur, 15 to 17 Oct 2026 · Suhani Bhatia, TISS</p>
+      </div>
+      <nav class="tabs" aria-label="Dashboard views">
+        <button type="button" id="tab-board" aria-pressed="true">Board</button>
+        <button type="button" id="tab-cases" aria-pressed="false">Cases</button>
+      </nav>
+    </div>
+  </header>
+  <div class="wrap">
+    <main id="main"></main>
+    <footer class="colophon">Ten household schedules from five padas. Counts are from those schedules only.</footer>
+  </div>
+  <script>
+    const HOUSEHOLDS = [
+      { id: "HH01", pada: "Sonivali Wadi", work: "Agri labour", earners: "3+", wage: "₹300–450", assets: "None", needs: "Not at all", women: "Agri labour", card: "No", days: 0, farm: "No", shg: "None nearby", skill: "No", barrier: "Not aware", want: "—", house: "Kutcha", water: "River / stream", pmay: "Never applied" },
+      { id: "HH02", pada: "Talyacha Pada", work: "Land grant (2–3 yrs)", earners: "2", wage: "Own plot + odd jobs", assets: "Land only", needs: "Partly", women: "Farm + home", card: "No", days: 0, farm: "No", shg: "No", skill: "No", barrier: "Not aware", want: "Tailoring / crafts", house: "Semi-pucca", water: "Handpump (shared)", pmay: "Applied, pending" },
+      { id: "HH03", pada: "Asnoli Wadi", work: "Agri labour", earners: "3+", wage: "₹300–450", assets: "None", needs: "Not at all", women: "Agri labour", card: "No", days: 0, farm: "No", shg: "None nearby", skill: "No", barrier: "Not aware", want: "—", house: "Kutcha", water: "River / stream", pmay: "Never applied" },
+      { id: "HH04", pada: "Chon Wadi", work: "Brick kiln / seasonal", earners: "2", wage: "₹350–500", assets: "None", needs: "Not at all", women: "Kiln / home", card: "Yes", days: 12, farm: "No", shg: "No", skill: "No", barrier: "Distance to work site", want: "Steady local work", house: "Kutcha", water: "Tanker (irregular)", pmay: "Never applied" },
+      { id: "HH05", pada: "Rahtoli", work: "Construction labour", earners: "2", wage: "₹400–550", assets: "Cycle, phone", needs: "Partly", women: "Home + agri", card: "Yes", days: 28, farm: "No", shg: "Yes", skill: "No", barrier: "Wage delay", want: "Masonry training", house: "Semi-pucca", water: "Tap (intermittent)", pmay: "Never applied" },
+      { id: "HH06", pada: "Sonivali Wadi", work: "Agri labour", earners: "1", wage: "₹250–350", assets: "None", needs: "Not at all", women: "Agri labour (sole)", card: "No", days: 0, farm: "No", shg: "None nearby", skill: "No", barrier: "Not aware", want: "SHG + goat unit", house: "Kutcha", water: "River / stream", pmay: "Never applied" },
+      { id: "HH07", pada: "Asnoli Wadi", work: "Small plot + wage", earners: "2", wage: "₹300–400", assets: "0.5 acre", needs: "Partly", women: "Farm", card: "Yes", days: 40, farm: "Yes", shg: "Yes", skill: "No", barrier: "Documents / caste cert", want: "Irrigation support", house: "Semi-pucca", water: "Well", pmay: "Sanctioned" },
+      { id: "HH08", pada: "Talyacha Pada", work: "Sand / quarry labour", earners: "3+", wage: "₹400–600", assets: "None", needs: "Partly", women: "Home", card: "No", days: 0, farm: "No", shg: "No", skill: "No", barrier: "Not aware", want: "Driving / machine work", house: "Kutcha", water: "River / stream", pmay: "Never applied" },
+      { id: "HH09", pada: "Rahtoli", work: "Agri labour", earners: "2", wage: "₹300–450", assets: "Goats (2)", needs: "Partly", women: "Agri + goats", card: "Yes", days: 18, farm: "No", shg: "Yes", skill: "Yes", barrier: "Irregular work demand", want: "More livestock credit", house: "Semi-pucca", water: "Handpump", pmay: "Applied, pending" },
+      { id: "HH10", pada: "Chon Wadi", work: "Forest produce / wage", earners: "2", wage: "₹200–350", assets: "None", needs: "Not at all", women: "Forest + home", card: "No", days: 0, farm: "No", shg: "None nearby", skill: "No", barrier: "Not aware", want: "NTFP value chain", house: "Kutcha", water: "Stream", pmay: "Never applied" }
+    ];
+
+    const N = HOUSEHOLDS.length;
+    const SVGNS = "http://www.w3.org/2000/svg";
+
+    function count(pred) { return HOUSEHOLDS.filter(pred).length; }
+
+    function welfareScore(h) {
+      let s = 0;
+      if (h.card === "Yes") s += 1;
+      if (h.days > 0) s += 1;
+      if (h.farm === "Yes") s += 1;
+      if (h.shg === "Yes") s += 1;
+      if (h.skill === "Yes") s += 1;
+      if (h.assets !== "None") s += 1;
+      if (h.needs !== "Not at all") s += 1;
+      if (h.pmay !== "Never applied") s += 1;
+      return s;
+    }
+
+    function workKey(work) {
+      if (work.includes("Agri")) return "Agri wage";
+      if (work.includes("Land") || work.includes("plot")) return "Land / small plot";
+      if (work.includes("Brick") || work.includes("Construction") || work.includes("Sand")) return "Non-farm wage";
+      return "Forest / mixed";
+    }
+
+    function tally(keyFn) {
+      const out = {};
+      for (const h of HOUSEHOLDS) {
+        const k = keyFn(h);
+        out[k] = (out[k] || 0) + 1;
+      }
+      return out;
+    }
+
+    function el(tag, attrs, children) {
+      const node = document.createElement(tag);
+      for (const [k, v] of Object.entries(attrs || {})) {
+        if (k === "class") node.className = v;
+        else if (k === "html") node.innerHTML = v;
+        else node.setAttribute(k, v);
+      }
+      for (const child of children || []) {
+        if (child == null) continue;
+        node.append(child);
+      }
+      return node;
+    }
+
+    function text(tag, className, value) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      node.textContent = value;
+      return node;
+    }
+
+    function metric(label, value, detail, tone) {
+      const box = el("div", { class: "metric" }, [
+        text("div", "k", label),
+        text("div", "v" + (tone ? " " + tone : ""), value),
+        text("div", "d", detail)
+      ]);
+      return box;
+    }
+
+    function card(title, body, trailing) {
+      const head = el("div", { class: "card-h" }, [document.createTextNode(title)]);
+      if (trailing) head.append(el("span", { class: "pill" }, [document.createTextNode(trailing)]));
+      const c = el("section", { class: "card" }, [head, el("div", { class: "card-b" }, body)]);
+      return c;
+    }
+
+    function svgEl(name, attrs) {
+      const node = document.createElementNS(SVGNS, name);
+      for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, String(v));
+      return node;
+    }
+
+    function legend(items) {
+      const row = el("div", { class: "legend" });
+      for (const item of items) {
+        const sw = el("span", { class: "sw" });
+        sw.style.background = item.color;
+        row.append(el("span", {}, [sw, document.createTextNode(item.name)]));
+      }
+      return row;
+    }
+
+    function verticalChart(categories, series, yMax, yTitle) {
+      const w = 640;
+      const h = 286;
+      const pad = { l: 46, r: 8, t: 16, b: 74 };
+      const innerW = w - pad.l - pad.r;
+      const innerH = h - pad.t - pad.b;
+      const svg = svgEl("svg", { class: "chart", viewBox: `0 0 ${w} ${h}`, role: "img", "aria-label": yTitle });
+      const ticks = [0, yMax / 2, yMax];
+      for (const t of ticks) {
+        const y = pad.t + innerH - (t / yMax) * innerH;
+        svg.append(svgEl("line", { x1: pad.l, x2: w - pad.r, y1: y, y2: y, stroke: "#e3d9cc", "stroke-width": 1 }));
+        const label = svgEl("text", { x: pad.l - 6, y: y + 3, "text-anchor": "end", fill: "#8a8175", "font-size": 11, "font-family": "Source Sans 3, sans-serif" });
+        label.textContent = String(Math.round(t * 10) / 10);
+        svg.append(label);
+      }
+      const groupW = innerW / categories.length;
+      const barW = Math.min(28, groupW * 0.62);
+      categories.forEach((cat, i) => {
+        const cx = pad.l + groupW * i + groupW / 2;
+        let acc = 0;
+        const total = series.reduce((sum, s) => sum + s.data[i], 0);
+        series.forEach((s) => {
+          const val = s.data[i];
+          const bh = (val / yMax) * innerH;
+          const y = pad.t + innerH - ((acc + val) / yMax) * innerH;
+            if (bh > 0) {
+            svg.append(svgEl("rect", { x: cx - barW / 2, y, width: barW, height: bh, fill: s.color }));
+            if (series.length > 1 && bh >= 16) {
+              const n = svgEl("text", { x: cx, y: y + bh / 2 + 4, "text-anchor": "middle", fill: "#fffcf8", "font-size": 11, "font-family": "Source Sans 3, sans-serif", "font-weight": 700 });
+              n.textContent = String(val);
+              svg.append(n);
+            }
+          }
+          acc += val;
+        });
+        if (series.length === 1) {
+          const y = pad.t + innerH - (total / yMax) * innerH;
+          const n = svgEl("text", { x: cx, y: Math.max(12, y - 4), "text-anchor": "middle", fill: "#241c14", "font-size": 11, "font-family": "Source Sans 3, sans-serif" });
+          n.textContent = String(total);
+          svg.append(n);
+        }
+        const lab = svgEl("text", {
+          x: cx,
+          y: pad.t + innerH + 12,
+          "text-anchor": "end",
+          fill: "#5e564c",
+          "font-size": 11,
+          "font-family": "Source Sans 3, sans-serif",
+          transform: `rotate(-40 ${cx} ${pad.t + innerH + 12})`
+        });
+        lab.textContent = cat;
+        svg.append(lab);
+      });
+      const axis = svgEl("text", { x: 14, y: pad.t + innerH / 2, fill: "#8a8175", "font-size": 11, "font-family": "Source Sans 3, sans-serif", transform: `rotate(-90 14 ${pad.t + innerH / 2})`, "text-anchor": "middle" });
+      axis.textContent = yTitle;
+      svg.append(axis);
+      return svg;
+    }
+
+    function donut(entries) {
+      const colors = ["#1d4f48", "#a68456", "#9a4034", "#3d6a78"];
+      const total = entries.reduce((s, e) => s + e.value, 0);
+      const r = 64;
+      const c = 2 * Math.PI * r;
+      let offset = 0;
+      const svg = svgEl("svg", { viewBox: "0 0 180 180", width: "180", height: "180", role: "img", "aria-label": "Households by kind of work" });
+      entries.forEach((e, i) => {
+        const len = (e.value / total) * c;
+        const circle = svgEl("circle", {
+          cx: 90, cy: 90, r,
+          fill: "none",
+          stroke: colors[i % colors.length],
+          "stroke-width": 26,
+          "stroke-dasharray": `${len} ${c - len}`,
+          "stroke-dashoffset": -offset,
+          transform: "rotate(-90 90 90)"
+        });
+        svg.append(circle);
+        offset += len;
+      });
+      const mid = svgEl("text", { x: 90, y: 86, "text-anchor": "middle", fill: "#241c14", "font-size": 22, "font-family": "Fraunces, Georgia, serif" });
+      mid.textContent = String(total);
+      svg.append(mid);
+      const sub = svgEl("text", { x: 90, y: 106, "text-anchor": "middle", fill: "#8a8175", "font-size": 11, "font-family": "Source Sans 3, sans-serif" });
+      sub.textContent = "households";
+      svg.append(sub);
+      const wrap = el("div", { class: "donut-wrap" }, [svg]);
+      const list = el("div", { class: "legend-col" });
+      entries.forEach((e, i) => {
+        const sw = el("span", { class: "sw" });
+        sw.style.background = colors[i % colors.length];
+        list.append(el("div", {}, [sw, document.createTextNode(e.label), el("b", {}, [document.createTextNode(String(e.value))])]));
+      });
+      wrap.append(list);
+      return wrap;
+    }
+
+    function bars(rows, color) {
+      const globalMax = Math.max(...rows.map((r) => r.value), 1);
+      const list = el("div", { class: "hlist" });
+      for (const row of rows) {
+        const max = row.max || globalMax;
+        const pct = max === 0 ? 0 : row.value / max;
+        const fill = el("div", { class: "fill" });
+        fill.style.width = `${Math.max(0, Math.min(100, pct * 100))}%`;
+        fill.style.background = typeof color === "function" ? color(pct) : color;
+        const shown = row.max != null ? `${row.value}/${row.max}` : String(row.value);
+        list.append(el("div", {}, [
+          el("div", { class: "hrow-top" }, [text("span", "", row.label), text("span", "", shown)]),
+          el("div", { class: "track" }, [fill])
+        ]));
+      }
+      return list;
+    }
+
+    function table(headers, rows) {
+      const thead = el("thead", {}, [el("tr", {}, headers.map((h) => text("th", "", h)))]);
+      const tbody = el("tbody", {}, rows.map((row, i) => el("tr", {}, row.map((cell) => text("td", "", cell)))));
+      return el("div", { class: "table-wrap" }, [el("table", {}, [thead, tbody])]);
+    }
+
+    function paint() {
+      const view = location.hash === "#cases" ? "cases" : "board";
+      document.getElementById("tab-board").setAttribute("aria-pressed", view === "board" ? "true" : "false");
+      document.getElementById("tab-cases").setAttribute("aria-pressed", view === "cases" ? "true" : "false");
+      const main = document.getElementById("main");
+      main.replaceChildren(view === "cases" ? casesView() : boardView());
+    }
+
+    function boardView() {
+      const withCard = count((h) => h.card === "Yes");
+      const zeroDays = count((h) => h.days === 0);
+      const notAware = count((h) => h.barrier === "Not aware");
+      const shgYes = count((h) => h.shg === "Yes");
+      const skillYes = count((h) => h.skill === "Yes");
+      const farmYes = count((h) => h.farm === "Yes");
+      const kutcha = count((h) => h.house === "Kutcha");
+      const needsUnmet = count((h) => h.needs === "Not at all");
+      const river = count((h) => /river|stream/i.test(h.water));
+      const neverPmay = count((h) => h.pmay === "Never applied");
+      const scores = HOUSEHOLDS.map((h) => welfareScore(h));
+      const avg = scores.reduce((a, b) => a + b, 0) / N;
+      const work = tally((h) => workKey(h.work));
+      const barriers = tally((h) => h.barrier);
+      const padas = tally((h) => h.pada);
+
+      const schemeLabels = ["Job card", "Any MGNREGA days", "Farm scheme", "SHG member", "Skill trained"];
+      const schemeYes = [withCard, N - zeroDays, farmYes, shgYes, skillYes];
+      const schemeNo = schemeYes.map((y) => N - y);
+
+      const root = el("div", { style: "display:grid;gap:16px" });
+
+      const lit = card("What the literature already says", [
+        el("div", { class: "grid-4" }, [
+          metric("Status", "PVTG", "Maharashtra (PIB / MoTA)", "info"),
+          metric("Literacy", "41.7%", "Lowest among STs (EPW 2017)", "warn"),
+          metric("Cultivators", "~5%", "Lowest ST share (EPW 2017)", "danger"),
+          metric("Field sites", "5 padas", "Ambernath, Badlapur")
+        ]),
+        text("p", "caption", "Thane and Raigad studies describe Katkari households as mostly landless, living on wage work, moving for kiln and construction jobs, and getting little from MGNREGA. Caste certificates are often missing. I used that as background for reading my schedules.")
+      ]);
+      root.append(lit);
+
+      root.append(text("h2", "section-label", "1. Observations"));
+      root.append(el("div", { class: "grid-6" }, [
+        metric("Households", String(N), "Schedules coded"),
+        metric("Job cards", `${withCard}/${N}`, `${Math.round((withCard / N) * 100)}% have one`, withCard < N / 2 ? "danger" : "warn"),
+        metric("Zero days", `${zeroDays}/${N}`, "No MGNREGA work", "danger"),
+        metric("Not aware", `${notAware}/${N}`, "Said this as the barrier", "warn"),
+        metric("Avg access", avg.toFixed(1), "Out of 8", "info"),
+        metric("Kutcha house", `${kutcha}/${N}`, "Housing", "warn")
+      ]));
+
+      root.append(el("div", { class: "grid-3" }, [
+        card("Who gets schemes", [
+          legend([
+            { name: "Yes", color: "#2f6a48" },
+            { name: "No", color: "#9a4034" }
+          ]),
+          verticalChart(schemeLabels, [
+            { data: schemeYes, color: "#2f6a48" },
+            { data: schemeNo, color: "#9a4034" }
+          ], N, "Households"),
+          text("p", "caption", "Source: 10 schedules, 15 to 17 Oct 2026. Yes is the lower segment.")
+        ], `n=${N}`),
+        card("What work looks like", [
+          donut(Object.entries(work).map(([label, value]) => ({ label, value }))),
+          text("p", "caption", "Mostly agri wage. Some kiln, quarry, construction. A few with land.")
+        ]),
+        card("Barriers people named", [
+          bars(Object.entries(barriers).map(([label, value]) => ({ label, value })), "#c4622d"),
+          text("p", "caption", "Households, by the barrier they named. Scale is the largest group.")
+        ])
+      ]));
+
+      root.append(el("div", { class: "grid-2" }, [
+        card("MGNREGA days", [
+          verticalChart(HOUSEHOLDS.map((h) => h.id), [{ data: HOUSEHOLDS.map((h) => h.days), color: "#2c5674" }], 40, "Days"),
+          text("p", "caption", "Six at zero. The rest only 12 to 40 days. Source: the same 10 schedules.")
+        ]),
+        card("Access score (0 to 8)", [
+          verticalChart(HOUSEHOLDS.map((h) => h.id), [{ data: scores, color: "#1d4f48" }], 8, "Score"),
+          bars([
+            { label: "Average", value: Number(avg.toFixed(1)), max: 8 },
+            { label: "Needs unmet", value: needsUnmet, max: N },
+            { label: "In an SHG", value: shgYes, max: N }
+          ], (pct) => (pct < 0.25 ? "#8a5a12" : pct < 0.5 ? "#c4622d" : "#1d4f48")),
+          text("p", "caption", "One point each for a job card, any MGNREGA days, a farm scheme, SHG membership, skill training, any asset, needs at least partly met, and a PMAY step past “never applied.”")
+        ])
+      ]));
+
+      const houseTiles = [
+        ["Kutcha", kutcha],
+        ["Semi-pucca", N - kutcha],
+        ["Never applied PMAY", neverPmay],
+        ["River / stream water", river],
+        ["In an SHG", shgYes],
+        ["Any skill training", skillYes]
+      ];
+      root.append(el("div", { class: "grid-2e" }, [
+        card("By pada", [
+          verticalChart(Object.keys(padas), [{ data: Object.values(padas), color: "#2c5674" }], Math.max(...Object.values(padas)), "Households"),
+          text("p", "caption", "Schedules per pada. Two households in each of the five sites.")
+        ]),
+        card("House and water", [
+          el("div", { class: "mini" }, houseTiles.map(([k, v]) => el("div", { class: "tile" }, [text("div", "k", k), text("div", "v", String(v))])))
+        ])
+      ]));
+
+      root.append(card("Household list", [
+        table(
+          ["ID", "Pada", "Work", "Wage", "Card", "Days", "SHG", "Barrier", "Score"],
+          HOUSEHOLDS.map((h, i) => [h.id, h.pada, h.work, h.wage, h.card, String(h.days), h.shg, h.barrier, String(scores[i])])
+        )
+      ]));
+
+      root.append(el("div", { class: "note" }, [
+        text("strong", "", "In short"),
+        text("p", "prose", "People are working. Most still have no real hold on MGNREGA, farm schemes, SHGs or training. The answer I heard again and again was “not aware.” Even where someone had land or a card, the other supports usually were not there.")
+      ]));
+
+      root.append(text("h2", "section-label", "2. What I learnt"));
+      root.append(el("div", { class: "grid-3e" }, [
+        card("On participation", [text("p", "prose", "If people cannot get onto schemes, they are not really in the system. Being quiet and grateful is not the same as having a say.")]),
+        card("On welfare", [text("p", "prose", "Giving land or a job card is not enough on its own. Without help with papers, work demand, SHG and training where people live, not much changes at home.")]),
+        card("On fieldwork", [text("p", "prose", "When someone says “not aware,” that is data. Ten households show a pattern, not the whole picture.")])
+      ]));
+
+      root.append(text("h2", "section-label", "3. One change I would make"));
+      const steps = [
+        ["1", "MGNREGA job cards", "Get every eligible adult on a card, or fix the one they already have"],
+        ["2", "E-Shram and women’s SHG", "Do both the same day, with staff who know the forms"],
+        ["3", "Tailoring / crafts", "Bring a short training batch to the pada, not the other way round"]
+      ];
+      root.append(card("A 2 to 3 day camp in the pada", [
+        el("div", { class: "grid-3e" }, steps.map(([n, t, d]) => el("div", { class: "step" }, [
+          text("div", "n", n),
+          text("strong", "", t),
+          text("p", "", d)
+        ]))),
+        text("p", "caption", "Offices are far and people do not know the steps. A camp in the pada deals with both. I would start with livelihoods because that is what people asked about first.")
+      ]));
+
+      return root;
+    }
+
+    function casesView() {
+      const root = el("div", { style: "display:grid;gap:14px" });
+      const head = el("div", {}, [
+        text("h2", "page-h", "Household cards"),
+        text("p", "page-sub", "Sorted from low access to high")
+      ]);
+      root.append(head);
+      const sorted = [...HOUSEHOLDS].sort((a, b) => welfareScore(a) - welfareScore(b) || a.id.localeCompare(b.id));
+      root.append(el("div", { class: "cases" }, sorted.map((h) => {
+        const score = welfareScore(h);
+        return el("article", { class: "hh" }, [
+          el("div", { class: "hh-top" }, [
+            text("strong", "", `${h.id} · ${h.pada}`),
+            el("span", { class: "pill" }, [document.createTextNode(`${score}/8`)])
+          ]),
+          text("p", "", `${h.work} · earners ${h.earners} · ${h.wage}`),
+          text("p", "", `Assets: ${h.assets} · Needs: ${h.needs} · Women: ${h.women}`),
+          text("p", "", `Card ${h.card} · ${h.days} days · Farm ${h.farm} · SHG ${h.shg} · Skill ${h.skill}`),
+          text("p", "barrier", `Barrier: ${h.barrier}`),
+          text("p", "", `Want: ${h.want} · House ${h.house} · Water ${h.water} · PMAY ${h.pmay}`)
+        ]);
+      })));
+      root.append(text("h2", "section-label", "Full table"));
+      root.append(card("Every coded field", [
+        table(
+          ["ID", "Assets", "Needs", "Women", "Farm", "Skill", "Want", "House", "Water", "PMAY"],
+          HOUSEHOLDS.map((h) => [h.id, h.assets, h.needs, h.women, h.farm, h.skill, h.want, h.house, h.water, h.pmay])
+        )
+      ]));
+      return root;
+    }
+
+    document.getElementById("tab-board").addEventListener("click", () => {
+      if (location.hash !== "#board" && location.hash !== "") history.pushState(null, "", "#board");
+      else history.pushState(null, "", "#board");
+      paint();
+    });
+    document.getElementById("tab-cases").addEventListener("click", () => {
+      history.pushState(null, "", "#cases");
+      paint();
+    });
+    window.addEventListener("hashchange", paint);
+    if (location.hash === "#cases") paint();
+    else paint();
+  </script>
+</body>
+</html>
