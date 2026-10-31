@@ -1,0 +1,236 @@
+export type HH = {
+  id: string;
+  pada: string;
+  work: string;
+  earners: string;
+  wage: string;
+  assets: string;
+  needs: string;
+  women: string;
+  card: "Yes" | "No";
+  days: number;
+  farm: "Yes" | "No";
+  shg: "Yes" | "No" | "None nearby";
+  skill: "Yes" | "No";
+  barrier: string;
+  want: string;
+  house: string;
+  water: string;
+  pmay: string;
+};
+
+export const HOUSEHOLDS: HH[] = [
+  {
+    id: "HH01",
+    pada: "Sonivali Wadi",
+    work: "Agri labour",
+    earners: "3+",
+    wage: "₹300–450",
+    assets: "None",
+    needs: "Not at all",
+    women: "Agri labour",
+    card: "No",
+    days: 0,
+    farm: "No",
+    shg: "None nearby",
+    skill: "No",
+    barrier: "Not aware",
+    want: "—",
+    house: "Kutcha",
+    water: "River / stream",
+    pmay: "Never applied",
+  },
+  {
+    id: "HH02",
+    pada: "Talyacha Pada",
+    work: "Land grant (2–3 yrs)",
+    earners: "2",
+    wage: "Own plot + odd jobs",
+    assets: "Land only",
+    needs: "Partly",
+    women: "Farm + home",
+    card: "No",
+    days: 0,
+    farm: "No",
+    shg: "No",
+    skill: "No",
+    barrier: "Not aware",
+    want: "Tailoring / crafts",
+    house: "Semi-pucca",
+    water: "Handpump (shared)",
+    pmay: "Applied, pending",
+  },
+  {
+    id: "HH03",
+    pada: "Asnoli Wadi",
+    work: "Agri labour",
+    earners: "3+",
+    wage: "₹300–450",
+    assets: "None",
+    needs: "Not at all",
+    women: "Agri labour",
+    card: "No",
+    days: 0,
+    farm: "No",
+    shg: "None nearby",
+    skill: "No",
+    barrier: "Not aware",
+    want: "—",
+    house: "Kutcha",
+    water: "River / stream",
+    pmay: "Never applied",
+  },
+  {
+    id: "HH04",
+    pada: "Chon Wadi",
+    work: "Brick kiln / seasonal",
+    earners: "2",
+    wage: "₹350–500",
+    assets: "None",
+    needs: "Not at all",
+    women: "Kiln / home",
+    card: "Yes",
+    days: 12,
+    farm: "No",
+    shg: "No",
+    skill: "No",
+    barrier: "Distance to work site",
+    want: "Steady local work",
+    house: "Kutcha",
+    water: "Tanker (irregular)",
+    pmay: "Never applied",
+  },
+  {
+    id: "HH05",
+    pada: "Rahtoli",
+    work: "Construction labour",
+    earners: "2",
+    wage: "₹400–550",
+    assets: "Cycle, phone",
+    needs: "Partly",
+    women: "Home + agri",
+    card: "Yes",
+    days: 28,
+    farm: "No",
+    shg: "Yes",
+    skill: "No",
+    barrier: "Wage delay",
+    want: "Masonry training",
+    house: "Semi-pucca",
+    water: "Tap (intermittent)",
+    pmay: "Never applied",
+  },
+  {
+    id: "HH06",
+    pada: "Sonivali Wadi",
+    work: "Agri labour",
+    earners: "1",
+    wage: "₹250–350",
+    assets: "None",
+    needs: "Not at all",
+    women: "Agri labour (sole)",
+    card: "No",
+    days: 0,
+    farm: "No",
+    shg: "None nearby",
+    skill: "No",
+    barrier: "Not aware",
+    want: "SHG + goat unit",
+    house: "Kutcha",
+    water: "River / stream",
+    pmay: "Never applied",
+  },
+  {
+    id: "HH07",
+    pada: "Asnoli Wadi",
+    work: "Small plot + wage",
+    earners: "2",
+    wage: "₹300–400",
+    assets: "0.5 acre",
+    needs: "Partly",
+    women: "Farm",
+    card: "Yes",
+    days: 40,
+    farm: "Yes",
+    shg: "Yes",
+    skill: "No",
+    barrier: "Documents / caste cert",
+    want: "Irrigation support",
+    house: "Semi-pucca",
+    water: "Well",
+    pmay: "Sanctioned",
+  },
+  {
+    id: "HH08",
+    pada: "Talyacha Pada",
+    work: "Sand / quarry labour",
+    earners: "3+",
+    wage: "₹400–600",
+    assets: "None",
+    needs: "Partly",
+    women: "Home",
+    card: "No",
+    days: 0,
+    farm: "No",
+    shg: "No",
+    skill: "No",
+    barrier: "Not aware",
+    want: "Driving / machine work",
+    house: "Kutcha",
+    water: "River / stream",
+    pmay: "Never applied",
+  },
+  {
+    id: "HH09",
+    pada: "Rahtoli",
+    work: "Agri labour",
+    earners: "2",
+    wage: "₹300–450",
+    assets: "Goats (2)",
+    needs: "Partly",
+    women: "Agri + goats",
+    card: "Yes",
+    days: 18,
+    farm: "No",
+    shg: "Yes",
+    skill: "Yes",
+    barrier: "Irregular work demand",
+    want: "More livestock credit",
+    house: "Semi-pucca",
+    water: "Handpump",
+    pmay: "Applied, pending",
+  },
+  {
+    id: "HH10",
+    pada: "Chon Wadi",
+    work: "Forest produce / wage",
+    earners: "2",
+    wage: "₹200–350",
+    assets: "None",
+    needs: "Not at all",
+    women: "Forest + home",
+    card: "No",
+    days: 0,
+    farm: "No",
+    shg: "None nearby",
+    skill: "No",
+    barrier: "Not aware",
+    want: "NTFP value chain",
+    house: "Kutcha",
+    water: "Stream",
+    pmay: "Never applied",
+  },
+];
+
+export function welfareScore(h: HH) {
+  let s = 0;
+  if (h.card === "Yes") s += 1;
+  if (h.days > 0) s += 1;
+  if (h.farm === "Yes") s += 1;
+  if (h.shg === "Yes") s += 1;
+  if (h.skill === "Yes") s += 1;
+  if (h.assets !== "None") s += 1;
+  if (h.needs !== "Not at all") s += 1;
+  if (h.pmay !== "Never applied") s += 1;
+  return s;
+}
